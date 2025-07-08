@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const articleController = require('../controllers/articleController');
 const authMiddleware = require('../middlewares/auth');
+const { getAchatsByAcheteur, updateDateLivraison } = require('../controllers/articleController');
 
 // Créer un article (authentifié)
 router.post('/', authMiddleware, articleController.createArticle);
@@ -17,5 +18,7 @@ router.delete('/:id', authMiddleware, articleController.deleteArticle);
 router.put('/:id/statut', authMiddleware, articleController.updateStatut);
 // Marquer un article comme vendu
 router.put('/:id/vendu', articleController.markAsSold);
+router.get('/achats/:acheteurId', getAchatsByAcheteur);
+router.patch('/:id/livraison', authMiddleware, updateDateLivraison);
 
 module.exports = router; 

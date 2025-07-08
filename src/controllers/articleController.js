@@ -133,4 +133,62 @@ exports.markAsSold = async (req, res) => {
   } catch (error) {
     res.status(500).json({ message: 'Erreur lors du marquage comme vendu', error });
   }
+};
+
+// Fonction utilitaire pour calculer le statut de livraison
+function getStatutLivraison(article) {
+  return article.dateLivraison ? 'Livré' : 'En cours';
+}
+
+// Endpoint pour récupérer les achats d'un acheteur (En cours ou Livré)
+exports.getAchatsByAcheteur = async (req, res) => {
+  try {
+    const { acheteurId } = req.params;
+    const articles = await Article.find({
+      acheteur: acheteurId,
+      statutVente: 'vendu' // On suppose qu'un achat est un article vendu
+    })
+      .populate('vendeur', 'nom prenoms role')
+      .populate('acheteur', 'nom prenoms role');
+    // Filtrer En cours/Livré et enrichir la réponse
+    const achats = articles
+      .filter(a => getStatutLivraison(a) === 'En cours' || getStatutLivraison(a) === 'Livré')
+      .map(a => ({
+        ...a.toObject(),
+        statutLivraison: getStatutLivraison(a),
+        personnesAffectees: [
+          a.vendeur ? { nom: a.vendeur.nom, prenoms: a.vendeur.prenoms, role: a.vendeur.role } : null,
+          a.acheteur ? { nom: a.acheteur.nom, prenoms: a.acheteur.prenoms, role: a.acheteur.role } : null
+        ].filter(Boolean)
+      }));
+    res.json({ total: achats.length, achats });
+  } catch (error) {
+    res.status(500).json({ message: 'Erreur lors de la récupération des achats', error });
+  }
+};
+
+// Endpoint pour éditer la date de livraison (admin uniquement)
+exports.updateDateLivraison = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { dateLivraison } = req.body;
+    // Vérifier que l'utilisateur est admin (à adapter selon votre logique d'auth)
+    if (!req.user || req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Seul un admin peut modifier la date de livraison' });
+    }
+    const article = await Article.findByIdAndUpdate(id, { dateLivraison }, { new: true })
+      .populate('vendeur', 'nom prenoms role')
+      .populate('acheteur', 'nom prenoms role');
+    if (!article) return res.status(404).json({ message: 'Article non trouvé' });
+    res.json({
+      ...article.toObject(),
+      statutLivraison: getStatutLivraison(article),
+      personnesAffectees: [
+        article.vendeur ? { nom: article.vendeur.nom, prenoms: article.vendeur.prenoms, role: article.vendeur.role } : null,
+        article.acheteur ? { nom: article.acheteur.nom, prenoms: article.acheteur.prenoms, role: article.acheteur.role } : null
+      ].filter(Boolean)
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Erreur lors de la mise à jour de la date de livraison', error });
+  }
 }; 

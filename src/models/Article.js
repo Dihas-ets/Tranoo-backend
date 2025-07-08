@@ -43,7 +43,8 @@ const articleSchema = new mongoose.Schema({
     enum: ['vendu', 'non vendu'],
     default: 'non vendu'
   },
-  acheteur: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null }
+  acheteur: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  dateLivraison: { type: Date, default: null } // Date de livraison (null = en cours)
 });
 
 module.exports = mongoose.model('Article', articleSchema); 
