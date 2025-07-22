@@ -10,6 +10,39 @@ const userSchema = new mongoose.Schema({
   pays: { type: String }, // Pays de résidence (mobile)
   maison: { type: String }, // Maison (mobile)
   entreprise: { type: String }, // Nom de l'entreprise (pour transitaire)
+  // Champs spécifiques chauffeur
+  pieceIdentite: {
+    type: {
+      type: String, // CNI, Passeport, etc.
+      default: null
+    },
+    numero: { type: String, default: null },
+    urlRecto: { type: String, default: null },
+    urlVerso: { type: String, default: null }
+  },
+  permis: {
+    numero: { type: String, default: null },
+    urlRecto: { type: String, default: null },
+    urlVerso: { type: String, default: null },
+    dateValidite: { type: Date, default: null }
+  },
+  entrepriseAssociee: {
+    nom: { type: String, default: null },
+    adresse: { type: String, default: null },
+    telephone: { type: String, default: null }
+  },
+  garant: {
+    nom: { type: String, default: null },
+    prenom: { type: String, default: null },
+    numero: { type: String, default: null },
+    relation: { type: String, default: null }
+  },
+  informationsCapitales: {
+    nom: { type: String, default: null },
+    prenom: { type: String, default: null },
+    numero: { type: String, default: null },
+    relation: { type: String, default: null }
+  },
   // Champs spécifiques pour les admins (web)
   adresse: { type: String }, // Adresse (admin)
   ville: { type: String }, // Ville (admin)
@@ -29,7 +62,7 @@ const userSchema = new mongoose.Schema({
   devise: { type: String, default: 'XOF' }, // Devise préférée
   dateInscription: { type: Date, default: Date.now }, // Date d'inscription
   dernierAcces: { type: Date }, // Dernière connexion
-  fcmToken: { type: String }, // Token FCM pour notifications push
+  fcmToken: { type: String, default: null }, // Token FCM pour notifications push
   role: { 
     type: String, 
     enum: ['vendeur', 'acheteur', 'transitaire', 'admin', 'chauffeur'], 

@@ -2,6 +2,15 @@ const User = require('../models/User');
 const bcrypt = require('bcryptjs');
 const Article = require('../models/Article');
 const DemandeChauffeur = require('../models/DemandeChauffeur');
+const cloudinary = require('cloudinary').v2;
+const multer = require('multer');
+
+// Config Cloudinary (à adapter avec tes clés)
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
 
 // Fonction utilitaire pour calculer le statut dynamique
 async function computeUserStatut(user) {
@@ -27,11 +36,9 @@ async function computeUserStatut(user) {
     return 'inactif';
   }
   if (user.role === 'chauffeur') {
-    // Course validée dans les 6 derniers mois
-    const sixMonthsAgo = new Date(now);
-    sixMonthsAgo.setMonth(now.getMonth() - 6);
-    const course = await DemandeChauffeur.findOne({ user: user._id, statut: 'valide', dateDemande: { $gte: sixMonthsAgo } });
-    return course ? 'actif' : 'inactif';
+    // Actif s'il est assigné à au moins une activité (article)
+    const article = await Article.findOne({ chauffeur: user._id });
+    return article ? 'actif' : 'inactif';
   }
   if (user.role === 'admin') {
     // Connexion dans le dernier mois
@@ -46,12 +53,12 @@ async function computeUserStatut(user) {
 // Récupérer la liste de tous les utilisateurs (option de filtrage par rôle)
 exports.getAllUsers = async (req, res) => {
   try {
-    const { role } = req.query;
-    console.log('GET /users called. Query role:', role);
+    const { role, page = 1, limit = 10 } = req.query;
     const filter = role ? { role } : {};
-    console.log('User filter:', filter);
-    const users = await User.find(filter);
-    console.log('Users found:', users.length);
+    const total = await User.countDocuments(filter);
+    const users = await User.find(filter)
+      .skip((page - 1) * limit)
+      .limit(Number(limit));
     // Calculer le statut dynamique pour chaque user
     const usersWithStatut = await Promise.all(users.map(async (u) => {
       const statut = await computeUserStatut(u);
@@ -59,9 +66,12 @@ exports.getAllUsers = async (req, res) => {
       userObj.statut = statut;
       return userObj;
     }));
-    res.json(usersWithStatut);
+    res.json({
+      admins: usersWithStatut,
+      total,
+      totalPages: Math.ceil(total / limit)
+    });
   } catch (error) {
-    console.error('Erreur lors de la récupération des utilisateurs:', error);
     res.status(500).json({ message: 'Erreur lors de la récupération des utilisateurs', error });
   }
 };
@@ -108,6 +118,34 @@ exports.getProfile = async (req, res) => {
   const userObj = user.toObject();
   userObj.statut = statut;
   res.json({ user: userObj });
+};
+
+// Créer un utilisateur (chauffeur, admin, etc.)
+exports.createUser = async (req, res) => {
+  try {
+    const { password, ...userData } = req.body;
+    // Vérifier unicité email et uid
+    const existingEmail = await User.findOne({ email: userData.email });
+    if (existingEmail) {
+      return res.status(400).json({ message: "Email déjà utilisé" });
+    }
+    const existingUid = await User.findOne({ uid: userData.uid });
+    if (existingUid) {
+      return res.status(400).json({ message: "UID déjà utilisé" });
+    }
+    let hashedPassword = undefined;
+    if (password) {
+      hashedPassword = await bcrypt.hash(password, 10);
+    }
+    const user = new User({
+      ...userData,
+      password: hashedPassword,
+    });
+    await user.save();
+    res.status(201).json({ message: "Utilisateur créé", user });
+  } catch (error) {
+    res.status(500).json({ message: "Erreur lors de la création de l'utilisateur", error });
+  }
 };
 
 // Changer le mot de passe d'un utilisateur
@@ -174,5 +212,86 @@ exports.getAcheteursWithAchats = async (req, res) => {
     res.json(result);
   } catch (err) {
     res.status(500).json({ message: "Erreur lors de la récupération des achats acheteurs" });
+  }
+};
+
+exports.uploadProfilePhoto = async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ message: 'Aucun fichier envoyé' });
+    // Upload sur Cloudinary
+    const result = await cloudinary.uploader.upload(req.file.path, {
+      folder: 'tranoo/profiles',
+      public_id: `${req.user._id}_profile`,
+      overwrite: true,
+    });
+    // Met à jour l'utilisateur
+    req.user.photo = result.secure_url;
+    await req.user.save();
+    res.json({ photo: result.secure_url });
+  } catch (err) {
+    res.status(500).json({ message: 'Erreur upload photo', error: err.message });
+  }
+}; 
+
+/**
+ * @route POST /users/fcm-token
+ * @desc Met à jour le token FCM de l'utilisateur connecté
+ * @access Authentifié
+ *
+ * Exemple de requête (avec axios côté client) :
+ *
+ *   await axios.post('/users/fcm-token', { fcmToken: 'VOTRE_TOKEN_FCM_ICI' }, {
+ *     headers: { Authorization: 'Bearer VOTRE_JWT' }
+ *   });
+ *
+ * Le token FCM doit être récupéré côté mobile/web via le SDK Firebase Messaging.
+ */
+exports.updateFcmToken = async (req, res) => {
+  try {
+    const { fcmToken } = req.body;
+    if (!fcmToken) {
+      return res.status(400).json({ message: 'Token FCM requis' });
+    }
+    req.user.fcmToken = fcmToken;
+    await req.user.save();
+    res.json({
+      message: 'Token FCM mis à jour avec succès',
+      fcmToken: fcmToken
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: 'Erreur lors de la mise à jour du token FCM',
+      error: error.message
+    });
+  }
+};
+
+// Récupérer les activités d'un chauffeur (articles livrés ou en cours)
+exports.getChauffeurActivities = async (req, res) => {
+  try {
+    const chauffeurId = req.params.id;
+    // On récupère tous les articles où le chauffeur est assigné
+    const articles = await Article.find({ chauffeur: chauffeurId })
+      .populate('vendeur', 'nom prenoms')
+      .populate('acheteur', 'nom prenoms');
+    res.json({ activites: articles });
+  } catch (error) {
+    res.status(500).json({ message: "Erreur lors de la récupération des activités du chauffeur", error });
+  }
+}; 
+
+// Nouvelle route : liste de tous les acheteurs (même sans achat)
+exports.getAllAcheteurs = async (req, res) => {
+  try {
+    const acheteurs = await User.find({ role: 'acheteur' });
+    const acheteursWithStatut = await Promise.all(acheteurs.map(async (u) => {
+      const statut = await computeUserStatut(u);
+      const userObj = u.toObject();
+      userObj.statut = statut;
+      return userObj;
+    }));
+    res.json(acheteursWithStatut);
+  } catch (err) {
+    res.status(500).json({ message: "Erreur lors de la récupération des acheteurs" });
   }
 }; 

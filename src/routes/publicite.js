@@ -11,7 +11,10 @@ router.get('/', authMiddleware, publiciteController.getPublicites);
 router.get('/:id', authMiddleware, publiciteController.getPubliciteById);
 // Changer le statut d'une demande (admin uniquement)
 router.put('/:id/statut', authMiddleware, publiciteController.updateStatut);
+router.patch('/:id/statut', authMiddleware, publiciteController.updateStatut);
 // Supprimer une demande (vendeur ou admin)
 router.delete('/:id', authMiddleware, publiciteController.deletePublicite);
+
+// 
 
 module.exports = router; 

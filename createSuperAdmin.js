@@ -62,7 +62,7 @@ createSuperAdmin();
 // Si le super admin existe déjà, tu verras un message d'info.
 
 // Script de mise à jour du super admin pour garantir que tous les champs sont bien renseignés
-mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/ton-nom-bdd');
+mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/tranoo');
 
 (async () => {
   try {

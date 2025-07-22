@@ -3,32 +3,39 @@ const Article = require('../models/Article');
 
 exports.getStats = async (_req, res) => {
   try {
+    // Nombre total d'acheteurs
+    const acheteursCount = await User.countDocuments({ role: 'acheteur' });
+    // Nombre total de chauffeurs
+    const chauffeursCount = await User.countDocuments({ role: 'chauffeur' });
+    // Nombre total de transitaires
+    const transitairesCount = await User.countDocuments({ role: 'transitaire' });
+    // Clients = acheteurs + chauffeurs + transitaires
+    const clientsCount = acheteursCount + chauffeursCount + transitairesCount;
     // Nombre total de voitures
     const voituresCount = await Article.countDocuments({ type: 'voiture' });
     // Nombre total de pièces
     const piecesCount = await Article.countDocuments({ type: 'piece' });
-    // Nombre total de clients (rôle acheteur)
-    const clientsCount = await User.countDocuments({ role: 'acheteur' });
-    // Nombre total de chauffeurs
-    const chauffeursCount = await User.countDocuments({ role: 'chauffeur' });
     // Nombre total d'utilisateurs
     const usersCount = await User.countDocuments();
     // Nombre total d'admins
     const adminsCount = await User.countDocuments({ role: 'admin' });
     // Nombre total de vendeurs
     const vendeursCount = await User.countDocuments({ role: 'vendeur' });
-    // Nombre total de transitaires
-    const transitairesCount = await User.countDocuments({ role: 'transitaire' });
+    // Année d'activité (depuis 2020)
+    const launchYear = 2020;
+    const currentYear = new Date().getFullYear();
+    const anneeActivite = currentYear - launchYear + 1;
 
     res.json({
       voitures: voituresCount,
       pieces: piecesCount,
       clients: clientsCount,
       chauffeurs: chauffeursCount,
+      transitaires: transitairesCount,
       utilisateurs: usersCount,
       admins: adminsCount,
       vendeurs: vendeursCount,
-      transitaires: transitairesCount
+      annee: anneeActivite
     });
   } catch (error) {
     res.status(500).json({ message: 'Erreur lors de la récupération des statistiques', error });

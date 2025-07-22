@@ -15,7 +15,11 @@ admin.initializeApp({
 });
 
 const app = express();
-app.use(cors());
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}));
 app.use(express.json());
 
 // Connexion à MongoDB
@@ -33,7 +37,7 @@ app.use('/api/protected', authMiddleware, protectedRoutes);
 
 // Route d'authentification (inscription)
 const authRoutes = require('./routes/auth');
-app.use('/api/auth', authRoutes);
+app.use('/api/auth', authRoutes); 
 
 // Routes utilisateurs (CRUD)
 const userRoutes = require('./routes/user');
@@ -41,7 +45,7 @@ app.use('/api/users', authMiddleware, userRoutes);
 
 // Routes articles (CRUD)
 const articleRoutes = require('./routes/article');
-app.use('/api/articles', articleRoutes);
+app.use('/api/articles', authMiddleware, articleRoutes);
 
 // Routes demandes de publicité (CRUD)
 const publiciteRoutes = require('./routes/publicite');
@@ -50,6 +54,9 @@ app.use('/api/publicites', publiciteRoutes);
 // Routes demandes de certification chauffeur (CRUD)
 const demandeChauffeurRoutes = require('./routes/demandeChauffeur');
 app.use('/api/chauffeurs/demandes', demandeChauffeurRoutes);
+
+// Routes statistiques
+app.use('/stats', require('./routes/stats'));
 
 // Importer le routeur de chat pour la messagerie (vendeur <-> transitaire)
 const chatRoutes = require('./routes/chat');

@@ -18,8 +18,11 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 
 // 4. On définit l'email et le mot de passe de l'utilisateur de test
-const email = 'gnacadjalaurinda@gmail.com'; // Remplace par l'email de ton utilisateur
-const password = '2162LeoLaure#2021'; // Remplace par le mot de passe
+// const email = 'gnacadjalaurinda@gmail.com'; // Remplace par l'email de ton utilisateur
+// const password = '2162LeoLaure#2021'; // Remplace par le mot de passe
+
+const email = 'gm@gmail.com'; // Remplace par l'email de ton utilisateur
+const password = 'Azertyuiop26#'; // Remplace par le mot de passe
 
 // 5. On se connecte à Firebase Auth et on récupère l'ID Token
 signInWithEmailAndPassword(auth, email, password)

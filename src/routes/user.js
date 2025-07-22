@@ -2,12 +2,18 @@ const express = require('express');
 const router = express.Router();
 const userController = require('../controllers/userController');
 const roleMiddleware = require('../middlewares/role');
-const { getAcheteursWithAchats } = require("../controllers/userController");
+const auth = require('../middlewares/auth');
+const multer = require('multer');
+const upload = multer({ dest: 'uploads/' });
+const { getAcheteursWithAchats, getAllAcheteurs } = require("../controllers/userController");
 
 // Liste des utilisateurs (option de filtrage par rôle)
 // router.get('/', roleMiddleware('superAdmin', 'principal', 'gestionnaire'), userController.getAllUsers);
 router.get('/', userController.getAllUsers);
 router.get("/acheteurs/achats", getAcheteursWithAchats);
+router.get("/acheteurs/all", getAllAcheteurs);
+// Création d'un utilisateur (chauffeur, admin, etc.)
+router.post('/', roleMiddleware('superAdmin', 'principal', 'gestionnaire'), userController.createUser);
 // Détail d'un utilisateur
 router.get('/:id', roleMiddleware('superAdmin', 'principal', 'gestionnaire'), userController.getUserById);
 // Mise à jour d'un utilisateur
@@ -16,5 +22,14 @@ router.put('/:id', roleMiddleware('superAdmin', 'principal', 'gestionnaire'), us
 router.delete('/:id', roleMiddleware('superAdmin', 'principal', 'gestionnaire'), userController.deleteUser);
 // Mise à jour du mot de passe d'un utilisateur
 router.put('/:id/password', roleMiddleware('superAdmin', 'principal', 'gestionnaire', 'admin'), userController.updatePassword);
+
+// Route pour upload photo de profil
+router.post('/users/photo', auth, upload.single('photo'), userController.uploadProfilePhoto);
+
+// Route pour mettre à jour le token FCM
+router.post('/fcm-token', auth, userController.updateFcmToken);
+
+// Récupérer les activités d'un chauffeur
+router.get('/:id/activites', roleMiddleware('superAdmin', 'principal', 'gestionnaire', 'admin'), userController.getChauffeurActivities);
 
 module.exports = router; 

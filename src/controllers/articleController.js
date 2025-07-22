@@ -4,11 +4,18 @@ const Article = require('../models/Article');
 exports.createArticle = async (req, res) => {
   try {
     // On suppose que req.user contient l'utilisateur authentifié (vendeur)
-    const vendeurId = req.user && req.user._id ? req.user._id : req.body.vendeur;
-    const article = new Article({ ...req.body, vendeur: vendeurId });
+    const vendeurId = req.user && req.user._id ? req.user._id.toString() : req.body.vendeur;
+    // Correction : Forcer le champ source à 'tranoo' si entreprise=TRANOO
+    let source = req.body.source || 'app';
+    if (req.body.entreprise && req.body.entreprise.trim().toUpperCase() === 'TRANOO') {
+      source = 'tranoo';
+    }
+    // Forcer le statut à 'en_attente' à la création
+    const article = new Article({ ...req.body, vendeur: vendeurId, statut: 'en_attente', source });
     await article.save();
     res.status(201).json({ message: 'Article créé', article });
   } catch (error) {
+    console.error('Erreur détaillée lors de la création de l\'article :', error);
     res.status(500).json({ message: 'Erreur lors de la création de l\'article', error });
   }
 };
@@ -16,7 +23,7 @@ exports.createArticle = async (req, res) => {
 // Lister les articles avec filtres (type, marque, modele, lieu, prix, categorie, etc.)
 exports.getArticles = async (req, res) => {
   try {
-    const { type, marque, modele, lieu, minPrix, maxPrix, categorie, vendeur, aLaUne, sponsorise, recommande } = req.query;
+    const { type, marque, modele, lieu, minPrix, maxPrix, categorie, vendeur, aLaUne, sponsorise, recommande, source } = req.query;
     const filter = {};
     if (type) filter.type = type;
     if (marque) filter.marque = marque;
@@ -27,11 +34,35 @@ exports.getArticles = async (req, res) => {
     if (aLaUne) filter.aLaUne = aLaUne === 'true';
     if (sponsorise) filter.sponsorise = sponsorise === 'true';
     if (recommande) filter.recommande = recommande === 'true';
+    if (source) {
+      // On filtre explicitement sur source=tranoo
+      if (source === 'tranoo') {
+        filter.source = 'tranoo';
+      } else {
+        filter.source = source;
+      }
+    }
     if (minPrix || maxPrix) {
       filter.prix = {};
       if (minPrix) filter.prix.$gte = Number(minPrix);
       if (maxPrix) filter.prix.$lte = Number(maxPrix);
     }
+    // Filtrage automatique selon le rôle
+    if (req.user) {
+      if (req.user.role === 'vendeur') {
+        filter.vendeur = req.user._id;
+        filter.statut = 'en_ligne';
+      } else if (req.user.role !== 'admin') {
+        filter.statut = 'en_ligne';
+      }
+      // admin : pas de filtre statut
+    } else {
+      // Non authentifié : ne voir que les articles en ligne
+      filter.statut = 'en_ligne';
+    }
+    // LOG DEBUG
+    console.log('USER:', req.user);
+    console.log('FILTER:', filter);
     const articles = await Article.find(filter).populate('vendeur', 'nom prenoms email entreprise');
     res.json(articles);
   } catch (error) {
@@ -60,6 +91,12 @@ exports.updateArticle = async (req, res) => {
       return res.status(403).json({ message: 'Non autorisé à modifier cet article' });
     }
     Object.assign(article, req.body);
+    // Correction : Forcer le champ source à 'tranoo' si entreprise=TRANOO
+    if (req.body.entreprise && req.body.entreprise.trim().toUpperCase() === 'TRANOO') {
+      article.source = 'tranoo';
+    } else if (req.body.source) {
+      article.source = req.body.source;
+    }
     await article.save();
     res.json({ message: 'Article mis à jour', article });
   } catch (error) {
@@ -92,7 +129,17 @@ exports.updateStatut = async (req, res) => {
     if (req.user.role !== 'admin') {
       return res.status(403).json({ message: 'Seul un admin peut changer le statut' });
     }
+    // Autoriser tous les statuts définis dans le modèle
+    const allowedStatus = ['en_attente', 'en_ligne', 'rejeté', 'vendu', 'non_vendu'];
+    if (!allowedStatus.includes(req.body.statut)) {
+      return res.status(400).json({ message: 'Statut non autorisé' });
+    }
     article.statut = req.body.statut;
+    // Correction : forcer la présence du champ vendeur
+    if (!article.vendeur) {
+      const original = await Article.findById(req.params.id).lean();
+      article.vendeur = original?.vendeur || null;
+    }
     await article.save();
     // Envoi de notification push au vendeur si fcmToken présent
     const User = require('../models/User');
@@ -114,6 +161,7 @@ exports.updateStatut = async (req, res) => {
     }
     res.json({ message: 'Statut mis à jour', article });
   } catch (error) {
+    console.error('Erreur lors de la mise à jour du statut:', error);
     res.status(500).json({ message: 'Erreur lors de la mise à jour du statut', error });
   }
 };
@@ -128,6 +176,7 @@ exports.markAsSold = async (req, res) => {
     if (article.statutVente === 'vendu') return res.status(400).json({ message: 'Article déjà vendu' });
     article.statutVente = 'vendu';
     article.acheteur = acheteurId;
+    if (!article.dateAchat) article.dateAchat = new Date();
     await article.save();
     res.json({ message: 'Article marqué comme vendu', article });
   } catch (error) {
@@ -172,7 +221,7 @@ exports.updateDateLivraison = async (req, res) => {
   try {
     const { id } = req.params;
     const { dateLivraison } = req.body;
-    // Vérifier que l'utilisateur est admin (à adapter selon votre logique d'auth)
+    // Vérifier que l'utilisateur est admin (à adapter selon la logique d'auth)
     if (!req.user || req.user.role !== 'admin') {
       return res.status(403).json({ message: 'Seul un admin peut modifier la date de livraison' });
     }

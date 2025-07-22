@@ -32,11 +32,11 @@ const articleSchema = new mongoose.Schema({
   // Statut de publication
   statut: {
     type: String,
-    enum: ['en_attente', 'validé', 'rejeté'],
+    enum: ['en_attente', 'en_ligne', 'rejeté', 'vendu', 'non_vendu'],
     default: 'en_attente'
   },
   // Lien avec le vendeur (utilisateur)
-  vendeur: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  vendeur: { type: String, ref: 'User', required: true },
   dateCreation: { type: Date, default: Date.now },
   statutVente: {
     type: String,
@@ -44,7 +44,11 @@ const articleSchema = new mongoose.Schema({
     default: 'non vendu'
   },
   acheteur: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
-  dateLivraison: { type: Date, default: null } // Date de livraison (null = en cours)
+  chauffeur: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null }, // Ajout pour lier un chauffeur
+  dateLivraison: { type: Date, default: null }, // Date de livraison (null = en cours)
+  dateAchat: { type: Date, default: null }, // Date à laquelle l'acheteur est lié à l'article
+  // Source de l'article : 'tranoo' (Landing Page) ou 'app' (application principale)
+  source: { type: String, enum: ['tranoo', 'app'], default: 'app' },
 });
 
 module.exports = mongoose.model('Article', articleSchema); 
