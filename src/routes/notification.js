@@ -1,0 +1,27 @@
+const express = require('express');
+const router = express.Router();
+const notificationController = require('../controllers/notificationController');
+const auth = require('../middlewares/auth');
+
+// Route de test (à supprimer en production) - SANS AUTH POUR LES TESTS
+router.post('/test', notificationController.testNotification);
+
+// Toutes les autres routes nécessitent une authentification
+router.use(auth);
+
+// Récupérer les notifications de l'utilisateur
+router.get('/', notificationController.getUserNotifications);
+
+// Obtenir le nombre de notifications non lues
+router.get('/unread-count', notificationController.getUnreadCount);
+
+// Marquer une notification comme lue
+router.put('/:notificationId/read', notificationController.markAsRead);
+
+// Marquer toutes les notifications comme lues
+router.put('/mark-all-read', notificationController.markAllAsRead);
+
+// Supprimer une notification
+router.delete('/:notificationId', notificationController.deleteNotification);
+
+module.exports = router;

@@ -10,6 +10,8 @@ const messageSchema = new mongoose.Schema({
   content: { type: String },
   // URL d'un fichier joint (image, document, etc.)
   fileUrl: { type: String },
+  // Statut de lecture du message
+  isRead: { type: Boolean, default: false },
   // Date d'envoi du message
   createdAt: { type: Date, default: Date.now }
 });

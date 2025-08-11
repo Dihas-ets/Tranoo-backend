@@ -22,22 +22,26 @@ const User = require('../models/User');
 
 module.exports = async function (req, res, next) {
   const authHeader = req.headers.authorization;
+  console.log('[AUTH] headers.authorization:', authHeader);
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    console.error('[AUTH] Token manquant ou invalide');
     return res.status(401).json({ message: 'Token manquant ou invalide' });
   }
   const idToken = authHeader.split('Bearer ')[1];
   try {
     const decodedToken = await admin.auth().verifyIdToken(idToken);
-    console.log('DECODED TOKEN:', decodedToken);
+    console.log('[AUTH] DECODED TOKEN:', decodedToken);
     // On récupère l'utilisateur MongoDB correspondant au uid Firebase
     const user = await User.findOne({ uid: decodedToken.uid });
-    console.log('USER FOUND:', user);
+    console.log('[AUTH] USER FOUND:', user);
     if (!user) {
+      console.error('[AUTH] Utilisateur non trouvé dans la base');
       return res.status(401).json({ message: 'Utilisateur non trouvé dans la base' });
     }
     req.user = user; // On met l'objet complet (avec _id) dans req.user
     next();
   } catch (error) {
+    console.error('[AUTH] Token invalide', error);
     return res.status(401).json({ message: 'Token invalide', error });
   }
 };

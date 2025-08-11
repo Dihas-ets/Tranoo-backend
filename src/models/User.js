@@ -73,6 +73,9 @@ const userSchema = new mongoose.Schema({
     enum: ['CDD', 'CDI', 'En mission', null],
     default: null
   },
+  // NOUVEAUX CHAMPS POUR LE STATUT EN LIGNE
+  isOnline: { type: Boolean, default: false }, // Statut en ligne/hors ligne
+  lastSeen: { type: Date, default: Date.now } // Dernière activité
 });
 
 module.exports = mongoose.model('User', userSchema); 
