@@ -25,6 +25,5 @@ uploads/
 # Système
 .DS_Store
 
-# Build (si tu buildes du JS)
 dist/
 build/
