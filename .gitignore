@@ -1,0 +1,30 @@
+# Node/Express backend
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Logs divers
+logs/
+*.log
+
+# Environnement
+.env
+.env.*
+
+# Pour supprimer .env du dépôt si déjà poussé :
+# git rm --cached .env
+
+# Fichiers sensibles
+src/firebaseServiceAccountKey.json.json
+
+# Fichiers d'uploads utilisateurs
+uploads/
+
+# Système
+.DS_Store
+
+# Build (si tu buildes du JS)
+dist/
+build/
