@@ -7,7 +7,7 @@ async function testNotification() {
     const vendeurId = '686d4db2b133302db8cb98c6'; // ID du vendeur de test
     const transitaireId = '6872623f18eb8a18d59b1069'; // ID du transitaire de test
     
-    const response = await axios.post('http://localhost:5000/api/notifications/test', {
+    const response = await axios.post('https://api.tranoo.store/api/notifications/test', {
       recipientId: vendeurId,
       senderId: transitaireId,
       title: 'Test Notification',

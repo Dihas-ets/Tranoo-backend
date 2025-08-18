@@ -21,4 +21,5 @@ router.put('/:id/vendu', articleController.markAsSold);
 router.get('/achats/:acheteurId', getAchatsByAcheteur);
 router.patch('/:id/livraison', authMiddleware, updateDateLivraison);
 
+
 module.exports = router; 

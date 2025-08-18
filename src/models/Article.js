@@ -51,4 +51,5 @@ const articleSchema = new mongoose.Schema({
   source: { type: String, enum: ['tranoo', 'app'], default: 'app' },
 });
 
+
 module.exports = mongoose.model('Article', articleSchema); 

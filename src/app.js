@@ -163,6 +163,7 @@ const notificationRoutes = require('./routes/notification');
 app.use('/api/notifications', notificationRoutes);
 
 const PORT = process.env.PORT || 5000;
+
 server.listen(PORT, () => {
   console.log(`Serveur démarré sur le port ${PORT}`);
   console.log('🚀 WebSocket server (Socket.io) démarré et prêt à recevoir des connexions');

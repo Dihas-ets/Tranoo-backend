@@ -1,3 +1,4 @@
+
 // Script pour créer un super admin manuellement dans MongoDB
 // 1. À utiliser après avoir créé le compte dans Firebase Auth (console Firebase)
 // 2. Récupère le uid et l'email du super admin depuis Firebase Auth
@@ -33,61 +34,19 @@ async function createSuperAdmin() {
     const exists = await User.findOne({ uid: superAdminData.uid });
     if (exists) {
       console.log('Super admin déjà existant :', exists.email);
+      await mongoose.disconnect();
       process.exit(0);
     }
     const user = new User(superAdminData);
     await user.save();
     console.log('Super admin créé avec succès !');
+    await mongoose.disconnect();
     process.exit(0);
   } catch (err) {
     console.error('Erreur lors de la création du super admin :', err);
+    await mongoose.disconnect();
     process.exit(1);
   }
 }
 
-createSuperAdmin(); 
-
-// Remplis le script
-// Ouvre createSuperAdmin.js.
-// Remplace les valeurs dans superAdminData :
-// uid : le uid copié depuis Firebase Auth
-// nom, prenoms, email, telephone, etc. : les infos de ton super admin
-
-// Lance le script
-// Dans le terminal, à la racine du projet :
-// Apply to createSuperA...
-// Run
-// Si tout va bien, tu verras :
-// Super admin créé avec succès !
-// Si le super admin existe déjà, tu verras un message d'info.
-
-// Script de mise à jour du super admin pour garantir que tous les champs sont bien renseignés
-mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/tranoo');
-
-(async () => {
-  try {
-    const user = await User.findOneAndUpdate(
-      { uid: 'Ms0g2FYxMeN7hJpglokoxbuDdcH2' },
-      {
-        nom: 'GNACADJA',
-        prenoms: 'Laurinda',
-        photo: 'https://ui-avatars.com/api/?name=Laurinda+GNACADJA',
-        email: 'gnacadjalaurinda@gmail.com',
-        statut: 'actif',
-        typeAdmin: 'superAdmin',
-        role: 'admin',
-        adresse: 'Abomey_Calavi',
-        ville: 'Abomey_Calavi',
-        langue: 'fr',
-        devise: 'XOF',
-        dateInscription: new Date(),
-      },
-      { new: true }
-    );
-    console.log('Super admin mis à jour:', user);
-  } catch (err) {
-    console.error(err);
-  } finally {
-    mongoose.disconnect();
-  }
-})();
+createSuperAdmin();
