@@ -323,19 +323,23 @@ app.use('/api/chat', chatRoutes);
 
 
 
-// Routes notifications
+// Routes notifications (chargement optionnel)
+try {
+  const notificationRoutes = require('./routes/notification');
+  app.use('/api/notifications', notificationRoutes);
+} catch (e) {
+  console.warn('Notifications routes non chargées:', e.message);
+}
 
-const notificationRoutes = require('./routes/notification');
-
-app.use('/api/notifications', notificationRoutes);
 
 
-
-// Routes propositions transitaires
-
-const propositionTransitRoutes = require('./routes/propositionTransit');
-
-app.use('/api/transit', propositionTransitRoutes);
+// Routes propositions transitaires (chargement optionnel)
+try {
+  const propositionTransitRoutes = require('./routes/propositionTransit');
+  app.use('/api/transit', propositionTransitRoutes);
+} catch (e) {
+  console.warn('Proposition transit routes non chargées:', e.message);
+}
 
 
 
