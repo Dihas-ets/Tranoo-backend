@@ -23,7 +23,7 @@ exports.createArticle = async (req, res) => {
 // Lister les articles avec filtres (type, marque, modele, lieu, prix, categorie, etc.)
 exports.getArticles = async (req, res) => {
   try {
-    const { type, marque, modele, lieu, minPrix, maxPrix, categorie, vendeur, aLaUne, sponsorise, recommande, source } = req.query;
+    const { type, marque, modele, lieu, minPrix, maxPrix, categorie, vendeur, aLaUne, sponsorise, recommande, source, vendu } = req.query;
     const filter = {};
     if (type) filter.type = type;
     if (marque) filter.marque = marque;
@@ -60,6 +60,13 @@ exports.getArticles = async (req, res) => {
       // Non authentifié : ne voir que les articles en ligne
       filter.statut = 'en_ligne';
     }
+    // Filtre vendu/non vendu via statutVente
+    if (vendu === 'false') {
+      filter.statutVente = { $ne: 'vendu' };
+    } else if (vendu === 'true') {
+      filter.statutVente = 'vendu';
+    }
+
     // LOG DEBUG
     console.log('USER:', req.user);
     console.log('FILTER:', filter);

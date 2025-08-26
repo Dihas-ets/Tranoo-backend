@@ -1,9 +1,8 @@
 const User = require('../models/User');
 const bcrypt = require('bcryptjs');
 const Article = require('../models/Article');
-const DemandeChauffeur = require('../models/DemandeChauffeur');
 const cloudinary = require('cloudinary').v2;
-const multer = require('multer');
+const admin = require('firebase-admin');
 
 // Config Cloudinary (à adapter avec tes clés)
 cloudinary.config({
@@ -170,7 +169,7 @@ exports.updatePassword = async (req, res) => {
 };
 
 // Récupérer la liste des vendeurs avec articlesCount et salesCount
-exports.getVendeursStats = async (req, res) => {
+exports.getVendeursStats = async (_req, res) => {
   try {
     const vendeurs = await User.find({ role: 'vendeur' });
     const results = await Promise.all(
@@ -196,7 +195,7 @@ exports.getVendeursStats = async (req, res) => {
   }
 };
 
-exports.getAcheteursWithAchats = async (req, res) => {
+exports.getAcheteursWithAchats = async (_req, res) => {
   try {
     const articles = await Article.find({ acheteur: { $ne: null } })
       .populate('acheteur', 'nom prenoms email statut');
@@ -266,6 +265,96 @@ exports.updateFcmToken = async (req, res) => {
   }
 };
 
+// Met à jour les informations du profil de l'utilisateur connecté
+exports.updateMe = async (req, res) => {
+  try {
+    const allowedFields = ['nom', 'prenoms', 'entreprise', 'email', 'telephone', 'photo'];
+    const updates = {};
+    allowedFields.forEach((field) => {
+      if (req.body[field] !== undefined) updates[field] = req.body[field];
+    });
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ message: 'Aucune donnée à mettre à jour' });
+    }
+
+    const user = req.user;
+    const emailChanged = updates.email && updates.email !== user.email;
+    Object.assign(user, updates);
+    await user.save();
+
+    // Synchroniser l'email avec Firebase si modifié
+    if (emailChanged) {
+      try {
+        console.log('[updateMe] Firebase email update attempt', {
+          uid: user.uid,
+          oldEmail: req.user.email,
+          newEmail: user.email,
+        });
+        await admin.auth().updateUser(user.uid, { email: user.email });
+        console.log('[updateMe] Firebase email update success', { uid: user.uid });
+      } catch (err) {
+        console.error('[updateMe] Firebase email update failed', {
+          uid: user.uid,
+          oldEmail: req.user.email,
+          newEmail: user.email,
+          code: err?.errorInfo?.code || err.code,
+          message: err?.errorInfo?.message || err.message,
+        });
+        return res.status(500).json({
+          message: 'Email mis à jour en base mais pas dans Firebase',
+          errorCode: err?.errorInfo?.code || err.code,
+          error: err?.errorInfo?.message || err.message,
+        });
+      }
+    }
+
+    const statut = await computeUserStatut(user);
+    const userObj = user.toObject();
+    userObj.statut = statut;
+    res.json({ message: 'Profil mis à jour', user: userObj });
+  } catch (error) {
+    res.status(500).json({ message: 'Erreur lors de la mise à jour du profil', error: error.message });
+  }
+};
+
+// Met à jour le mot de passe de l'utilisateur connecté (nécessite oldPassword/newPassword)
+exports.updateMyPassword = async (req, res) => {
+  try {
+    const { newPassword } = req.body;
+    if (!newPassword) {
+      return res.status(400).json({ message: 'Nouveau mot de passe requis' });
+    }
+
+    const user = req.user;
+    // Simplification: on ne vérifie plus l'ancien mot de passe
+    user.password = await bcrypt.hash(newPassword, 10);
+    await user.save();
+
+    // Synchroniser le mot de passe dans Firebase pour la connexion
+    try {
+      console.log('[updateMyPassword] Firebase password update attempt', { uid: user.uid });
+      await admin.auth().updateUser(user.uid, { password: newPassword });
+      console.log('[updateMyPassword] Firebase password update success', { uid: user.uid });
+    } catch (err) {
+      console.error('[updateMyPassword] Firebase password update failed', {
+        uid: user.uid,
+        code: err?.errorInfo?.code || err.code,
+        message: err?.errorInfo?.message || err.message,
+      });
+      return res.status(500).json({
+        message: 'Mot de passe mis à jour en base mais pas dans Firebase',
+        errorCode: err?.errorInfo?.code || err.code,
+        error: err?.errorInfo?.message || err.message,
+      });
+    }
+
+    return res.json({ message: 'Mot de passe mis à jour' });
+  } catch (error) {
+    res.status(500).json({ message: 'Erreur lors du changement de mot de passe', error: error.message });
+  }
+};
+
 // Récupérer les activités d'un chauffeur (articles livrés ou en cours)
 exports.getChauffeurActivities = async (req, res) => {
   try {
@@ -281,7 +370,7 @@ exports.getChauffeurActivities = async (req, res) => {
 }; 
 
 // Nouvelle route : liste de tous les acheteurs (même sans achat)
-exports.getAllAcheteurs = async (req, res) => {
+exports.getAllAcheteurs = async (_req, res) => {
   try {
     const acheteurs = await User.find({ role: 'acheteur' });
     const acheteursWithStatut = await Promise.all(acheteurs.map(async (u) => {

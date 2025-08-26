@@ -20,11 +20,17 @@ router.get('/:id', roleMiddleware('superAdmin', 'principal', 'gestionnaire'), us
 router.put('/:id', roleMiddleware('superAdmin', 'principal', 'gestionnaire'), userController.updateUser);
 // Suppression d'un utilisateur
 router.delete('/:id', roleMiddleware('superAdmin', 'principal', 'gestionnaire'), userController.deleteUser);
-// Mise à jour du mot de passe d'un utilisateur
-router.put('/:id/password', roleMiddleware('superAdmin', 'principal', 'gestionnaire', 'admin'), userController.updatePassword);
+// Mise à jour du mot de passe d'un utilisateur (ANCIEN - désactivé pour éviter conflits)
+// router.put('/:id/password', roleMiddleware('superAdmin', 'principal', 'gestionnaire', 'admin'), userController.updatePassword);
 
-// Route pour upload photo de profil
+// Route pour upload photo de profil (chemin conservé pour compatibilité)
 router.post('/users/photo', auth, upload.single('photo'), userController.uploadProfilePhoto);
+
+// Mettre à jour le profil de l'utilisateur connecté
+router.patch('/me', auth, userController.updateMe);
+
+// Mettre à jour le mot de passe de l'utilisateur connecté
+router.patch('/password', auth, userController.updateMyPassword);
 
 // Route pour mettre à jour le token FCM
 router.post('/fcm-token', auth, userController.updateFcmToken);

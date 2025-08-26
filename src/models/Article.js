@@ -40,7 +40,7 @@ const articleSchema = new mongoose.Schema({
   dateCreation: { type: Date, default: Date.now },
   statutVente: {
     type: String,
-    enum: ['vendu', 'non vendu'],
+    enum: ['non vendu', 'en_attente', 'vendu'],
     default: 'non vendu'
   },
   acheteur: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
