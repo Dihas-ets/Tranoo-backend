@@ -38,12 +38,19 @@ exports.upsertProposition = async (req, res) => {
   }
 };
 
-// Lister articles en ligne ou en attente non vendus (Soumis)
-exports.listSoumis = async (_req, res) => {
+// Lister articles en ligne non vendus (Soumis)
+// Exclure ceux pour lesquels le transitaire connecté a déjà proposé un tarif
+exports.listSoumis = async (req, res) => {
   try {
-    const articles = await Article.find({ 
-      statut: { $in: ['en_ligne', 'en_attente'] }, 
-      statutVente: { $ne: 'vendu' } 
+    const transitaireId = req.user._id;
+    // Récupérer les articles déjà proposés par ce transitaire (peu importe le statut)
+    const dejaProposesArticleIds = await PropositionTransit.find({ transitaire: transitaireId })
+      .distinct('article');
+
+    const articles = await Article.find({
+      statut: 'en_ligne',
+      statutVente: { $ne: 'vendu' },
+      _id: { $nin: dejaProposesArticleIds }
     });
     res.json(articles);
   } catch (error) {

@@ -47,6 +47,111 @@ exports.createNotification = async (recipientId, senderId, title, message, type 
   }
 };
 
+// Créer une notification de vérification avec actions
+exports.createVerificationNotification = async (acheteurId, articleId, verificationData) => {
+  try {
+    const notification = new Notification({
+      recipient: acheteurId,
+      sender: 'system', // Système ou admin
+      title: 'Vérification terminée',
+      message: 'Votre article a été vérifié. Décidez maintenant de votre achat.',
+      type: 'verification',
+      relatedId: articleId,
+      relatedModel: 'Article',
+      actions: [
+        {
+          label: 'Valider l\'achat',
+          action: 'approve',
+          color: 'success'
+        },
+        {
+          label: 'Rejeter l\'achat',
+          action: 'reject',
+          color: 'danger'
+        }
+      ],
+      status: 'pending',
+      verificationData: {
+        articleId: articleId,
+        verificationDate: new Date(),
+        verificationDetails: verificationData.details || 'Vérification complète effectuée',
+        verificationCost: verificationData.cost || 20000
+      }
+    });
+
+    await notification.save();
+
+    // Envoyer une notification push FCM
+    const recipient = await User.findById(acheteurId);
+    if (recipient && recipient.fcmToken) {
+      try {
+        await admin.messaging().send({
+          token: recipient.fcmToken,
+          notification: {
+            title: 'Vérification terminée',
+            body: 'Votre article a été vérifié. Décidez maintenant de votre achat.'
+          },
+          data: {
+            type: 'verification',
+            notificationId: notification._id.toString(),
+            articleId: articleId.toString(),
+            action: 'verification_ready'
+          }
+        });
+        console.log(`[VERIFICATION] Notification push envoyée à ${recipient.email}`);
+      } catch (error) {
+        console.error('[VERIFICATION] Erreur envoi push FCM:', error);
+      }
+    }
+
+    return notification;
+  } catch (error) {
+    console.error('[VERIFICATION] Erreur création notification:', error);
+    throw error;
+  }
+};
+
+// Traiter l'action de vérification (approve/reject)
+exports.handleVerificationAction = async (notificationId, action, userId) => {
+  try {
+    const notification = await Notification.findById(notificationId);
+    if (!notification) {
+      throw new Error('Notification non trouvée');
+    }
+
+    if (notification.type !== 'verification') {
+      throw new Error('Cette notification n\'est pas de type vérification');
+    }
+
+    if (notification.recipient.toString() !== userId.toString()) {
+      throw new Error('Non autorisé à traiter cette notification');
+    }
+
+    // Mettre à jour le statut
+    notification.status = action === 'approve' ? 'approved' : 'rejected';
+    notification.isRead = true;
+    await notification.save();
+
+    // Envoyer une notification de confirmation à l'admin
+    if (notification.verificationData && notification.verificationData.articleId) {
+      await this.createNotification(
+        'admin', // ID de l'admin (à adapter selon votre logique)
+        userId,
+        `Achat ${action === 'approve' ? 'validé' : 'rejeté'}`,
+        `L'utilisateur a ${action === 'approve' ? 'validé' : 'rejeté'} l'achat de l'article ${notification.verificationData.articleId}`,
+        'verification_result',
+        notification.verificationData.articleId,
+        'Article'
+      );
+    }
+
+    return notification;
+  } catch (error) {
+    console.error('[VERIFICATION] Erreur traitement action:', error);
+    throw error;
+  }
+};
+
 // Récupérer les notifications d'un utilisateur
 exports.getUserNotifications = async (req, res) => {
   try {
@@ -138,6 +243,47 @@ exports.deleteNotification = async (req, res) => {
   } catch (error) {
     console.error('[NOTIFICATION] Erreur suppression:', error);
     res.status(500).json({ message: 'Erreur lors de la suppression' });
+  }
+};
+
+// Traiter l'action de vérification (HTTP)
+exports.handleVerificationActionHTTP = async (req, res) => {
+  try {
+    const { notificationId } = req.params;
+    const { action } = req.body;
+    
+    if (!['approve', 'reject'].includes(action)) {
+      return res.status(400).json({ message: 'Action invalide. Utilisez "approve" ou "reject"' });
+    }
+
+    const notification = await exports.handleVerificationAction(notificationId, action, req.user._id);
+    res.json({ 
+      message: `Achat ${action === 'approve' ? 'validé' : 'rejeté'} avec succès`, 
+      notification 
+    });
+  } catch (error) {
+    console.error('[VERIFICATION] Erreur traitement action HTTP:', error);
+    res.status(500).json({ message: error.message || 'Erreur lors du traitement de l\'action' });
+  }
+};
+
+// Créer une notification de vérification (HTTP - Admin uniquement)
+exports.createVerificationNotificationHTTP = async (req, res) => {
+  try {
+    const { acheteurId, articleId, verificationData } = req.body;
+    
+    if (!acheteurId || !articleId) {
+      return res.status(400).json({ message: 'acheteurId et articleId sont requis' });
+    }
+
+    const notification = await exports.createVerificationNotification(acheteurId, articleId, verificationData);
+    res.status(201).json({ 
+      message: 'Notification de vérification créée avec succès', 
+      notification 
+    });
+  } catch (error) {
+    console.error('[VERIFICATION] Erreur création notification HTTP:', error);
+    res.status(500).json({ message: 'Erreur lors de la création de la notification' });
   }
 };
 

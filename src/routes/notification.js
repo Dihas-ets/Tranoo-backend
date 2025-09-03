@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const notificationController = require('../controllers/notificationController');
 const auth = require('../middlewares/auth');
+const roleMiddleware = require('../middlewares/role');
 
 // Route de test (à supprimer en production) - SANS AUTH POUR LES TESTS
 router.post('/test', notificationController.testNotification);
@@ -23,5 +24,13 @@ router.put('/mark-all-read', notificationController.markAllAsRead);
 
 // Supprimer une notification
 router.delete('/:notificationId', notificationController.deleteNotification);
+
+// ===== NOUVELLES ROUTES POUR LES VÉRIFICATIONS =====
+
+// Traiter l'action de vérification (approve/reject)
+router.post('/:notificationId/verification-action', notificationController.handleVerificationActionHTTP);
+
+// Créer une notification de vérification (Admin uniquement)
+router.post('/verification', roleMiddleware('superAdmin', 'principal', 'gestionnaire'), notificationController.createVerificationNotificationHTTP);
 
 module.exports = router;

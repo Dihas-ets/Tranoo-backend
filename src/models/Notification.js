@@ -21,7 +21,7 @@ const notificationSchema = new mongoose.Schema({
   },
   type: {
     type: String,
-    enum: ['chat', 'publicite', 'paiement', 'promotion', 'alerte', 'general'],
+    enum: ['chat', 'publicite', 'paiement', 'promotion', 'alerte', 'general', 'verification'],
     default: 'general'
   },
   isRead: {
@@ -34,7 +34,37 @@ const notificationSchema = new mongoose.Schema({
   },
   relatedModel: {
     type: String,
-    enum: ['ChatRoom', 'Publicite', 'Article', 'User']
+    enum: ['ChatRoom', 'Publicite', 'Article', 'User', 'Achat']
+  },
+  // Nouveaux champs pour les notifications de vérification
+  actions: [{
+    label: {
+      type: String,
+      required: false
+    },
+    action: {
+      type: String,
+      required: false
+    },
+    color: {
+      type: String,
+      required: false
+    }
+  }],
+  status: {
+    type: String,
+    enum: ['pending', 'approved', 'rejected'],
+    default: 'pending'
+  },
+  // Données spécifiques à la vérification
+  verificationData: {
+    articleId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Article'
+    },
+    verificationDate: Date,
+    verificationDetails: String,
+    verificationCost: Number
   },
   createdAt: {
     type: Date,
@@ -45,5 +75,6 @@ const notificationSchema = new mongoose.Schema({
 // Index pour améliorer les performances
 notificationSchema.index({ recipient: 1, isRead: 1 });
 notificationSchema.index({ createdAt: -1 });
+notificationSchema.index({ type: 1, status: 1 }); // Nouvel index pour les vérifications
 
 module.exports = mongoose.model('Notification', notificationSchema);
