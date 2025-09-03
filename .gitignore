@@ -1,2 +1,6 @@
 .env
 /node_modules
+src/firebaseServiceAccountKey.json
+dist
+build
+*.log
