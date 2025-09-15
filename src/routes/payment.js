@@ -6,6 +6,12 @@ const auth = require('../middlewares/auth');
 // Initier un paiement FeexPay (nécessite auth pour associer user)
 router.post('/feexpay/init', auth, paymentController.initPayment);
 
+// RequestToPay par réseau (mtn, moov, celtiis_bj, coris, orange_sn, etc.)
+router.post('/feexpay/requesttopay/:network', auth, paymentController.initRequestToPay);
+
+// Paiement par carte
+router.post('/feexpay/initcard', auth, paymentController.initCardPayment);
+
 // Webhook FeexPay (publique, FeexPay doit pouvoir appeler)
 router.post('/feexpay/webhook', express.json({ type: '*/*' }), paymentController.webhook);
 
@@ -14,6 +20,15 @@ router.get('/:id', auth, paymentController.getStatus);
 
 // Statut public FeexPay (id_transaction de la redirection)
 router.get('/feexpay/public/status/:id', paymentController.getPublicStatus);
+
+// Tracer depuis le client (logs/hints) pour lier id_transaction
+router.post('/feexpay/trace', paymentController.traceFromClient);
+
+// Liste des paiements (historique)
+router.get('/', auth, paymentController.list);
+
+// Admin: forcer un statut (test uniquement)
+router.post('/admin/:id/status', paymentController.adminSetStatus);
 
 module.exports = router;
 

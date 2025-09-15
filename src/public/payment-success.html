@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Paiement Réussi - Tranoo</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: linear-gradient(135deg, #1DBF73, #00A86B);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            color: white;
+        }
+        .container {
+            text-align: center;
+            background: rgba(255,255,255,0.1);
+            padding: 40px;
+            border-radius: 20px;
+            backdrop-filter: blur(10px);
+        }
+        .success-icon {
+            font-size: 80px;
+            margin-bottom: 20px;
+        }
+        h1 {
+            margin: 0 0 20px 0;
+            font-size: 2.5em;
+        }
+        p {
+            font-size: 1.2em;
+            margin: 10px 0;
+        }
+        .close-btn {
+            background: rgba(255,255,255,0.2);
+            border: 2px solid white;
+            color: white;
+            padding: 15px 30px;
+            border-radius: 50px;
+            font-size: 1.1em;
+            cursor: pointer;
+            margin-top: 30px;
+            transition: all 0.3s;
+        }
+        .close-btn:hover {
+            background: white;
+            color: #1DBF73;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="success-icon">✅</div>
+        <h1>Paiement Réussi !</h1>
+        <p>Votre transaction a été effectuée avec succès.</p>
+        <p>Vous pouvez maintenant fermer cette page et retourner à l'application.</p>
+        <button class="close-btn" onclick="goBackToApp()">Retourner à l'app</button>
+    </div>
+    
+    <script>
+        function goBackToApp() {
+            // Essayer de fermer la fenêtre
+            if (window.close) {
+                window.close();
+            }
+            // Si ça ne marche pas, essayer de revenir en arrière
+            if (window.history.length > 1) {
+                window.history.back();
+            }
+        }
+        
+        // Auto-redirection après 3 secondes
+        setTimeout(() => {
+            goBackToApp();
+        }, 3000);
+    </script>
+    </div>
+</body>
+</html>

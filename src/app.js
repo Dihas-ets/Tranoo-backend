@@ -10,11 +10,16 @@ const { Server } = require('socket.io');
 // Charger les variables d'environnement
 dotenv.config();
 
-// Initialiser Firebase Admin
+// // Initialiser Firebase Admin
 const serviceAccount = require('./firebaseServiceAccountKey.json');
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
+
+// Initialiser Firebase Admin avec la variable d'environnement
+// admin.initializeApp({
+//   credential: admin.credential.cert(process.env.GOOGLE_APPLICATION_CREDENTIALS)
+// });
 
 const app = express();
 const server = createServer(app);
@@ -117,6 +122,9 @@ app.use(cors({
 }));
 app.use(express.json());
 
+// Servir les fichiers statiques (pages de redirection)
+app.use(express.static('src/public'));
+
 // Connexion à MongoDB
 mongoose.connect(process.env.MONGO_URI).then(() => console.log('MongoDB connecté'))
   .catch((err) => console.error('Erreur MongoDB:', err));
@@ -177,6 +185,16 @@ app.use('/api/achats', authMiddleware, achatRoutes);
 // Routes paiements (FeexPay)
 const paymentRoutes = require('./routes/payment');
 app.use('/api/payments', paymentRoutes);
+
+// Démarrer le worker d'auto-actualisation des statuts de paiement
+try {
+  const paymentController = require('./controllers/paymentController');
+  if (typeof paymentController.startPaymentStatusWorker === 'function') {
+    paymentController.startPaymentStatusWorker();
+  }
+} catch (e) {
+  console.error('Impossible de démarrer le worker paiement:', e.message);
+}
 
 const PORT = process.env.PORT || 5000;
 
