@@ -77,6 +77,9 @@ exports.getArticles = async (req, res) => {
   }
 };
 
+// Alias public qui réutilise la même logique que getArticles
+exports.getArticlesPublic = (req, res) => exports.getArticles(req, res);
+
 // Détail d'un article
 exports.getArticleById = async (req, res) => {
   try {
