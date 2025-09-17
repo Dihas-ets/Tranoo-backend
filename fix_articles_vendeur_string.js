@@ -1,7 +1,6 @@
 // Script Node.js pour convertir tous les champs 'vendeur' des articles en string
 const mongoose = require('mongoose');
 const Article = require('./src/models/Article');
-require('dotenv').config();
 
 async function main() {
   await mongoose.connect(process.env.MONGO_URI);
