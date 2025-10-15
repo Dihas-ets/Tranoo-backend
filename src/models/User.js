@@ -10,6 +10,10 @@ const userSchema = new mongoose.Schema({
   pays: { type: String }, // Pays de résidence (mobile)
   maison: { type: String }, // Maison (mobile)
   entreprise: { type: String }, // Nom de l'entreprise (pour transitaire)
+  // Champs spécifiques vendeur
+  registreCommerce: { type: String }, // Numéro du registre de commerce
+  numeroIFU: { type: String }, // Numéro IFU
+  entrepriseProvenance: { type: String }, // Entreprise de provenance
   // Champs spécifiques chauffeur
   pieceIdentite: {
     type: {
@@ -58,6 +62,9 @@ const userSchema = new mongoose.Schema({
     default: null
   }, // Type d'admin (si role = admin)
   statut: { type: String, enum: ['actif', 'inactif'], default: 'actif' }, // Statut du compte
+  isBlocked: { type: Boolean, default: false }, // Utilisateur bloqué par admin
+  blockedAt: { type: Date }, // Date de blocage
+  blockedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // Admin qui a bloqué
   langue: { type: String, default: 'fr' }, // Langue préférée
   devise: { type: String, default: 'XOF' }, // Devise préférée
   dateInscription: { type: Date, default: Date.now }, // Date d'inscription
@@ -73,6 +80,8 @@ const userSchema = new mongoose.Schema({
     enum: ['CDD', 'CDI', 'En mission', null],
     default: null
   },
+  // Favoris d'articles (voitures/pieces) liés à l'utilisateur
+  favoris: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Article' }],
   // NOUVEAUX CHAMPS POUR LE STATUT EN LIGNE
   isOnline: { type: Boolean, default: false }, // Statut en ligne/hors ligne
   lastSeen: { type: Date, default: Date.now } // Dernière activité

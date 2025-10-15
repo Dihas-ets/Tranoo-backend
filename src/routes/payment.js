@@ -15,6 +15,9 @@ router.post('/feexpay/initcard', auth, paymentController.initCardPayment);
 // Webhook FeexPay (publique, FeexPay doit pouvoir appeler)
 router.post('/feexpay/webhook', express.json({ type: '*/*' }), paymentController.webhook);
 
+// Récupérer une transaction spécifique par ID
+router.get('/:id/details', auth, paymentController.getTransaction);
+
 // Récupérer le statut d'un paiement par id ou transaction
 router.get('/:id', auth, paymentController.getStatus);
 
@@ -29,6 +32,9 @@ router.get('/', auth, paymentController.list);
 
 // Admin: forcer un statut (test uniquement)
 router.post('/admin/:id/status', paymentController.adminSetStatus);
+
+// Enregistrer un paiement FeexPay Flutter
+router.post('/feexpay/flutter/record', auth, paymentController.recordFeexPayFlutter);
 
 module.exports = router;
 

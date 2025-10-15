@@ -650,6 +650,76 @@ exports.traceFromClient = async (req, res) => {
   }
 };
 
+// Récupérer une transaction spécifique par ID
+exports.getTransaction = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const payment = await Payment.findById(id)
+      .populate('achat')
+      .populate('publicite')
+      .populate('user', 'nom prenoms email');
+    
+    if (!payment) {
+      return res.status(404).json({ message: 'Transaction non trouvée' });
+    }
+
+    // Formater la transaction avec toutes les informations
+    const transaction = {
+      id: payment._id,
+      paymentId: payment._id,
+      transactionId: payment.transactionId,
+      customId: payment.customId,
+      amount: payment.amount,
+      currency: payment.currency,
+      status: payment.status,
+      method: payment.method,
+      paymentMethod: payment.method || 'Bancaire',
+      description: payment.description,
+      createdAt: payment.createdAt,
+      updatedAt: payment.updatedAt,
+      client: payment.user ? `${payment.user.nom || ''} ${payment.user.prenoms || ''}`.trim() : 'Client inconnu',
+      email: payment.user?.email || null,
+      provider: payment.provider || 'feexpay',
+      feexpayTransactionId: payment.transactionId,
+      type: getTransactionType(payment),
+      duree: payment.duree || extractDurationFromDescription(payment.description),
+    };
+
+    return res.json(transaction);
+  } catch (error) {
+    console.error('[getTransaction] error:', error);
+    return res.status(500).json({ message: 'Erreur récupération transaction', error: error.message });
+  }
+};
+
+// Fonction utilitaire pour déterminer le type de transaction
+function getTransactionType(payment) {
+  if (payment.type === 'achat' || payment.achat) {
+    return 'Achats';
+  } else if (payment.type === 'publicite' || payment.publicite) {
+    return 'Demande de pub';
+  } else if (payment.type === 'vente') {
+    return 'Vente';
+  } else if (payment.type === 'verification') {
+    return 'Vérification';
+  } else if (payment.type === 'subscription') {
+    return 'Abonnement';
+  } else {
+    // Fallback basé sur la description
+    if (payment.description && payment.description.includes('pub')) {
+      return 'Demande de pub';
+    } else if (payment.description && payment.description.includes('vente')) {
+      return 'Vente';
+    } else if (payment.description && payment.description.includes('vérification')) {
+      return 'Vérification';
+    } else if (payment.description && payment.description.includes('abonnement')) {
+      return 'Abonnement';
+    }
+    return 'Achats'; // Par défaut
+  }
+}
+
 exports.list = async (req, res) => {
   try {
     const { status, user, from, to, limit = 100, type, search } = req.query;
@@ -719,6 +789,8 @@ exports.list = async (req, res) => {
         transaction.duree = payment.duree || extractDurationFromDescription(payment.description);
       } else if (payment.type === 'verification') {
         transaction.type = 'Vérification';
+      } else if (payment.type === 'subscription') {
+        transaction.type = 'Abonnement';
       } else {
         if (payment.description && payment.description.includes('pub')) {
           transaction.type = 'Demande de pub';
@@ -728,6 +800,8 @@ exports.list = async (req, res) => {
           transaction.duree = payment.duree || extractDurationFromDescription(payment.description);
         } else if (payment.description && payment.description.includes('vérification')) {
           transaction.type = 'Vérification';
+        } else if (payment.description && payment.description.includes('abonnement')) {
+          transaction.type = 'Abonnement';
         }
       }
 
@@ -946,4 +1020,56 @@ exports.startPaymentStatusWorker = function startPaymentStatusWorker() {
   // Intervalle léger pour auto-actualiser
   workerInterval = setInterval(pollAndUpdatePendingOnce, 15000);
   console.log('⏱️  Worker de statut paiement démarré (15s)');
+};
+
+// Enregistrer un paiement FeexPay Flutter
+exports.recordFeexPayFlutter = async (req, res) => {
+  try {
+    const {
+      transKey,
+      amount,
+      description,
+      type = 'verification',
+      status = 'success'
+    } = req.body || {};
+
+    if (!transKey || !amount) {
+      return res.status(400).json({ message: 'transKey et amount requis' });
+    }
+
+    const customId = `${type.toUpperCase()}_${req.user?._id}_${Date.now()}`;
+
+    const payment = await Payment.create({
+      provider: 'feexpay',
+      transactionId: transKey,
+      customId,
+      user: req.user?._id,
+      amount: Number(amount),
+      currency: 'XOF',
+      status: mapStatus(status),
+      method: 'FEEXPAY_FLUTTER',
+      description,
+      type,
+      rawInitResponse: {
+        source: 'feexpay_flutter',
+        transKey,
+        recordedAt: new Date().toISOString()
+      },
+    });
+
+    console.log('Paiement FeexPay Flutter enregistré:', payment._id);
+
+    return res.json({
+      ok: true,
+      paymentId: payment._id,
+      transactionId: payment.transactionId,
+      status: payment.status
+    });
+  } catch (error) {
+    console.error('[recordFeexPayFlutter] error:', error);
+    return res.status(500).json({ 
+      message: 'Erreur enregistrement paiement', 
+      error: error.message 
+    });
+  }
 };

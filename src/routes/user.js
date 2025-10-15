@@ -5,13 +5,25 @@ const roleMiddleware = require('../middlewares/role');
 const auth = require('../middlewares/auth');
 const multer = require('multer');
 const upload = multer({ dest: 'uploads/' });
-const { getAcheteursWithAchats, getAllAcheteurs } = require("../controllers/userController");
+const { 
+  getAcheteursWithAchats, 
+  getAllAcheteurs, 
+  getAllVendeurs,
+  getAllTransitaires,
+  getAllChauffeurs,
+  getAllAdmins
+} = require("../controllers/userController");
 
 // Liste des utilisateurs (option de filtrage par rôle)
 // router.get('/', roleMiddleware('superAdmin', 'principal', 'gestionnaire'), userController.getAllUsers);
 router.get('/', userController.getAllUsers);
-router.get("/acheteurs/achats", getAcheteursWithAchats);
+// Routes spécifiques par rôle
+router.get("/vendeurs/all", getAllVendeurs);
 router.get("/acheteurs/all", getAllAcheteurs);
+router.get("/acheteurs/achats", getAcheteursWithAchats);
+router.get("/transitaires/all", getAllTransitaires);
+router.get("/chauffeurs/all", getAllChauffeurs);
+router.get("/admins/all", getAllAdmins);
 // Création d'un utilisateur (chauffeur, admin, etc.)
 router.post('/', roleMiddleware('superAdmin', 'principal', 'gestionnaire'), userController.createUser);
 // Détail d'un utilisateur
@@ -35,7 +47,16 @@ router.patch('/password', auth, userController.updateMyPassword);
 // Route pour mettre à jour le token FCM
 router.post('/fcm-token', auth, userController.updateFcmToken);
 
+// Favoris de l'utilisateur connecté
+router.get('/me/favoris', auth, userController.getMyFavorites);
+router.post('/me/favoris', auth, userController.addFavorite);
+router.delete('/me/favoris', auth, userController.removeFavorite);
+
 // Récupérer les activités d'un chauffeur
 router.get('/:id/activites', roleMiddleware('superAdmin', 'principal', 'gestionnaire', 'admin'), userController.getChauffeurActivities);
+
+// Bloquer/Débloquer un utilisateur (admin seulement)
+router.patch('/:id/block', auth, userController.blockUser);
+router.patch('/:id/unblock', auth, userController.unblockUser);
 
 module.exports = router; 

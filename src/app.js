@@ -307,9 +307,9 @@ app.use('/api/chauffeurs/demandes', demandeChauffeurRoutes);
 
 
 
-// Routes statistiques
+// Routes statistiques (déjà incluses dans protected)
 
-app.use('/stats', require('./routes/stats'));
+// app.use('/stats', require('./routes/stats'));
 
 
 
@@ -333,13 +333,45 @@ try {
 
 
 
-// Routes propositions transitaires (chargement optionnel)
+// Wallet routes (dynamique)
 try {
-  const propositionTransitRoutes = require('./routes/propositionTransit');
-  app.use('/api/transit', propositionTransitRoutes);
+  const walletRoutes = require('./routes/wallet');
+  app.use('/api/wallet', authMiddleware, walletRoutes);
 } catch (e) {
-  console.warn('Proposition transit routes non chargées:', e.message);
+  console.warn('Wallet routes non chargées:', e.message);
 }
+
+// Payment routes
+try {
+  const paymentRoutes = require('./routes/payment');
+  app.use('/api/payments', paymentRoutes);
+} catch (e) {
+  console.warn('Payment routes non chargées:', e.message);
+}
+
+// Subscription routes
+try {
+  const subscriptionRoutes = require('./routes/subscription');
+  app.use('/api/subscription', authMiddleware, subscriptionRoutes);
+} catch (e) {
+  console.warn('Subscription routes non chargées:', e.message);
+}
+
+// Pub pricing routes
+try {
+  const pubPricingRoutes = require('./routes/pubPricing');
+  app.use('/api/admin', pubPricingRoutes);
+} catch (e) {
+  console.warn('Pub pricing routes non chargées:', e.message);
+}
+
+// Obsolète: Routes propositions transitaires (désactivées)
+// try {
+//   const propositionTransitRoutes = require('./routes/propositionTransit');
+//   app.use('/api/transit', propositionTransitRoutes); // fonction obsolète
+// } catch (e) {
+//   console.warn('Proposition transit routes non chargées:', e.message);
+// }
 
 
 
@@ -352,6 +384,22 @@ server.listen(PORT, () => {
   console.log(`Serveur démarré sur le port ${PORT}`);
 
   console.log('🚀 WebSocket server (Socket.io) démarré et prêt à recevoir des connexions');
+
+  // Démarrer le worker de statut des paiements
+  try {
+    const paymentController = require('./controllers/paymentController');
+    paymentController.startPaymentStatusWorker();
+  } catch (e) {
+    console.warn('Worker paiements non démarré:', e.message);
+  }
+
+  // Démarrer les tâches automatiques pour les publicités
+  try {
+    const { startCronJobs } = require('./utils/cronJobs');
+    startCronJobs();
+  } catch (e) {
+    console.warn('Tâches automatiques publicités non démarrées:', e.message);
+  }
 
 });
 

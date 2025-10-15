@@ -58,18 +58,41 @@ exports.getAllUsers = async (req, res) => {
     const users = await User.find(filter)
       .skip((page - 1) * limit)
       .limit(Number(limit));
-    // Calculer le statut dynamique pour chaque user
+    
+    // Calculer le statut dynamique et d'abonnement pour chaque user
     const usersWithStatut = await Promise.all(users.map(async (u) => {
       const statut = await computeUserStatut(u);
       const userObj = u.toObject();
       userObj.statut = statut;
+      
+      // Ajouter le statut d'abonnement pour les transitaires
+      if (u.role === 'transitaire') {
+        const Subscription = require('../models/Subscription');
+        const sub = await Subscription.findOne({ user: u._id }).lean();
+        const now = new Date();
+        const hasActiveSubscription = sub && sub.expiresAt && new Date(sub.expiresAt) > now;
+        
+        userObj.hasSubscription = hasActiveSubscription;
+        userObj.subscriptionStatus = hasActiveSubscription ? 'active' : 'inactive';
+        if (sub) {
+          userObj.subscriptionExpiresAt = sub.expiresAt;
+          userObj.subscriptionActivatedAt = sub.activatedAt;
+        }
+      }
+      
       return userObj;
     }));
-    res.json({
-      admins: usersWithStatut,
-      total,
-      totalPages: Math.ceil(total / limit)
-    });
+    
+    // Pour la compatibilité avec UsersList, retourner directement le tableau si pas de pagination
+    if (req.query.page) {
+      res.json({
+        users: usersWithStatut,
+        total,
+        totalPages: Math.ceil(total / limit)
+      });
+    } else {
+      res.json(usersWithStatut);
+    }
   } catch (error) {
     res.status(500).json({ message: 'Erreur lors de la récupération des utilisateurs', error });
   }
@@ -168,7 +191,28 @@ exports.updatePassword = async (req, res) => {
   }
 };
 
-// Récupérer la liste des vendeurs avec articlesCount et salesCount
+// Récupérer tous les vendeurs avec stats complètes
+exports.getAllVendeurs = async (_req, res) => {
+  try {
+    const vendeurs = await User.find({ role: 'vendeur' });
+    const results = await Promise.all(
+      vendeurs.map(async (vendeur) => {
+        const articlesCount = await Article.countDocuments({ vendeur: vendeur._id });
+        const salesCount = await Article.countDocuments({ vendeur: vendeur._id, statutVente: 'vendu' });
+        const userObj = vendeur.toObject();
+        userObj.statut = await computeUserStatut(vendeur);
+        userObj.articlesCount = articlesCount;
+        userObj.salesCount = salesCount;
+        return userObj;
+      })
+    );
+    res.json(results);
+  } catch (error) {
+    res.status(500).json({ message: "Erreur lors de la récupération des vendeurs", error });
+  }
+};
+
+// Récupérer la liste des vendeurs avec articlesCount et salesCount (legacy)
 exports.getVendeursStats = async (_req, res) => {
   try {
     const vendeurs = await User.find({ role: 'vendeur' });
@@ -262,6 +306,48 @@ exports.updateFcmToken = async (req, res) => {
       message: 'Erreur lors de la mise à jour du token FCM',
       error: error.message
     });
+  }
+};
+
+// Ajouter un article aux favoris de l'utilisateur connecté
+exports.addFavorite = async (req, res) => {
+  try {
+    const { articleId } = req.body;
+    if (!articleId) return res.status(400).json({ message: 'articleId requis' });
+    const user = req.user;
+    if (!user.favoris) user.favoris = [];
+    const exists = user.favoris.find((id) => id.toString() === articleId);
+    if (!exists) {
+      user.favoris.push(articleId);
+      await user.save();
+    }
+    return res.json({ message: 'Ajouté aux favoris', favoris: user.favoris });
+  } catch (err) {
+    return res.status(500).json({ message: 'Erreur ajout favori', error: err.message });
+  }
+};
+
+// Retirer un article des favoris
+exports.removeFavorite = async (req, res) => {
+  try {
+    const { articleId } = req.body;
+    if (!articleId) return res.status(400).json({ message: 'articleId requis' });
+    const user = req.user;
+    user.favoris = (user.favoris || []).filter((id) => id.toString() !== articleId);
+    await user.save();
+    return res.json({ message: 'Retiré des favoris', favoris: user.favoris });
+  } catch (err) {
+    return res.status(500).json({ message: 'Erreur retrait favori', error: err.message });
+  }
+};
+
+// Récupérer les favoris de l'utilisateur connecté
+exports.getMyFavorites = async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id).populate('favoris');
+    return res.json({ favoris: user.favoris || [] });
+  } catch (err) {
+    return res.status(500).json({ message: 'Erreur récupération favoris', error: err.message });
   }
 };
 
@@ -382,5 +468,146 @@ exports.getAllAcheteurs = async (_req, res) => {
     res.json(acheteursWithStatut);
   } catch (err) {
     res.status(500).json({ message: "Erreur lors de la récupération des acheteurs" });
+  }
+};
+
+// Bloquer un utilisateur (admin seulement)
+exports.blockUser = async (req, res) => {
+  try {
+    const userId = req.params.id;
+    const adminUser = req.user;
+    
+    // Vérifier que l'utilisateur est admin
+    if (adminUser.role !== 'admin') {
+      return res.status(403).json({ message: 'Accès refusé. Admin requis.' });
+    }
+    
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: 'Utilisateur non trouvé' });
+    }
+    
+    if (user.isBlocked) {
+      return res.status(400).json({ message: 'Utilisateur déjà bloqué' });
+    }
+    
+    user.isBlocked = true;
+    user.blockedAt = new Date();
+    user.blockedBy = adminUser._id;
+    await user.save();
+    
+    res.json({ message: 'Utilisateur bloqué avec succès', user });
+  } catch (error) {
+    res.status(500).json({ message: 'Erreur lors du blocage', error: error.message });
+  }
+};
+
+// Débloquer un utilisateur (admin seulement)
+exports.unblockUser = async (req, res) => {
+  try {
+    const userId = req.params.id;
+    const adminUser = req.user;
+    
+    // Vérifier que l'utilisateur est admin
+    if (adminUser.role !== 'admin') {
+      return res.status(403).json({ message: 'Accès refusé. Admin requis.' });
+    }
+    
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: 'Utilisateur non trouvé' });
+    }
+    
+    if (!user.isBlocked) {
+      return res.status(400).json({ message: 'Utilisateur n\'est pas bloqué' });
+    }
+    
+    user.isBlocked = false;
+    user.blockedAt = null;
+    user.blockedBy = null;
+    await user.save();
+    
+    res.json({ message: 'Utilisateur débloqué avec succès', user });
+  } catch (error) {
+    res.status(500).json({ message: 'Erreur lors du déblocage', error: error.message });
+  }
+};
+
+// Récupérer tous les transitaires avec statut d'abonnement
+exports.getAllTransitaires = async (_req, res) => {
+  try {
+    const transitaires = await User.find({ role: 'transitaire' });
+    const Subscription = require('../models/Subscription');
+    
+    const transitairesWithStatut = await Promise.all(transitaires.map(async (u) => {
+      const statut = await computeUserStatut(u);
+      const userObj = u.toObject();
+      userObj.statut = statut;
+      
+      // Ajouter le statut d'abonnement
+      const sub = await Subscription.findOne({ user: u._id }).lean();
+      const now = new Date();
+      const hasActiveSubscription = sub && sub.expiresAt && new Date(sub.expiresAt) > now;
+      
+      userObj.hasSubscription = hasActiveSubscription;
+      userObj.subscriptionStatus = hasActiveSubscription ? 'active' : 'inactive';
+      if (sub) {
+        userObj.subscriptionExpiresAt = sub.expiresAt;
+        userObj.subscriptionActivatedAt = sub.activatedAt;
+      }
+      
+      return userObj;
+    }));
+    
+    res.json(transitairesWithStatut);
+  } catch (err) {
+    res.status(500).json({ message: "Erreur lors de la récupération des transitaires" });
+  }
+};
+
+// Récupérer tous les chauffeurs avec leurs activités
+exports.getAllChauffeurs = async (_req, res) => {
+  try {
+    const chauffeurs = await User.find({ role: 'chauffeur' });
+    
+    const chauffeursWithActivities = await Promise.all(chauffeurs.map(async (u) => {
+      const statut = await computeUserStatut(u);
+      const userObj = u.toObject();
+      userObj.statut = statut;
+      
+      // Compter les activités (articles assignés)
+      const activitiesCount = await Article.countDocuments({ chauffeur: u._id });
+      const completedActivities = await Article.countDocuments({ 
+        chauffeur: u._id, 
+        statutVente: 'vendu' 
+      });
+      
+      userObj.activitiesCount = activitiesCount;
+      userObj.completedActivities = completedActivities;
+      
+      return userObj;
+    }));
+    
+    res.json(chauffeursWithActivities);
+  } catch (err) {
+    res.status(500).json({ message: "Erreur lors de la récupération des chauffeurs" });
+  }
+};
+
+// Récupérer tous les administrateurs
+exports.getAllAdmins = async (_req, res) => {
+  try {
+    const admins = await User.find({ role: 'admin' });
+    
+    const adminsWithStatut = await Promise.all(admins.map(async (u) => {
+      const statut = await computeUserStatut(u);
+      const userObj = u.toObject();
+      userObj.statut = statut;
+      return userObj;
+    }));
+    
+    res.json(adminsWithStatut);
+  } catch (err) {
+    res.status(500).json({ message: "Erreur lors de la récupération des administrateurs" });
   }
 }; 

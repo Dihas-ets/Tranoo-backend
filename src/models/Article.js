@@ -21,6 +21,8 @@ const articleSchema = new mongoose.Schema({
   sieges: String,      // Nombre de sièges
   portes: String,      // Nombre de portes
   condition: String,   // Condition (Nouveau/Occasion)
+  couleur: String,     // Couleur du véhicule
+  dedouanement: Boolean, // Dédouanement (true = Oui, false = Non)
   lieu: String,        // Localisation
   // Champs spécifiques pièce
   categorie: String,   // Catégorie de pièce (frein, moteur, electricité, etc.)

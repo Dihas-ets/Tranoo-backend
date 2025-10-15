@@ -13,7 +13,7 @@ const paymentSchema = new mongoose.Schema(
     status: { type: String, enum: ['pending', 'success', 'failed', 'cancelled'], default: 'pending', index: true },
     method: { type: String },
     description: { type: String },
-    type: { type: String, enum: ['achat', 'publicite', 'vente', 'verification'], default: 'achat' }, // Type de transaction
+    type: { type: String, enum: ['achat', 'publicite', 'vente', 'verification', 'subscription'], default: 'achat' }, // Type de transaction
     duree: { type: String }, // Durée pour les pubs et ventes
     rawInitResponse: { type: Object },
     rawWebhookPayload: { type: Object },

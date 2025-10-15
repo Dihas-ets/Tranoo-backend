@@ -3,24 +3,66 @@ const Article = require('../models/Article');
 
 exports.getStats = async (_req, res) => {
   try {
-    // Nombre total d'acheteurs
+    // Fonction utilitaire pour calculer le statut dynamique
+    async function computeUserStatut(user) {
+      const now = new Date();
+      if (user.role === 'vendeur') {
+        const article = await Article.findOne({ vendeur: user._id });
+        return article ? 'actif' : 'inactif';
+      }
+      if (user.role === 'acheteur') {
+        const sixMonthsAgo = new Date(now);
+        sixMonthsAgo.setMonth(now.getMonth() - 6);
+        const achat = await Article.findOne({ acheteur: user._id, statutVente: 'vendu', dateCreation: { $gte: sixMonthsAgo } });
+        return achat ? 'actif' : 'inactif';
+      }
+      if (user.role === 'transitaire') {
+        return 'inactif'; // TODO: implémenter la logique des propositions
+      }
+      if (user.role === 'chauffeur') {
+        const article = await Article.findOne({ chauffeur: user._id });
+        return article ? 'actif' : 'inactif';
+      }
+      if (user.role === 'admin') {
+        if (!user.dernierAcces) return 'inactif';
+        const oneMonthAgo = new Date(now);
+        oneMonthAgo.setMonth(now.getMonth() - 1);
+        return user.dernierAcces >= oneMonthAgo ? 'actif' : 'inactif';
+      }
+      return 'inactif';
+    }
+
+    // Comptes de base
     const acheteursCount = await User.countDocuments({ role: 'acheteur' });
-    // Nombre total de chauffeurs
     const chauffeursCount = await User.countDocuments({ role: 'chauffeur' });
-    // Nombre total de transitaires
     const transitairesCount = await User.countDocuments({ role: 'transitaire' });
-    // Clients = acheteurs + chauffeurs + transitaires
     const clientsCount = acheteursCount + chauffeursCount + transitairesCount;
-    // Nombre total de voitures
     const voituresCount = await Article.countDocuments({ type: 'voiture' });
-    // Nombre total de pièces
     const piecesCount = await Article.countDocuments({ type: 'piece' });
-    // Nombre total d'utilisateurs
     const usersCount = await User.countDocuments();
-    // Nombre total d'admins
     const adminsCount = await User.countDocuments({ role: 'admin' });
-    // Nombre total de vendeurs
     const vendeursCount = await User.countDocuments({ role: 'vendeur' });
+
+    // Stats dynamiques pour vendeurs
+    const vendeurs = await User.find({ role: 'vendeur' });
+    let vendeursActifs = 0;
+    let vendeursInactifs = 0;
+    for (const vendeur of vendeurs) {
+      const statut = await computeUserStatut(vendeur);
+      if (statut === 'actif') vendeursActifs++;
+      else vendeursInactifs++;
+    }
+
+    // Stats dynamiques pour admins
+    const admins = await User.find({ role: 'admin' });
+    let adminsActifs = 0;
+    let adminsInactifs = 0;
+    for (const admin of admins) {
+      const statut = await computeUserStatut(admin);
+      if (statut === 'actif') adminsActifs++;
+      else adminsInactifs++;
+    }
+
     // Année d'activité (depuis 2020)
     const launchYear = 2020;
     const currentYear = new Date().getFullYear();
@@ -35,6 +77,10 @@ exports.getStats = async (_req, res) => {
       utilisateurs: usersCount,
       admins: adminsCount,
       vendeurs: vendeursCount,
+      vendeursActifs,
+      vendeursInactifs,
+      adminsActifs,
+      adminsInactifs,
       annee: anneeActivite
     });
   } catch (error) {

@@ -57,23 +57,38 @@ exports.updateStatut = async (req, res) => {
 
     console.log(`[DEBUG] Publicité ${publicite._id} - Statut changé de ${ancienStatut} à ${req.body.statut}`);
 
-    // Si la demande est validée, mettre l'article associé en ligne
+    // Si la demande est validée, mettre l'article associé en ligne et démarrer le décompte
     if (req.body.statut === 'valide' && ancienStatut !== 'valide') {
       try {
-        let article = null;
+        // Exiger un articleId explicite pour éviter les erreurs et doublons
+        if (!publicite.articleId) {
+          return res.status(400).json({
+            message: 'Validation impossible: articleId requis sur la publicité',
+          });
+        }
         
-        // Si on a un lien direct vers l'article
-        if (publicite.articleId) {
-          article = await Article.findById(publicite.articleId);
-          console.log(`[DEBUG] Article trouvé via articleId: ${article?._id}`);
-        } else {
-          // Sinon, chercher l'article associé par le vendeur et la date de création récente
-          article = await Article.findOne({
-            vendeur: publicite.vendeur,
-            statut: 'en_attente',
-            dateCreation: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } // Articles créés dans les dernières 24h
-          }).sort({ dateCreation: -1 });
-          console.log(`[DEBUG] Article trouvé via recherche: ${article?._id}`);
+        // Calculer les dates de début et fin selon la durée
+        const maintenant = new Date();
+        publicite.dateDebut = maintenant;
+        
+        // Calculer la date de fin selon la durée
+        const dureeEnJours = {
+          '1 semaine': 7,
+          '2 semaines': 14,
+          '1 mois': 30,
+          '2 mois': 60,
+          '3 mois': 90
+        }[publicite.duree] || 7;
+        
+        const dateFin = new Date(maintenant);
+        dateFin.setDate(dateFin.getDate() + dureeEnJours);
+        publicite.dateFin = dateFin;
+        
+        console.log(`[DEBUG] Publicité ${publicite._id} - Décompte démarré: ${maintenant} -> ${dateFin} (${dureeEnJours} jours)`);
+
+        const article = await Article.findById(publicite.articleId);
+        if (!article) {
+          return res.status(404).json({ message: 'Article lié introuvable' });
         }
 
         if (article) {
@@ -93,16 +108,13 @@ exports.updateStatut = async (req, res) => {
           
           await article.save();
           console.log(`[DEBUG] Article ${article._id} mis en ligne automatiquement - Statut: ${article.statut}, Sponsorisé: ${article.sponsorise}, À la une: ${article.aLaUne}`);
-          
-          // Mettre à jour la publicité avec l'ID de l'article si pas déjà fait
-          if (!publicite.articleId) {
-            publicite.articleId = article._id;
-            await publicite.save();
-            console.log(`[DEBUG] Publicité ${publicite._id} liée à l'article ${article._id}`);
-          }
         } else {
           console.log(`[WARNING] Aucun article trouvé pour la publicité ${publicite._id}`);
         }
+        
+        // Sauvegarder les dates de la publicité
+        await publicite.save();
+        console.log(`[DEBUG] Publicité ${publicite._id} sauvegardée avec dateDebut: ${publicite.dateDebut}, dateFin: ${publicite.dateFin}`);
       } catch (articleError) {
         console.error('[ERROR] Erreur lors de la mise en ligne de l\'article:', articleError);
       }

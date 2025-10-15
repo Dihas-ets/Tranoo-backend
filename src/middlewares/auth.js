@@ -38,6 +38,17 @@ module.exports = async function (req, res, next) {
       console.error('[AUTH] Utilisateur non trouvé dans la base');
       return res.status(401).json({ message: 'Utilisateur non trouvé dans la base' });
     }
+    
+    // Vérifier si l'utilisateur est bloqué
+    if (user.isBlocked) {
+      console.error('[AUTH] Utilisateur bloqué');
+      return res.status(403).json({ 
+        message: 'Votre compte a été bloqué. Contactez l\'administration.',
+        blocked: true,
+        blockedAt: user.blockedAt
+      });
+    }
+    
     req.user = user; // On met l'objet complet (avec _id) dans req.user
     next();
   } catch (error) {
