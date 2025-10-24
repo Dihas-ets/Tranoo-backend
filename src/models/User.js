@@ -84,7 +84,12 @@ const userSchema = new mongoose.Schema({
   favoris: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Article' }],
   // NOUVEAUX CHAMPS POUR LE STATUT EN LIGNE
   isOnline: { type: Boolean, default: false }, // Statut en ligne/hors ligne
-  lastSeen: { type: Date, default: Date.now } // Dernière activité
+  lastSeen: { type: Date, default: Date.now }, // Dernière activité
+  // CHAMP POUR LE PARRAINAGE
+  referralCode: { type: String, unique: true, sparse: true } // Code de parrainage unique
 });
+
+// Index utile sur le téléphone pour OTP
+userSchema.index({ telephone: 1 });
 
 module.exports = mongoose.model('User', userSchema); 

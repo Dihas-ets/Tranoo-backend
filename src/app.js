@@ -331,6 +331,14 @@ try {
   console.warn('Notifications routes non chargées:', e.message);
 }
 
+// Routes OTP Push (chargement optionnel)
+try {
+  const pushOtpRoutes = require('./routes/pushOtp');
+  app.use('/api/push-otp', pushOtpRoutes);
+} catch (e) {
+  console.warn('Push OTP routes non chargées:', e.message);
+}
+
 
 
 // Wallet routes (dynamique)
@@ -363,6 +371,38 @@ try {
   app.use('/api/admin', pubPricingRoutes);
 } catch (e) {
   console.warn('Pub pricing routes non chargées:', e.message);
+}
+
+// Order routes
+try {
+  const orderRoutes = require('./routes/order');
+  app.use('/api/orders', orderRoutes);
+} catch (e) {
+  console.warn('Order routes non chargées:', e.message);
+}
+
+// Delivery settings routes
+try {
+  const deliverySettingsRoutes = require('./routes/deliverySettings');
+  app.use('/api/admin/delivery-settings', deliverySettingsRoutes);
+} catch (e) {
+  console.warn('Delivery settings routes non chargées:', e.message);
+}
+
+// Pub pricing routes
+try {
+  const pubPricingRoutes = require('./routes/pubPricing');
+  app.use('/api/admin/pub-pricing', pubPricingRoutes);
+} catch (e) {
+  console.warn('Pub pricing routes non chargées:', e.message);
+}
+
+// Referral routes
+try {
+  const referralRoutes = require('./routes/referral');
+  app.use('/api/referrals', referralRoutes);
+} catch (e) {
+  console.warn('Referral routes non chargées:', e.message);
 }
 
 // Obsolète: Routes propositions transitaires (désactivées)

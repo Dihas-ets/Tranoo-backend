@@ -1,58 +1,42 @@
 const PubPricing = require('../models/PubPricing');
 
-// Récupérer la configuration des prix
-exports.getPubPricing = async (req, res) => {
+exports.getPubPricing = async (_req, res) => {
   try {
-    console.log('[DEBUG] GET pub-pricing appelé');
-    let pricing = await PubPricing.findOne().sort({ createdAt: -1 });
-    console.log('[DEBUG] Pricing trouvé:', pricing);
-    
+    let pricing = await PubPricing.findOne();
     if (!pricing) {
-      // Créer une configuration par défaut si elle n'existe pas
       pricing = new PubPricing({
         prixSponsoriseeParJour: 1000,
         prixALaUneParJour: 2000,
-        updatedBy: 'system'
       });
       await pricing.save();
     }
-    
-    res.json({
-      prixSponsoriseeParJour: pricing.prixSponsoriseeParJour,
-      prixALaUneParJour: pricing.prixALaUneParJour,
-      lastUpdated: pricing.lastUpdated
-    });
+    res.status(200).json(pricing);
   } catch (error) {
-    console.error('Erreur récupération prix pub:', error);
-    res.status(500).json({ message: 'Erreur serveur' });
+    console.error('Error fetching pub pricing:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
 
-// Mettre à jour la configuration des prix (admin seulement)
 exports.updatePubPricing = async (req, res) => {
   try {
-    console.log('[DEBUG] PUT pub-pricing appelé avec:', req.body);
     const { prixSponsoriseeParJour, prixALaUneParJour } = req.body;
-    
-    if (!prixSponsoriseeParJour || prixSponsoriseeParJour <= 0 || !prixALaUneParJour || prixALaUneParJour <= 0) {
-      return res.status(400).json({ message: 'Prix invalides' });
+    let pricing = await PubPricing.findOne();
+
+    if (!pricing) {
+      pricing = new PubPricing({
+        prixSponsoriseeParJour,
+        prixALaUneParJour,
+      });
+    } else {
+      pricing.prixSponsoriseeParJour = prixSponsoriseeParJour;
+      pricing.prixALaUneParJour = prixALaUneParJour;
+      pricing.updatedAt = Date.now();
     }
-    
-    const pricing = new PubPricing({
-      prixSponsoriseeParJour,
-      prixALaUneParJour,
-      updatedBy: req.user?.email || 'admin'
-    });
-    
+
     await pricing.save();
-    
-    res.json({
-      message: 'Prix mis à jour avec succès',
-      prixSponsoriseeParJour: pricing.prixSponsoriseeParJour,
-      prixALaUneParJour: pricing.prixALaUneParJour
-    });
+    res.status(200).json({ message: 'Pub pricing updated successfully', pricing });
   } catch (error) {
-    console.error('Erreur mise à jour prix pub:', error);
-    res.status(500).json({ message: 'Erreur serveur' });
+    console.error('Error updating pub pricing:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
   }
 };

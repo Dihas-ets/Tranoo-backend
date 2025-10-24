@@ -191,6 +191,59 @@ exports.updatePassword = async (req, res) => {
   }
 };
 
+// Récupérer le numéro de téléphone par email (pour reset password)
+exports.getPhoneByEmail = async (req, res) => {
+  try {
+    const { email } = req.body;
+    
+    if (!email) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Email requis' 
+      });
+    }
+
+    // Mode test pour développement
+    if (email === 'test@tranoo.com') {
+      return res.json({
+        success: true,
+        phoneNumber: '+22959399349',
+        message: 'Numéro de téléphone récupéré (mode test)'
+      });
+    }
+
+    // Rechercher l'utilisateur par email
+    const user = await User.findOne({ email: email.toLowerCase() });
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'Aucun compte trouvé avec cet email'
+      });
+    }
+
+    if (!user.telephone) {
+      return res.status(404).json({
+        success: false,
+        message: 'Aucun numéro de téléphone associé à ce compte'
+      });
+    }
+
+    res.json({
+      success: true,
+      phoneNumber: user.telephone,
+      message: 'Numéro de téléphone récupéré avec succès'
+    });
+
+  } catch (error) {
+    console.error('Erreur getPhoneByEmail:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur serveur lors de la récupération du numéro'
+    });
+  }
+};
+
 // Récupérer tous les vendeurs avec stats complètes
 exports.getAllVendeurs = async (_req, res) => {
   try {

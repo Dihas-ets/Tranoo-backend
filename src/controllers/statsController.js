@@ -69,19 +69,19 @@ exports.getStats = async (_req, res) => {
     const anneeActivite = currentYear - launchYear + 1;
 
     res.json({
-      voitures: voituresCount,
-      pieces: piecesCount,
-      clients: clientsCount,
-      chauffeurs: chauffeursCount,
-      transitaires: transitairesCount,
-      utilisateurs: usersCount,
-      admins: adminsCount,
-      vendeurs: vendeursCount,
-      vendeursActifs,
-      vendeursInactifs,
-      adminsActifs,
-      adminsInactifs,
-      annee: anneeActivite
+      voitures: Number(voituresCount),
+      pieces: Number(piecesCount),
+      clients: Number(clientsCount),
+      chauffeurs: Number(chauffeursCount),
+      transitaires: Number(transitairesCount),
+      utilisateurs: Number(usersCount),
+      admins: Number(adminsCount),
+      vendeurs: Number(vendeursCount),
+      vendeursActifs: Number(vendeursActifs),
+      vendeursInactifs: Number(vendeursInactifs),
+      adminsActifs: Number(adminsActifs),
+      adminsInactifs: Number(adminsInactifs),
+      annee: Number(anneeActivite)
     });
   } catch (error) {
     res.status(500).json({ message: 'Erreur lors de la récupération des statistiques', error });
@@ -98,11 +98,11 @@ exports.getAcheteursStats = async (_req, res) => {
     // Achats livrés = articles avec un acheteur, statutVente vendu, et dateLivraison non null
     const achatsLIVRES = await Article.countDocuments({ acheteur: { $ne: null }, statutVente: "vendu", dateLivraison: { $ne: null } });
     res.json({
-      acheteurs,
-      acheteursActifs,
-      acheteursInactifs,
-      achatsEnCours,
-      achatsLIVRES
+      acheteurs: Number(acheteurs),
+      acheteursActifs: Number(acheteursActifs),
+      acheteursInactifs: Number(acheteursInactifs),
+      achatsEnCours: Number(achatsEnCours),
+      achatsLIVRES: Number(achatsLIVRES)
     });
   } catch (err) {
     res.status(500).json({ message: "Erreur stats acheteurs" });
