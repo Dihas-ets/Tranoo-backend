@@ -1,7 +1,6 @@
 // Script Node.js pour corriger les articles TRANOO sans champ source
 // Usage : node ajout_source_tranoo_script.js
 
-require('dotenv').config();
 const mongoose = require('mongoose');
 const Article = require('./src/models/Article');
 
