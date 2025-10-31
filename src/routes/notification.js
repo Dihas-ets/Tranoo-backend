@@ -33,4 +33,11 @@ router.post('/:notificationId/verification-action', notificationController.handl
 // Créer une notification de vérification (Admin uniquement)
 router.post('/verification', roleMiddleware('superAdmin', 'principal', 'gestionnaire'), notificationController.createVerificationNotificationHTTP);
 
+// Envoyer un message admin générique (Admin: plusieurs rôles)
+router.post(
+  '/admin-message',
+  roleMiddleware('superAdmin', 'principal', 'gestionnaire', 'moderateur', 'marketing', 'responsableService'),
+  notificationController.createAdminMessageHTTP
+);
+
 module.exports = router;

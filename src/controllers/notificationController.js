@@ -1,5 +1,6 @@
 const Notification = require('../models/Notification');
 const User = require('../models/User');
+const Article = require('../models/Article');
 const admin = require('firebase-admin');
 
 // Créer une notification
@@ -50,11 +51,20 @@ exports.createNotification = async (recipientId, senderId, title, message, type 
 // Créer une notification de vérification avec actions
 exports.createVerificationNotification = async (acheteurId, articleId, verificationData) => {
   try {
+    // Récupérer le nom/titre de l'article pour enrichir la notif
+    let articleTitle = '';
+    try {
+      const art = await Article.findById(articleId).select('titre title nom');
+      articleTitle = (art?.titre || art?.title || art?.nom || '').toString();
+    } catch (_) {}
+
     const notification = new Notification({
       recipient: acheteurId,
       sender: 'system', // Système ou admin
-      title: 'Vérification terminée',
-      message: 'Votre article a été vérifié. Décidez maintenant de votre achat.',
+      title: articleTitle ? `Vérification: ${articleTitle}` : 'Vérification terminée',
+      message: articleTitle
+        ? `Votre article "${articleTitle}" a été vérifié. Décidez maintenant de votre achat.`
+        : 'Votre article a été vérifié. Décidez maintenant de votre achat.',
       type: 'verification',
       relatedId: articleId,
       relatedModel: 'Article',
@@ -88,13 +98,16 @@ exports.createVerificationNotification = async (acheteurId, articleId, verificat
         await admin.messaging().send({
           token: recipient.fcmToken,
           notification: {
-            title: 'Vérification terminée',
-            body: 'Votre article a été vérifié. Décidez maintenant de votre achat.'
+            title: articleTitle ? `Vérification: ${articleTitle}` : 'Vérification terminée',
+            body: articleTitle
+              ? `Votre article "${articleTitle}" a été vérifié. Décidez maintenant de votre achat.`
+              : 'Votre article a été vérifié. Décidez maintenant de votre achat.'
           },
           data: {
             type: 'verification',
             notificationId: notification._id.toString(),
             articleId: articleId.toString(),
+            articleTitle: articleTitle,
             action: 'verification_ready'
           }
         });
@@ -132,17 +145,26 @@ exports.handleVerificationAction = async (notificationId, action, userId) => {
     notification.isRead = true;
     await notification.save();
 
-    // Envoyer une notification de confirmation à l'admin
+    // Envoyer une notification de confirmation à tous les admins
     if (notification.verificationData && notification.verificationData.articleId) {
-      await this.createNotification(
-        'admin', // ID de l'admin (à adapter selon votre logique)
-        userId,
-        `Achat ${action === 'approve' ? 'validé' : 'rejeté'}`,
-        `L'utilisateur a ${action === 'approve' ? 'validé' : 'rejeté'} l'achat de l'article ${notification.verificationData.articleId}`,
-        'verification_result',
-        notification.verificationData.articleId,
-        'Article'
-      );
+      try {
+        const art = await Article.findById(notification.verificationData.articleId).select('titre title nom');
+        const articleTitle = (art?.titre || art?.title || art?.nom || '').toString();
+        const admins = await require('../models/User').find({ role: { $in: ['admin', 'superAdmin', 'principal', 'gestionnaire'] } }).select('_id');
+        for (const adminUser of admins) {
+          await this.createNotification(
+            adminUser._id,
+            userId,
+            `Achat ${action === 'approve' ? 'validé' : 'rejeté'}${articleTitle ? `: ${articleTitle}` : ''}`,
+            `L'utilisateur a ${action === 'approve' ? 'validé' : 'rejeté'} l'achat de l'article ${articleTitle || notification.verificationData.articleId}`,
+            'verification_result',
+            notification.verificationData.articleId,
+            'Article'
+          );
+        }
+      } catch(e) {
+        console.error('[VERIFICATION] Impossible d\'envoyer la notif admin:', e);
+      }
     }
 
     return notification;
@@ -284,6 +306,105 @@ exports.createVerificationNotificationHTTP = async (req, res) => {
   } catch (error) {
     console.error('[VERIFICATION] Erreur création notification HTTP:', error);
     res.status(500).json({ message: 'Erreur lors de la création de la notification' });
+  }
+};
+
+// Créer un message administrateur générique (verification/alert/promotion/notification)
+exports.createAdminMessageHTTP = async (req, res) => {
+  try {
+    const { type = 'general', recipient, title, message, details, date, images = [], stampUrl, signatureUrl, articleId } = req.body;
+
+    if (!req.user) {
+      return res.status(401).json({ message: 'Non authentifié' });
+    }
+
+    if (!recipient || (!recipient.phone && !recipient.idOrEmail && !recipient.userId)) {
+      return res.status(400).json({ message: 'Spécifiez recipient.phone ou recipient.idOrEmail ou recipient.userId' });
+    }
+    if (!title || !message) {
+      return res.status(400).json({ message: 'title et message sont requis' });
+    }
+
+    console.log('[ADMIN MSG] Recherche destinataire:', recipient);
+    let user = null;
+    if (recipient.userId) user = await User.findById(recipient.userId);
+    if (!user && recipient.phone) user = await User.findOne({ telephone: recipient.phone });
+    if (!user && recipient.idOrEmail) {
+      try {
+        user = await User.findById(recipient.idOrEmail);
+        if (user) console.log(`[ADMIN MSG] Utilisateur trouvé par _id : ${recipient.idOrEmail}`);
+      } catch (err) {}
+      if (!user) {
+        user = await User.findOne({ email: recipient.idOrEmail });
+        if (user) console.log(`[ADMIN MSG] Utilisateur trouvé par email : ${recipient.idOrEmail}`);
+      }
+    }
+    if (!user) {
+      console.error('[ADMIN MSG] Destinataire introuvable pour:', recipient);
+      return res.status(404).json({ message: 'Destinataire introuvable' });
+    }
+    console.log('[ADMIN MSG] Destinataire trouvé:', user.email, user._id.toString());
+
+    let normalizedType = String(type).toLowerCase();
+    if (normalizedType === 'alert') normalizedType = 'alerte';
+    if (normalizedType === 'notification') normalizedType = 'general';
+
+    // Détermination du sender (ObjectId ou email/uid fallback)
+    let senderId = null;
+    if (req.user._id) {
+      senderId = req.user._id;
+      console.log('[ADMIN MSG] Sender utilisé comme ObjectId (backend sécurisé):', senderId.toString());
+    } else if (req.user.email) {
+      senderId = req.user.email;
+      console.log('[ADMIN MSG] Sender utilisé comme email:', senderId);
+    } else if (req.user.uid) {
+      senderId = req.user.uid;
+      console.log('[ADMIN MSG] Sender utilisé comme uid Firebase:', senderId);
+    } else {
+      return res.status(400).json({ message: 'Impossible de déterminer le sender (admin) pour la notification.' });
+    }
+
+    // Préparer le document de notification
+    const notifDoc = {
+      recipient: user._id,
+      sender: senderId,
+      title,
+      message,
+      type: normalizedType,
+      attachments: { images, stampUrl, signatureUrl },
+    };
+
+    // Si type vérification, lier l'article
+    if (normalizedType === 'verification') {
+      if (articleId) {
+        console.log('[ADMIN MSG] articleId reçu pour verification:', articleId);
+      } else {
+        console.warn('[ADMIN MSG] Aucun articleId fourni pour verification');
+      }
+      notifDoc.verificationData = {
+        articleId: articleId || undefined,
+        verificationDetails: details || undefined,
+        verificationDate: date ? new Date(date) : new Date(),
+      };
+      if (articleId) {
+        notifDoc.relatedId = articleId;
+        notifDoc.relatedModel = 'Article';
+      }
+    } else {
+      // champs additionnels pour autres types
+      if (details || date) {
+        notifDoc.verificationData = undefined; // n/a
+      }
+    }
+
+    const notification = new Notification(notifDoc);
+    await notification.save();
+    console.log('[ADMIN MSG] Notification enregistrée en base avec ID:', notification._id.toString());
+
+    res.status(201).json({ message: 'Message enregistré', notification });
+  } catch (error) {
+    console.error('[ADMIN MSG] Erreur création:', error, error?.message, error?.stack);
+    res.status(500).json({ message: 'Erreur lors de la création du message', details: error?.message });
   }
 };
 

@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "main": "app.js",
   "scripts": {
+    "build": "echo 'Backend ready - no build needed for Node.js' && node -v && npm -v",
     "start": "node src/app.js",
     "dev": "nodemon src/app.js"
   },

@@ -7,8 +7,8 @@ const notificationSchema = new mongoose.Schema({
     required: true
   },
   sender: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
+    type: mongoose.Schema.Types.Mixed, // Peut être: ObjectId (user) OU String (email ou uid admin)
+    // ref uniquement utilisé si ObjectId natif, sinon fallback
     required: true
   },
   title: {
@@ -65,6 +65,12 @@ const notificationSchema = new mongoose.Schema({
     verificationDate: Date,
     verificationDetails: String,
     verificationCost: Number
+  },
+  // Pièces jointes (Cloudinary URLs)
+  attachments: {
+    images: [{ type: String }],
+    stampUrl: { type: String },
+    signatureUrl: { type: String },
   },
   createdAt: {
     type: Date,

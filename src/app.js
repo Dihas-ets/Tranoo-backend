@@ -323,6 +323,16 @@ app.use('/api/chat', chatRoutes);
 
 
 
+// Routes achats (validation d'achat depuis payement.dart)
+try {
+  const achatRoutes = require('./routes/achat');
+  app.use('/api/achat', achatRoutes);
+} catch (e) {
+  console.warn('Achat routes non chargées:', e.message);
+}
+
+ 
+ 
 // Routes notifications (chargement optionnel)
 try {
   const notificationRoutes = require('./routes/notification');
