@@ -29,8 +29,8 @@ exports.register = async (req, res) => {
       referralCode // Code de parrainage optionnel
     } = req.body;
 
-    // Cas spécial : création d'admin via dashboard (avec mot de passe)
-    if (role === 'admin' && password) {
+    // Cas spécial : création d'admin ou agent commercial via dashboard (avec mot de passe)
+    if ((role === 'admin' || role === 'agentCommercial') && password) {
       // Vérifier si l'email existe déjà
       const existingUser = await User.findOne({ email });
       if (existingUser) {
@@ -66,7 +66,7 @@ exports.register = async (req, res) => {
       });
 
       await user.save();
-      return res.status(201).json({ message: 'Administrateur créé avec succès', user, _id: user._id });
+      return res.status(201).json({ message: role === 'admin' ? 'Administrateur créé avec succès' : 'Agent commercial créé avec succès', user, _id: user._id });
     }
 
     // Cas normal : utilisateurs mobiles avec token Firebase

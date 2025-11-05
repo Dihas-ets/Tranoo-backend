@@ -2,6 +2,7 @@ const Referral = require('../models/Referral');
 const ReferralSettings = require('../models/ReferralSettings');
 const User = require('../models/User');
 const crypto = require('crypto');
+const AgentEarning = require('../models/AgentEarning');
 
 // Générer un code de parrainage unique
 const generateReferralCode = () => {
@@ -98,11 +99,27 @@ exports.createReferral = async (req, res) => {
       return res.status(400).json({ message: 'Vous ne pouvez pas vous parrainer vous-même' });
     }
     
-    // Obtenir les paramètres de parrainage
-    let settings = await ReferralSettings.findOne();
-    if (!settings) {
-      settings = new ReferralSettings();
-      await settings.save();
+    // Déterminer le montant de récompense à utiliser
+    // Priorité: Tarif assigné au parrain (agent commercial) s'il existe, sinon paramètres globaux
+    let rewardAmountToUse = 0;
+    if (referrer.assignedReferralTariff) {
+      const ReferralTariff = require('../models/ReferralTariff');
+      try {
+        const tariff = await ReferralTariff.findById(referrer.assignedReferralTariff);
+        if (tariff && tariff.isActive) {
+          rewardAmountToUse = tariff.amount;
+        }
+      } catch (_) {
+        // ignore and fallback to settings
+      }
+    }
+    if (!rewardAmountToUse) {
+      let settings = await ReferralSettings.findOne();
+      if (!settings) {
+        settings = new ReferralSettings();
+        await settings.save();
+      }
+      rewardAmountToUse = settings.rewardAmount;
     }
     
     // Créer le parrainage
@@ -110,14 +127,29 @@ exports.createReferral = async (req, res) => {
       referrerId: referrer._id,
       referredId: referredUser._id,
       referralCode: referralCode,
-      status: 'pending',
-      rewardAmount: settings.rewardAmount
+      status: referrer.role === 'agentCommercial' ? 'completed' : 'pending',
+      rewardAmount: referrer.role === 'agentCommercial' ? 150 : rewardAmountToUse
     });
     
     await referral.save();
+
+    // Créer le gain de 150 FCFA pour l'agent si applicable
+    if (referrer.role === 'agentCommercial') {
+      try {
+        await AgentEarning.create({
+          agent: referrer._id,
+          type: 'referral_signup',
+          amount: 150,
+          sourceReferral: referral._id,
+          referredUser: referredUser._id,
+        });
+      } catch (e) {
+        console.error('Erreur création gain agent:', e.message);
+      }
+    }
     
     res.status(201).json({ 
-      message: 'Parrainage enregistré avec succès', 
+      message: referrer.role === 'agentCommercial' ? 'Parrainage validé et prime agent créditée' : 'Parrainage enregistré avec succès', 
       referral 
     });
   } catch (error) {
@@ -155,7 +187,7 @@ exports.completeReferral = async (req, res) => {
 };
 
 // Obtenir tous les parrainages (pour l'admin)
-exports.getAllReferrals = async (req, res) => {
+exports.getAllReferrals = async (_req, res) => {
   try {
     const referrals = await Referral.find()
       .populate('referrerId', 'nom prenoms email')
@@ -170,7 +202,7 @@ exports.getAllReferrals = async (req, res) => {
 };
 
 // Obtenir les paramètres de parrainage
-exports.getReferralSettings = async (req, res) => {
+exports.getReferralSettings = async (_req, res) => {
   try {
     let settings = await ReferralSettings.findOne();
     if (!settings) {

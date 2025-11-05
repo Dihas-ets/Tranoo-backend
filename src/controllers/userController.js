@@ -46,6 +46,21 @@ async function computeUserStatut(user) {
     oneMonthAgo.setMonth(now.getMonth() - 1);
     return user.dernierAcces >= oneMonthAgo ? 'actif' : 'inactif';
   }
+  if (user.role === 'agentCommercial') {
+    // Actif si au moins 1 parrainage complété ou un gain enregistré dans les 90 derniers jours
+    const ninetyDaysAgo = new Date(now);
+    ninetyDaysAgo.setDate(now.getDate() - 90);
+    try {
+      const Referral = require('../models/Referral');
+      const AgentEarning = require('../models/AgentEarning');
+      const completedCount = await Referral.countDocuments({ referrerId: user._id, status: 'completed', createdAt: { $gte: ninetyDaysAgo } });
+      if (completedCount > 0) return 'actif';
+      const earning = await AgentEarning.findOne({ agent: user._id, createdAt: { $gte: ninetyDaysAgo } }).lean();
+      return earning ? 'actif' : 'inactif';
+    } catch (_) {
+      return 'inactif';
+    }
+  }
   return 'inactif';
 }
 

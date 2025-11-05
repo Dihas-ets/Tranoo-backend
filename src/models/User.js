@@ -72,7 +72,7 @@ const userSchema = new mongoose.Schema({
   fcmToken: { type: String, default: null }, // Token FCM pour notifications push
   role: { 
     type: String, 
-    enum: ['vendeur', 'acheteur', 'transitaire', 'admin', 'chauffeur'], 
+    enum: ['vendeur', 'acheteur', 'transitaire', 'admin', 'chauffeur', 'agentCommercial'], 
     required: true 
   }, // Rôle principal
   statutContrat: {
@@ -86,7 +86,9 @@ const userSchema = new mongoose.Schema({
   isOnline: { type: Boolean, default: false }, // Statut en ligne/hors ligne
   lastSeen: { type: Date, default: Date.now }, // Dernière activité
   // CHAMP POUR LE PARRAINAGE
-  referralCode: { type: String, unique: true, sparse: true } // Code de parrainage unique
+  referralCode: { type: String, unique: true, sparse: true }, // Code de parrainage unique
+  // Attribution du tarif de parrainage (pour agents commerciaux)
+  assignedReferralTariff: { type: mongoose.Schema.Types.ObjectId, ref: 'ReferralTariff', default: null }
 });
 
 // Index utile sur le téléphone pour OTP

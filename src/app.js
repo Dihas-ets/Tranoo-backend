@@ -376,13 +376,7 @@ try {
   console.warn('Subscription routes non chargées:', e.message);
 }
 
-// Pub pricing routes
-try {
-  const pubPricingRoutes = require('./routes/pubPricing');
-  app.use('/api/admin', pubPricingRoutes);
-} catch (e) {
-  console.warn('Pub pricing routes non chargées:', e.message);
-}
+// (Removed) Generic admin mount for pub pricing to avoid route conflicts
 
 // Order routes
 try {
@@ -414,6 +408,22 @@ try {
   app.use('/api/referrals', referralRoutes);
 } catch (e) {
   console.warn('Referral routes non chargées:', e.message);
+}
+
+// Referral tariffs routes
+try {
+  const referralTariffRoutes = require('./routes/referralTariff');
+  app.use('/api/referral-tariffs', referralTariffRoutes);
+} catch (e) {
+  console.warn('Referral tariffs routes non chargées:', e.message);
+}
+
+// Agents routes
+try {
+  const agentRoutes = require('./routes/agent');
+  app.use('/api/agents', agentRoutes);
+} catch (e) {
+  console.warn('Agents routes non chargées:', e.message);
 }
 
 // Obsolète: Routes propositions transitaires (désactivées)

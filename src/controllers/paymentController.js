@@ -3,6 +3,9 @@ const Payment = require('../models/Payment');
 const Achat = require('../models/Achat');
 const Article = require('../models/Article');
 const Publicite = require('../models/Publicite');
+const User = require('../models/User');
+const Referral = require('../models/Referral');
+const AgentEarning = require('../models/AgentEarning');
 
 const FEEXPAY_BASE_URL = process.env.FEEXPAY_BASE_URL || 'https://api.feexpay.me';
 const FEEXPAY_SHOP_ID = process.env.FEEXPAY_SHOP_ID || '';
@@ -440,6 +443,31 @@ async function handleSuccessfulPayment(payment) {
         publicite.datePaiement = new Date();
         await publicite.save();
         console.log('Publicité marquée comme payée:', publicite._id);
+      }
+    }
+
+    // Commissions 10% pour l'agent commercial si l'utilisateur payeur a été parrainé par un agent
+    if (payment.user) {
+      try {
+        const payer = await User.findById(payment.user);
+        if (payer && (payer.role === 'vendeur' || payer.role === 'transitaire')) {
+          const referral = await Referral.findOne({ referredId: payer._id, status: 'completed' }).populate('referrerId');
+          if (referral && referral.referrerId && referral.referrerId.role === 'agentCommercial') {
+            const commission = Math.round((Number(payment.amount) || 0) * 0.10);
+            if (commission > 0) {
+              await AgentEarning.create({
+                agent: referral.referrerId._id,
+                type: payment.type === 'subscription' ? 'commission_subscription' : 'commission_publicite',
+                amount: commission,
+                sourcePayment: payment._id,
+                referredUser: payer._id,
+              });
+              console.log('Commission agent créée:', commission, 'XOF');
+            }
+          }
+        }
+      } catch (e) {
+        console.error('Erreur commission agent:', e.message);
       }
     }
   } catch (e) {
