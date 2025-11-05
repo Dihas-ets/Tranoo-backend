@@ -2,9 +2,11 @@ const PubPricing = require('../models/PubPricing');
 
 exports.getPubPricing = async (_req, res) => {
   try {
-    let pricing = await PubPricing.findOne();
+    // Toujours cibler le document singleton
+    let pricing = await PubPricing.findOne({ key: 'PUB_PRICING_SINGLETON' });
     if (!pricing) {
       pricing = new PubPricing({
+        key: 'PUB_PRICING_SINGLETON',
         prixSponsoriseeParJour: 1000,
         prixALaUneParJour: 2000,
       });
@@ -20,20 +22,24 @@ exports.getPubPricing = async (_req, res) => {
 exports.updatePubPricing = async (req, res) => {
   try {
     const { prixSponsoriseeParJour, prixALaUneParJour } = req.body;
-    let pricing = await PubPricing.findOne();
 
-    if (!pricing) {
-      pricing = new PubPricing({
+    // Upsert sur le document singleton
+    const updates = {
+      $set: {
+        key: 'PUB_PRICING_SINGLETON',
         prixSponsoriseeParJour,
         prixALaUneParJour,
-      });
-    } else {
-      pricing.prixSponsoriseeParJour = prixSponsoriseeParJour;
-      pricing.prixALaUneParJour = prixALaUneParJour;
-      pricing.updatedAt = Date.now();
-    }
+        updatedAt: new Date(),
+      },
+      $setOnInsert: { createdAt: new Date() },
+    };
 
-    await pricing.save();
+    const pricing = await PubPricing.findOneAndUpdate(
+      { key: 'PUB_PRICING_SINGLETON' },
+      updates,
+      { new: true, upsert: true }
+    );
+
     res.status(200).json({ message: 'Pub pricing updated successfully', pricing });
   } catch (error) {
     console.error('Error updating pub pricing:', error);
