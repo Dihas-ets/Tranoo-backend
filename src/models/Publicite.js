@@ -10,6 +10,8 @@ const publiciteSchema = new mongoose.Schema({
   statut: { type: String, enum: ['en_attente', 'payee', 'valide', 'rejete', 'expire'], default: 'en_attente' }, // Statut de la demande
   vendeur: { type: String, ref: 'User', required: true }, // Référence au vendeur
   articleId: { type: mongoose.Schema.Types.ObjectId, ref: 'Article' }, // Référence à l'article créé (optionnel)
+  // Source de la demande : mobile (app) ou landing/admin (tranoo)
+  source: { type: String, enum: ['app', 'tranoo'], default: 'app' },
   dateDemande: { type: Date, default: Date.now },
   dateDebut: { type: Date }, // Date de début de la publicité (quand validée)
   dateFin: { type: Date } // Date de fin de la publicité

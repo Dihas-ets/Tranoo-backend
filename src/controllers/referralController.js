@@ -1,13 +1,110 @@
 const Referral = require('../models/Referral');
 const ReferralSettings = require('../models/ReferralSettings');
+const ReferralTariff = require('../models/ReferralTariff');
 const User = require('../models/User');
 const crypto = require('crypto');
 const AgentEarning = require('../models/AgentEarning');
 
+class ReferralCreationError extends Error {
+  constructor(message, status = 400) {
+    super(message);
+    this.status = status;
+  }
+}
+
 // Générer un code de parrainage unique
-const generateReferralCode = () => {
-  return crypto.randomBytes(4).toString('hex').toUpperCase();
-};
+const generateReferralCode = () => crypto.randomBytes(4).toString('hex').toUpperCase();
+
+async function ensureSettings() {
+  let settings = await ReferralSettings.findOne();
+  if (!settings) {
+    settings = new ReferralSettings();
+    await settings.save();
+  }
+  return settings;
+}
+
+async function resolveRewardAmountForReferrer(referrer) {
+  if (referrer.assignedReferralTariff) {
+    try {
+      const tariff = await ReferralTariff.findById(referrer.assignedReferralTariff);
+      if (tariff && tariff.isActive) {
+        return tariff.amount;
+      }
+    } catch (error) {
+      console.error('Erreur récupération tarif parrainage:', error.message);
+    }
+  }
+  const settings = await ensureSettings();
+  return settings.rewardAmount;
+}
+
+async function createReferralRecord({ referralCode, referredUser }) {
+  if (!referralCode) {
+    throw new ReferralCreationError('Code de parrainage requis', 400);
+  }
+  if (!referredUser?._id) {
+    throw new ReferralCreationError('Utilisateur parrainé invalide', 400);
+  }
+
+  const referrer = await User.findOne({ referralCode });
+  if (!referrer) {
+    throw new ReferralCreationError('Code de parrainage invalide', 400);
+  }
+
+  if (referrer._id.equals(referredUser._id)) {
+    throw new ReferralCreationError('Vous ne pouvez pas vous parrainer vous-même', 400);
+  }
+
+  const alreadyReferred = await Referral.findOne({ referredId: referredUser._id });
+  if (alreadyReferred) {
+    throw new ReferralCreationError('Cet utilisateur a déjà été parrainé', 400);
+  }
+
+  const isAgent = referrer.role === 'agentCommercial';
+  let rewardAmount = 0;
+
+  if (isAgent) {
+    rewardAmount = 150;
+  } else {
+    rewardAmount = await resolveRewardAmountForReferrer(referrer);
+  }
+
+  const referral = new Referral({
+    referrerId: referrer._id,
+    referredId: referredUser._id,
+    referralCode,
+    status: isAgent ? 'completed' : 'pending',
+    rewardAmount,
+  });
+
+  await referral.save();
+
+  if (isAgent) {
+    try {
+      await AgentEarning.create({
+        agent: referrer._id,
+        type: 'referral_signup',
+        amount: 150,
+        sourceReferral: referral._id,
+        referredUser: referredUser._id,
+      });
+    } catch (error) {
+      console.error('Erreur création gain agent:', error.message);
+    }
+  }
+
+  return {
+    referral,
+    referrer,
+    rewardAmount,
+    status: referral.status,
+    isAgent,
+  };
+}
+
+exports.createReferralRecord = createReferralRecord;
+exports.ReferralCreationError = ReferralCreationError;
 
 // Obtenir les statistiques de parrainage d'un utilisateur
 exports.getUserReferralStats = async (req, res) => {
@@ -76,85 +173,28 @@ exports.createReferral = async (req, res) => {
   try {
     const { referralCode } = req.body;
     const referredUserId = req.user.uid;
-    
-    // Vérifier que l'utilisateur n'a pas déjà été parrainé
     const referredUser = await User.findOne({ uid: referredUserId });
     if (!referredUser) {
       return res.status(404).json({ message: 'Utilisateur non trouvé' });
     }
     
-    const existingReferral = await Referral.findOne({ referredId: referredUser._id });
-    if (existingReferral) {
-      return res.status(400).json({ message: 'Cet utilisateur a déjà été parrainé' });
-    }
-    
-    // Trouver l'utilisateur parrain
-    const referrer = await User.findOne({ referralCode: referralCode });
-    if (!referrer) {
-      return res.status(400).json({ message: 'Code de parrainage invalide' });
-    }
-    
-    // Vérifier qu'on ne peut pas se parrainer soi-même
-    if (referrer.uid === referredUserId) {
-      return res.status(400).json({ message: 'Vous ne pouvez pas vous parrainer vous-même' });
-    }
-    
-    // Déterminer le montant de récompense à utiliser
-    // Priorité: Tarif assigné au parrain (agent commercial) s'il existe, sinon paramètres globaux
-    let rewardAmountToUse = 0;
-    if (referrer.assignedReferralTariff) {
-      const ReferralTariff = require('../models/ReferralTariff');
-      try {
-        const tariff = await ReferralTariff.findById(referrer.assignedReferralTariff);
-        if (tariff && tariff.isActive) {
-          rewardAmountToUse = tariff.amount;
-        }
-      } catch (_) {
-        // ignore and fallback to settings
-      }
-    }
-    if (!rewardAmountToUse) {
-      let settings = await ReferralSettings.findOne();
-      if (!settings) {
-        settings = new ReferralSettings();
-        await settings.save();
-      }
-      rewardAmountToUse = settings.rewardAmount;
-    }
-    
-    // Créer le parrainage
-    const referral = new Referral({
-      referrerId: referrer._id,
-      referredId: referredUser._id,
-      referralCode: referralCode,
-      status: referrer.role === 'agentCommercial' ? 'completed' : 'pending',
-      rewardAmount: referrer.role === 'agentCommercial' ? 150 : rewardAmountToUse
-    });
-    
-    await referral.save();
-
-    // Créer le gain de 150 FCFA pour l'agent si applicable
-    if (referrer.role === 'agentCommercial') {
-      try {
-        await AgentEarning.create({
-          agent: referrer._id,
-          type: 'referral_signup',
-          amount: 150,
-          sourceReferral: referral._id,
-          referredUser: referredUser._id,
+    const { referral, isAgent } = await createReferralRecord({
+      referralCode,
+      referredUser,
         });
-      } catch (e) {
-        console.error('Erreur création gain agent:', e.message);
-      }
-    }
-    
-    res.status(201).json({ 
-      message: referrer.role === 'agentCommercial' ? 'Parrainage validé et prime agent créditée' : 'Parrainage enregistré avec succès', 
-      referral 
+
+    return res.status(201).json({
+      message: isAgent
+        ? 'Parrainage validé et prime agent créditée'
+        : 'Parrainage enregistré avec succès',
+      referral,
     });
   } catch (error) {
+    if (error instanceof ReferralCreationError) {
+      return res.status(error.status).json({ message: error.message });
+    }
     console.error('Error creating referral:', error);
-    res.status(500).json({ message: 'Server error', error: error.message });
+    return res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
 

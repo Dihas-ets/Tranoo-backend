@@ -402,6 +402,14 @@ try {
   console.warn('Pub pricing routes non chargées:', e.message);
 }
 
+// Subscription pricing routes
+try {
+  const subscriptionPricingRoutes = require('./routes/subscriptionPricing');
+  app.use('/api/admin/subscription-pricing', subscriptionPricingRoutes);
+} catch (e) {
+  console.warn('Subscription pricing routes non chargées:', e.message);
+}
+
 // Referral routes
 try {
   const referralRoutes = require('./routes/referral');

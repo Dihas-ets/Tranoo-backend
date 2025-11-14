@@ -20,29 +20,43 @@ exports.getPubPricing = async (_req, res) => {
 };
 
 exports.updatePubPricing = async (req, res) => {
+  console.log('[PUB_PRICING] ===== DÉBUT MISE À JOUR =====');
+  console.log('[PUB_PRICING] Body reçu:', req.body);
   try {
     const { prixSponsoriseeParJour, prixALaUneParJour } = req.body;
+
+    if (prixSponsoriseeParJour === undefined || prixALaUneParJour === undefined) {
+      console.error('[PUB_PRICING] ❌ Données manquantes');
+      return res.status(400).json({ message: 'prixSponsoriseeParJour et prixALaUneParJour requis' });
+    }
+
+    console.log('[PUB_PRICING] Valeurs:', { prixSponsoriseeParJour, prixALaUneParJour });
 
     // Upsert sur le document singleton
     const updates = {
       $set: {
         key: 'PUB_PRICING_SINGLETON',
-        prixSponsoriseeParJour,
-        prixALaUneParJour,
+        prixSponsoriseeParJour: Number(prixSponsoriseeParJour),
+        prixALaUneParJour: Number(prixALaUneParJour),
         updatedAt: new Date(),
       },
       $setOnInsert: { createdAt: new Date() },
     };
 
+    console.log('[PUB_PRICING] Mise à jour MongoDB...');
     const pricing = await PubPricing.findOneAndUpdate(
       { key: 'PUB_PRICING_SINGLETON' },
       updates,
       { new: true, upsert: true }
     );
 
+    console.log('[PUB_PRICING] ✅ Tarifs mis à jour avec succès');
+    console.log('[PUB_PRICING] Nouveau pricing:', pricing);
+    console.log('[PUB_PRICING] ===== FIN MISE À JOUR =====');
     res.status(200).json({ message: 'Pub pricing updated successfully', pricing });
   } catch (error) {
-    console.error('Error updating pub pricing:', error);
+    console.error('[PUB_PRICING] ❌ Erreur:', error.message);
+    console.error('[PUB_PRICING] Stack:', error.stack);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 };

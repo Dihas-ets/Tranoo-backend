@@ -7,7 +7,17 @@ const adminSdk = require('firebase-admin');
 exports.createPublicite = async (req, res) => {
   try {
     const vendeurId = req.user && req.user._id ? req.user._id : req.body.vendeur;
-    const publicite = new Publicite({ ...req.body, vendeur: vendeurId });
+    const allowedSources = ['app', 'tranoo'];
+    const source =
+      typeof req.body.source === 'string' && allowedSources.includes(req.body.source)
+        ? req.body.source
+        : 'app';
+
+    const publicite = new Publicite({
+      ...req.body,
+      vendeur: vendeurId,
+      source,
+    });
     await publicite.save();
     res.status(201).json({ message: 'Demande de pub créée', publicite });
   } catch (error) {

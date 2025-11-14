@@ -150,11 +150,39 @@ exports.deleteUser = async (req, res) => {
 };
 
 exports.getProfile = async (req, res) => {
+  console.log('[GET_PROFILE] ===== DÉBUT RÉCUPÉRATION PROFIL =====');
+  try {
   const user = req.user;
+    if (!user) {
+      console.error('[GET_PROFILE] ❌ req.user est null/undefined');
+      return res.status(401).json({ message: 'Utilisateur non authentifié' });
+    }
+    
+    console.log('[GET_PROFILE] Utilisateur ID:', user._id);
+    console.log('[GET_PROFILE] Email:', user.email);
+    console.log('[GET_PROFILE] Role:', user.role);
+    console.log('[GET_PROFILE] UID Firebase:', user.uid);
+    
+    console.log('[GET_PROFILE] Calcul du statut utilisateur...');
   const statut = await computeUserStatut(user);
+    console.log('[GET_PROFILE] Statut calculé:', statut);
+    
   const userObj = user.toObject();
   userObj.statut = statut;
+    
+    console.log('[GET_PROFILE] ✅ Profil récupéré avec succès');
+    console.log('[GET_PROFILE] ===== FIN RÉCUPÉRATION PROFIL =====');
   res.json({ user: userObj });
+  } catch (error) {
+    console.error('[GET_PROFILE] ===== ERREUR RÉCUPÉRATION PROFIL =====');
+    console.error('[GET_PROFILE] Type erreur:', error.name);
+    console.error('[GET_PROFILE] Message erreur:', error.message);
+    console.error('[GET_PROFILE] Stack trace:', error.stack);
+    return res.status(500).json({ 
+      message: 'Erreur lors de la récupération du profil', 
+      error: error.message 
+    });
+  }
 };
 
 // Créer un utilisateur (chauffeur, admin, etc.)
@@ -200,9 +228,55 @@ exports.updatePassword = async (req, res) => {
     const hashed = await bcrypt.hash(newPassword, 10);
     user.password = hashed;
     await user.save();
+    
+    // Synchroniser le mot de passe avec Firebase si l'utilisateur a un uid
+    if (user.uid) {
+      try {
+        await admin.auth().updateUser(user.uid, { password: newPassword });
+        console.log('[UPDATE_PASSWORD] Mot de passe Firebase synchronisé pour:', user.email);
+      } catch (firebaseError) {
+        console.error('[UPDATE_PASSWORD] Erreur synchronisation Firebase:', firebaseError);
+        // Ne pas faire échouer la requête si Firebase échoue
+      }
+    }
+    
     res.json({ message: 'Mot de passe mis à jour' });
   } catch (error) {
     res.status(500).json({ message: 'Erreur lors du changement de mot de passe', error });
+  }
+};
+
+// Réinitialiser le mot de passe Firebase d'un utilisateur (admin seulement)
+exports.resetFirebasePassword = async (req, res) => {
+  try {
+    const userId = req.params.id;
+    const { newPassword } = req.body;
+    
+    if (!newPassword) {
+      return res.status(400).json({ message: 'Nouveau mot de passe requis' });
+    }
+    
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: 'Utilisateur introuvable' });
+    }
+    
+    if (!user.uid) {
+      return res.status(400).json({ message: 'Cet utilisateur n\'a pas de UID Firebase' });
+    }
+    
+    // Mettre à jour le mot de passe dans Firebase
+    await admin.auth().updateUser(user.uid, { password: newPassword });
+    
+    // Mettre à jour le mot de passe hashé dans MongoDB
+    const hashed = await bcrypt.hash(newPassword, 10);
+    user.password = hashed;
+    await user.save();
+    
+    return res.json({ message: 'Mot de passe Firebase réinitialisé avec succès' });
+  } catch (error) {
+    console.error('[RESET_FIREBASE_PASSWORD] Erreur:', error);
+    return res.status(500).json({ message: 'Erreur lors de la réinitialisation du mot de passe', error: error.message });
   }
 };
 

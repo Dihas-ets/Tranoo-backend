@@ -59,4 +59,7 @@ router.get('/:id/activites', roleMiddleware('superAdmin', 'principal', 'gestionn
 router.patch('/:id/block', auth, userController.blockUser);
 router.patch('/:id/unblock', auth, userController.unblockUser);
 
+// Réinitialiser le mot de passe Firebase d'un utilisateur (admin seulement)
+router.post('/:id/reset-firebase-password', roleMiddleware('superAdmin', 'principal', 'gestionnaire'), userController.resetFirebasePassword);
+
 module.exports = router; 
