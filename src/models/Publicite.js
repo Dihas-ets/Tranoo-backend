@@ -7,6 +7,7 @@ const publiciteSchema = new mongoose.Schema({
   prix: { type: Number, required: true }, // Prix de la pub
   moyenPaiement: { type: String, enum: ['Paiement bancaire', 'Mobile Money'], required: true }, // Moyen de paiement
   media: [String], // URLs des images/vidéos
+  lien: { type: String }, // Lien cliquable optionnel vers une page externe
   statut: { type: String, enum: ['en_attente', 'payee', 'valide', 'rejete', 'expire'], default: 'en_attente' }, // Statut de la demande
   vendeur: { type: String, ref: 'User', required: true }, // Référence au vendeur
   articleId: { type: mongoose.Schema.Types.ObjectId, ref: 'Article' }, // Référence à l'article créé (optionnel)

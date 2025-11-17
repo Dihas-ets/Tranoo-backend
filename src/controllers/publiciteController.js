@@ -15,6 +15,7 @@ exports.createPublicite = async (req, res) => {
 
     const publicite = new Publicite({
       ...req.body,
+      lien: req.body.lien?.trim() || undefined,
       vendeur: vendeurId,
       source,
     });
@@ -70,59 +71,55 @@ exports.updateStatut = async (req, res) => {
     // Si la demande est validée, mettre l'article associé en ligne et démarrer le décompte
     if (req.body.statut === 'valide' && ancienStatut !== 'valide') {
       try {
-        // Exiger un articleId explicite pour éviter les erreurs et doublons
-        if (!publicite.articleId) {
+        const articleObligatoire = publicite.typePub !== 'À la une';
+        if (!publicite.articleId && articleObligatoire) {
           return res.status(400).json({
-            message: 'Validation impossible: articleId requis sur la publicité',
+            message: 'Validation impossible: articleId requis pour ce type de publicité',
           });
         }
-        
+
         // Calculer les dates de début et fin selon la durée
         const maintenant = new Date();
         publicite.dateDebut = maintenant;
-        
-        // Calculer la date de fin selon la durée
+
         const dureeEnJours = {
           '1 semaine': 7,
           '2 semaines': 14,
           '1 mois': 30,
           '2 mois': 60,
-          '3 mois': 90
+          '3 mois': 90,
         }[publicite.duree] || 7;
-        
+
         const dateFin = new Date(maintenant);
         dateFin.setDate(dateFin.getDate() + dureeEnJours);
         publicite.dateFin = dateFin;
-        
+
         console.log(`[DEBUG] Publicité ${publicite._id} - Décompte démarré: ${maintenant} -> ${dateFin} (${dureeEnJours} jours)`);
 
-        const article = await Article.findById(publicite.articleId);
-        if (!article) {
-          return res.status(404).json({ message: 'Article lié introuvable' });
-        }
+        if (publicite.articleId) {
+          const article = await Article.findById(publicite.articleId);
+          if (!article) {
+            return res.status(404).json({ message: 'Article lié introuvable' });
+          }
 
-        if (article) {
-          // Mise à jour du statut
           article.statut = 'en_ligne';
-          
-          // Mise à jour des champs de promotion selon le type de pub
+
           if (publicite.typePub === 'Sponsorisée') {
             article.sponsorise = true;
             console.log(`[DEBUG] Article ${article._id} marqué comme sponsorisé`);
           }
-          
+
           if (publicite.typePub === 'À la une') {
             article.aLaUne = true;
             console.log(`[DEBUG] Article ${article._id} marqué comme à la une`);
           }
-          
+
           await article.save();
-          console.log(`[DEBUG] Article ${article._id} mis en ligne automatiquement - Statut: ${article.statut}, Sponsorisé: ${article.sponsorise}, À la une: ${article.aLaUne}`);
+          console.log(`[DEBUG] Article ${article._id} mis à jour - Statut: ${article.statut}, Sponsorisé: ${article.sponsorise}, À la une: ${article.aLaUne}`);
         } else {
-          console.log(`[WARNING] Aucun article trouvé pour la publicité ${publicite._id}`);
+          console.log(`[INFO] Publicité ${publicite._id} validée sans article associé (flyer standalone).`);
         }
-        
-        // Sauvegarder les dates de la publicité
+
         await publicite.save();
         console.log(`[DEBUG] Publicité ${publicite._id} sauvegardée avec dateDebut: ${publicite.dateDebut}, dateFin: ${publicite.dateFin}`);
       } catch (articleError) {
