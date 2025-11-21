@@ -5,11 +5,33 @@ const User = require('../models/User');
 const crypto = require('crypto');
 const AgentEarning = require('../models/AgentEarning');
 
+const MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
+
 class ReferralCreationError extends Error {
   constructor(message, status = 400) {
     super(message);
     this.status = status;
   }
+}
+
+function formatMonthFromDate(date) {
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+  return `${year}-${month}`;
+}
+
+function getCurrentMonthString() {
+  return formatMonthFromDate(new Date());
+}
+
+function getMonthRange(monthString) {
+  if (!MONTH_PATTERN.test(monthString)) {
+    throw new Error('Format de mois invalide. Utilisez YYYY-MM.');
+  }
+  const [year, month] = monthString.split('-').map(Number);
+  const startDate = new Date(Date.UTC(year, month - 1, 1));
+  const endDate = new Date(Date.UTC(year, month, 1));
+  return { startDate, endDate };
 }
 
 // Générer un code de parrainage unique
@@ -80,6 +102,8 @@ async function createReferralRecord({ referralCode, referredUser }) {
 
   await referral.save();
 
+  await updateReferrerStats(referrer._id, referredUser._id);
+
   if (isAgent) {
     try {
       await AgentEarning.create({
@@ -106,6 +130,21 @@ async function createReferralRecord({ referralCode, referredUser }) {
 exports.createReferralRecord = createReferralRecord;
 exports.ReferralCreationError = ReferralCreationError;
 
+async function updateReferrerStats(referrerId, referredUserId) {
+  try {
+    await User.findByIdAndUpdate(
+      referrerId,
+      {
+        $inc: { 'referralStats.totalReferred': 1 },
+        $addToSet: { 'referralStats.referredUserIds': referredUserId },
+      },
+      { new: false }
+    );
+  } catch (error) {
+    console.error('Erreur mise à jour statistiques parrainage:', error.message);
+  }
+}
+
 // Obtenir les statistiques de parrainage d'un utilisateur
 exports.getUserReferralStats = async (req, res) => {
   try {
@@ -122,6 +161,7 @@ exports.getUserReferralStats = async (req, res) => {
       referrerId: user._id, 
       status: 'completed' 
     });
+    const referralStats = user.referralStats || { totalReferred: 0, referredUserIds: [] };
     
     // Obtenir le code de parrainage de l'utilisateur
     const referralCode = user.referralCode || generateReferralCode();
@@ -138,7 +178,11 @@ exports.getUserReferralStats = async (req, res) => {
       totalReferrals,
       completedReferrals,
       referralCode,
-      pendingReferrals: totalReferrals - completedReferrals
+      pendingReferrals: totalReferrals - completedReferrals,
+      referralStats: {
+        totalTrackedReferrals: referralStats.totalReferred,
+        referredUserIds: referralStats.referredUserIds
+      }
     });
   } catch (error) {
     console.error('Error fetching referral stats:', error);
@@ -168,6 +212,62 @@ exports.getUserReferrals = async (req, res) => {
   }
 };
 
+// Obtenir les statistiques mensuelles d'un utilisateur
+exports.getMonthlyReferralStats = async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const user = await User.findOne({ uid: userId });
+    if (!user) {
+      return res.status(404).json({ message: 'Utilisateur non trouvé' });
+    }
+
+    const requestedMonth = req.query.month || getCurrentMonthString();
+    let range;
+    try {
+      range = getMonthRange(requestedMonth);
+    } catch (error) {
+      return res.status(400).json({ message: error.message });
+    }
+
+    const totalReferrals = await Referral.countDocuments({
+      referrerId: user._id,
+      createdAt: { $gte: range.startDate, $lt: range.endDate },
+    });
+
+    const monthlyBreakdown = await Referral.aggregate([
+      { $match: { referrerId: user._id } },
+      {
+        $group: {
+          _id: {
+            year: { $year: '$createdAt' },
+            month: { $month: '$createdAt' },
+          },
+          count: { $sum: 1 },
+        },
+      },
+      { $sort: { '_id.year': 1, '_id.month': 1 } },
+    ]);
+
+    const timeline = monthlyBreakdown.map((item) => ({
+      month: `${item._id.year}-${String(item._id.month).padStart(2, '0')}`,
+      count: item.count,
+    }));
+
+    const fallbackDate = user.dateInscription || new Date();
+    const earliestMonth = timeline[0]?.month || formatMonthFromDate(fallbackDate);
+
+    return res.status(200).json({
+      selectedMonth: requestedMonth,
+      totalReferrals,
+      timeline,
+      earliestMonth,
+    });
+  } catch (error) {
+    console.error('Error fetching monthly referral stats:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+};
+
 // Enregistrer un nouveau parrainage
 exports.createReferral = async (req, res) => {
   try {
@@ -181,7 +281,7 @@ exports.createReferral = async (req, res) => {
     const { referral, isAgent } = await createReferralRecord({
       referralCode,
       referredUser,
-        });
+    });
 
     return res.status(201).json({
       message: isAgent

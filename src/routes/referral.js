@@ -6,6 +6,7 @@ const authMiddleware = require('../middlewares/auth');
 // Routes protégées pour les utilisateurs
 router.get('/stats', authMiddleware, referralController.getUserReferralStats);
 router.get('/my-referrals', authMiddleware, referralController.getUserReferrals);
+router.get('/monthly-stats', authMiddleware, referralController.getMonthlyReferralStats);
 router.post('/create', authMiddleware, referralController.createReferral);
 router.put('/complete/:referralId', authMiddleware, referralController.completeReferral);
 

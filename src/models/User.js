@@ -87,6 +87,13 @@ const userSchema = new mongoose.Schema({
   lastSeen: { type: Date, default: Date.now }, // Dernière activité
   // CHAMP POUR LE PARRAINAGE
   referralCode: { type: String, unique: true, sparse: true }, // Code de parrainage unique
+  referralStats: {
+    totalReferred: { type: Number, default: 0 },
+    referredUserIds: {
+      type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+      default: []
+    }
+  },
   // Attribution du tarif de parrainage (pour agents commerciaux)
   assignedReferralTariff: { type: mongoose.Schema.Types.ObjectId, ref: 'ReferralTariff', default: null }
 });

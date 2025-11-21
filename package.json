@@ -5,7 +5,10 @@
   "scripts": {
     "build": "echo 'Backend ready - no build needed for Node.js' && node -v && npm -v",
     "start": "node src/app.js",
-    "dev": "nodemon src/app.js"
+    "dev": "nodemon src/app.js",
+    "test:referral": "node tests/referralSchema.test.js",
+    "drop:referral-index": "node scripts/dropReferralCodeIndex.js",
+    "migrate:referral-stats": "node scripts/backfillReferralStats.js"
   },
   "keywords": [],
   "author": "",
