@@ -281,7 +281,7 @@ exports.createReferral = async (req, res) => {
     const { referral, isAgent } = await createReferralRecord({
       referralCode,
       referredUser,
-    });
+        });
 
     return res.status(201).json({
       message: isAgent
