@@ -6,6 +6,7 @@ const Publicite = require('../models/Publicite');
 const User = require('../models/User');
 const Referral = require('../models/Referral');
 const AgentEarning = require('../models/AgentEarning');
+const ReferralSettings = require('../models/ReferralSettings');
 
 const FEEXPAY_BASE_URL = process.env.FEEXPAY_BASE_URL || 'https://api.feexpay.me';
 const FEEXPAY_SHOP_ID = process.env.FEEXPAY_SHOP_ID || '';
@@ -14,6 +15,15 @@ const FEEXPAY_MODE = process.env.FEEXPAY_MODE || 'SANDBOX';
 const FEEXLINK_DISABLED = String(process.env.FEEXLINK_DISABLED || 'true').toLowerCase() === 'true';
 const EXPIRE_SECONDS = Number(process.env.PAYMENT_EXPIRE_SECONDS || 900);
 const FEEXPAY_DISABLE_LOCAL_EXPIRY = String(process.env.FEEXPAY_DISABLE_LOCAL_EXPIRY || 'true').toLowerCase() === 'true';
+
+async function getReferralSettings() {
+  let settings = await ReferralSettings.findOne();
+  if (!settings) {
+    settings = new ReferralSettings();
+    await settings.save();
+  }
+  return settings;
+}
 
 function getAuthHeaders() {
   return {
@@ -446,14 +456,18 @@ async function handleSuccessfulPayment(payment) {
       }
     }
 
-    // Commissions 10% pour l'agent commercial si l'utilisateur payeur a été parrainé par un agent
+    // Commissions (paramétrables) pour l'agent commercial si l'utilisateur payeur a été parrainé par un agent
     if (payment.user) {
       try {
+        const settings = await getReferralSettings();
+        const commissionRatePercent = Number.isFinite(settings.agentCommissionRate)
+          ? settings.agentCommissionRate
+          : 10;
         const payer = await User.findById(payment.user);
         if (payer && (payer.role === 'vendeur' || payer.role === 'transitaire')) {
           const referral = await Referral.findOne({ referredId: payer._id, status: 'completed' }).populate('referrerId');
           if (referral && referral.referrerId && referral.referrerId.role === 'agentCommercial') {
-            const commission = Math.round((Number(payment.amount) || 0) * 0.10);
+            const commission = Math.round((Number(payment.amount) || 0) * (commissionRatePercent / 100));
             if (commission > 0) {
               await AgentEarning.create({
                 agent: referral.referrerId._id,

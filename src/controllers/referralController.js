@@ -46,7 +46,7 @@ async function ensureSettings() {
   return settings;
 }
 
-async function resolveRewardAmountForReferrer(referrer) {
+async function resolveRewardAmountForReferrer(referrer, settings) {
   if (referrer.assignedReferralTariff) {
     try {
       const tariff = await ReferralTariff.findById(referrer.assignedReferralTariff);
@@ -57,8 +57,8 @@ async function resolveRewardAmountForReferrer(referrer) {
       console.error('Erreur récupération tarif parrainage:', error.message);
     }
   }
-  const settings = await ensureSettings();
-  return settings.rewardAmount;
+  const safeSettings = settings || await ensureSettings();
+  return safeSettings.rewardAmount;
 }
 
 async function createReferralRecord({ referralCode, referredUser }) {
@@ -84,13 +84,8 @@ async function createReferralRecord({ referralCode, referredUser }) {
   }
 
   const isAgent = referrer.role === 'agentCommercial';
-  let rewardAmount = 0;
-
-  if (isAgent) {
-    rewardAmount = 150;
-  } else {
-    rewardAmount = await resolveRewardAmountForReferrer(referrer);
-  }
+  const settings = await ensureSettings();
+  const rewardAmount = await resolveRewardAmountForReferrer(referrer, settings);
 
   const referral = new Referral({
     referrerId: referrer._id,
@@ -109,7 +104,7 @@ async function createReferralRecord({ referralCode, referredUser }) {
       await AgentEarning.create({
         agent: referrer._id,
         type: 'referral_signup',
-        amount: 150,
+        amount: rewardAmount,
         sourceReferral: referral._id,
         referredUser: referredUser._id,
       });
@@ -360,19 +355,20 @@ exports.getReferralSettings = async (_req, res) => {
 // Mettre à jour les paramètres de parrainage
 exports.updateReferralSettings = async (req, res) => {
   try {
-    const { isActive, rewardAmount, minReferrals, maxReferrals, description, terms } = req.body;
+    const { isActive, rewardAmount, agentCommissionRate, minReferrals, maxReferrals, description, terms } = req.body;
     
     let settings = await ReferralSettings.findOne();
     if (!settings) {
       settings = new ReferralSettings();
     }
     
-    settings.isActive = isActive;
-    settings.rewardAmount = rewardAmount;
-    settings.minReferrals = minReferrals;
-    settings.maxReferrals = maxReferrals;
-    settings.description = description;
-    settings.terms = terms;
+    if (typeof isActive === 'boolean') settings.isActive = isActive;
+    if (Number.isFinite(rewardAmount)) settings.rewardAmount = rewardAmount;
+    if (Number.isFinite(agentCommissionRate)) settings.agentCommissionRate = agentCommissionRate;
+    if (Number.isFinite(minReferrals)) settings.minReferrals = minReferrals;
+    if (Number.isFinite(maxReferrals)) settings.maxReferrals = maxReferrals;
+    if (typeof description === 'string') settings.description = description;
+    if (typeof terms === 'string') settings.terms = terms;
     settings.updatedAt = new Date();
     
     await settings.save();

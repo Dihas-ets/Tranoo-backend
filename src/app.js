@@ -1,4 +1,10 @@
 
+process.on('uncaughtException', console.error);
+process.on('unhandledRejection', console.error);
+
+
+
+
 const express = require('express');
 
 const mongoose = require('mongoose');
@@ -284,6 +290,10 @@ app.use('/api/users', authMiddleware, userRoutes);
 const articleRoutes = require('./routes/article');
 
 app.use('/api/articles', authMiddleware, articleRoutes);
+
+// Routes upload/transcodage vidéo
+const uploadRoutes = require('./routes/upload');
+app.use('/api/upload', uploadRoutes);
 
 
 // Routes publiques pour le landing (sans auth)

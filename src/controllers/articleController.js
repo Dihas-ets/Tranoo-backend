@@ -1,4 +1,31 @@
 const Article = require('../models/Article');
+const cloudinary = require('cloudinary').v2;
+
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
+function buildCloudinaryVideoVariants(url) {
+  if (!url || typeof url !== 'string') return { videoOptimized: url, videoThumbnail: null };
+  const marker = '/upload/';
+  const idx = url.indexOf(marker);
+  if (idx === -1) return { videoOptimized: url, videoThumbnail: null };
+  const prefix = url.substring(0, idx + marker.length);
+  const suffix = url.substring(idx + marker.length);
+  return {
+    videoOptimized: `${prefix}q_auto:eco,f_auto,w_1280/${suffix}`,
+    videoThumbnail: `${prefix}so_1,q_auto:eco,f_auto,w_480/${suffix}`.replace(/\.[^/.]+$/, '.jpg'),
+  };
+}
+
+function withVideoTransforms(doc) {
+  if (!doc) return doc;
+  const data = doc.toObject ? doc.toObject() : doc;
+  const { videoOptimized, videoThumbnail } = buildCloudinaryVideoVariants(data.video);
+  return { ...data, videoOptimized, videoThumbnail };
+}
 
 // Créer un article (voiture ou pièce)
 exports.createArticle = async (req, res) => {
@@ -71,7 +98,7 @@ exports.getArticles = async (req, res) => {
     console.log('USER:', req.user);
     console.log('FILTER:', filter);
     const articles = await Article.find(filter).populate('vendeur', 'nom prenoms email entreprise');
-    res.json(articles);
+    res.json(articles.map(withVideoTransforms));
   } catch (error) {
     res.status(500).json({ message: 'Erreur lors de la récupération des articles', error });
   }
@@ -85,7 +112,7 @@ exports.getArticleById = async (req, res) => {
   try {
     const article = await Article.findById(req.params.id).populate('vendeur', 'nom prenoms email entreprise');
     if (!article) return res.status(404).json({ message: 'Article non trouvé' });
-    res.json(article);
+    res.json(withVideoTransforms(article));
   } catch (error) {
     res.status(500).json({ message: 'Erreur lors de la récupération de l\'article', error });
   }
