@@ -1,5 +1,9 @@
 const admin = require('firebase-admin');
+const axios = require('axios');
 const User = require('../models/User');
+
+// Même liste de pays que dans inscription_page.dart, adaptée au backend
+
 
 // Store temporaire pour les codes OTP (en production, utiliser Redis)
 const otpStore = new Map();
@@ -9,34 +13,13 @@ const generateOTP = () => {
   return Math.floor(100000 + Math.random() * 900000).toString();
 };
 
-// Envoyer OTP via FCM
+// Envoyer OTP via FCM + WhatsApp Cloud API
 exports.sendOTP = async (req, res) => {
   try {
     const { telephone } = req.body;
     
     if (!telephone) {
       return res.status(400).json({ message: 'Numéro de téléphone requis' });
-    }
-
-    // Mode test pour développement
-    if (telephone === '+22959399349') {
-      const otpCode = generateOTP();
-      const expiresAt = Date.now() + 5 * 60 * 1000;
-      
-      otpStore.set(telephone, { 
-        code: otpCode, 
-        expiresAt, 
-        uid: 'test-uid' 
-      });
-      
-      console.log(`[TEST MODE] OTP généré: ${otpCode} pour ${telephone}`);
-      
-      return res.json({ 
-        success: true, 
-        message: 'Code OTP généré (mode test)',
-        otpCode: otpCode, // Pour debug
-        messageId: 'test-message-id'
-      });
     }
 
     // Vérifier que l'utilisateur existe
@@ -47,14 +30,6 @@ exports.sendOTP = async (req, res) => {
     }
 
     console.log(`Utilisateur trouvé: ${user.email}, FCM Token: ${user.fcmToken ? 'présent' : 'absent'}`);
-
-    // Vérifier que l'utilisateur a un FCM token
-    if (!user.fcmToken) {
-      console.log(`Token FCM manquant pour l'utilisateur: ${user.email}`);
-      return res.status(400).json({ 
-        message: 'Token FCM manquant. Veuillez vous reconnecter.' 
-      });
-    }
 
     // Générer le code OTP
     const otpCode = generateOTP();
@@ -67,54 +42,129 @@ exports.sendOTP = async (req, res) => {
       uid: user.uid 
     });
 
-    // Message FCM
-    const message = {
-      token: user.fcmToken,
-      notification: {
-        title: '🔐 Code de Vérification Tranoo',
-        body: `Votre code OTP: ${otpCode}`,
-      },
-      data: {
-        type: 'otp',
-        code: otpCode,
-        timestamp: Date.now().toString(),
-        action: 'password_reset'
-      },
-      android: {
-        priority: 'high',
-        notification: {
-          icon: 'ic_notification',
-          color: '#FFA500', // Couleur amber de l'app
-          sound: 'default',
-          clickAction: 'FLUTTER_NOTIFICATION_CLICK'
-        }
-      },
-      apns: {
-        payload: {
-          aps: {
-            contentAvailable: true,
-            badge: 1,
-            sound: 'default',
-            alert: {
-              title: '🔐 Code de Vérification Tranoo',
-              body: `Votre code OTP: ${otpCode}`
-            }
-          }
-        }
-      }
-    };
+    // --- Envoi via WhatsApp Cloud API ---
+    const whatsappToken = process.env.WHATSAPP_TOKEN;
+    const whatsappPhoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+    const whatsappTemplate = process.env.WHATSAPP_TEMPLATE_NAME || 'otp_reset';
 
-    // Envoyer la notification
-    console.log('Tentative d\'envoi FCM pour:', user.email, 'Token:', user.fcmToken);
-    const response = await admin.messaging().send(message);
-    
-    console.log('OTP envoyé avec succès:', response);
-    
-    res.json({ 
-      success: true, 
-      message: 'Code OTP envoyé par notification push',
-      messageId: response,
-      otpCode: otpCode // Pour debug
+    if (!whatsappToken || !whatsappPhoneNumberId) {
+      console.warn('[OTP] Variables WhatsApp manquantes, saut de l\'envoi WhatsApp');
+    } else {
+      try {
+        // Normaliser le téléphone en E.164 si besoin (à adapter si nécessaire)
+        const toPhone = telephone;
+
+        const waUrl = `https://graph.facebook.com/v18.0/${whatsappPhoneNumberId}/messages`;
+        const waPayload = {
+          messaging_product: 'whatsapp',
+          to: toPhone,
+          type: 'template',
+          template: {
+            name: whatsappTemplate,
+            language: { code: 'fr' },
+            components: [
+              {
+                type: 'body',
+                parameters: [
+                  {
+                    type: 'text',
+                    text: otpCode,
+                  },
+                ],
+              },
+            ],
+          },
+        };
+
+        console.log('[OTP] Envoi WhatsApp vers', toPhone);
+        const waRes = await axios.post(waUrl, waPayload, {
+          headers: {
+            Authorization: `Bearer ${whatsappToken}`,
+            'Content-Type': 'application/json',
+          },
+          timeout: 15000,
+        });
+
+        console.log('[OTP] WhatsApp OK:', JSON.stringify(waRes.data));
+      } catch (waErr) {
+        console.error(
+          '[OTP] Erreur envoi WhatsApp:',
+          waErr.response?.status,
+          waErr.response?.data || waErr.message
+        );
+        // On continue, on ne bloque pas la feature si WhatsApp échoue
+      }
+    }
+
+    // --- Envoi FCM (optionnel mais conservé comme fallback / double canal) ---
+    if (!user.fcmToken) {
+      console.log(
+        `Token FCM manquant pour l'utilisateur: ${user.email}, envoi uniquement WhatsApp.`
+      );
+    } else {
+      const message = {
+        token: user.fcmToken,
+        notification: {
+          title: '🔐 Code de Vérification Tranoo',
+          body: `Votre code OTP: ${otpCode}`,
+        },
+        data: {
+          type: 'otp',
+          code: otpCode,
+          timestamp: Date.now().toString(),
+          action: 'password_reset',
+        },
+        android: {
+          priority: 'high',
+          notification: {
+            icon: 'ic_notification',
+            color: '#FFA500', // Couleur amber de l'app
+            sound: 'default',
+            clickAction: 'FLUTTER_NOTIFICATION_CLICK',
+          },
+        },
+        apns: {
+          payload: {
+            aps: {
+              contentAvailable: true,
+              badge: 1,
+              sound: 'default',
+              alert: {
+                title: '🔐 Code de Vérification Tranoo',
+                body: `Votre code OTP: ${otpCode}`,
+              },
+            },
+          },
+        },
+      };
+
+      try {
+        console.log(
+          "Tentative d'envoi FCM pour:",
+          user.email,
+          'Token présent:',
+          !!user.fcmToken
+        );
+        const fcmRes = await admin.messaging().send(message);
+        console.log('OTP FCM envoyé avec succès:', fcmRes);
+      } catch (fcmErr) {
+        console.error(
+          '[OTP] Erreur envoi FCM:',
+          fcmErr.code,
+          fcmErr.message || fcmErr
+        );
+      }
+    }
+
+    const maskedPhone =
+      telephone.length > 4
+        ? telephone.slice(0, -4).replace(/\d/g, '*') + telephone.slice(-4)
+        : telephone;
+
+    res.json({
+      success: true,
+      message: 'Code OTP envoyé par WhatsApp' + (user.fcmToken ? ' et notification push' : ''),
+      phone: maskedPhone,
     });
 
   } catch (error) {
