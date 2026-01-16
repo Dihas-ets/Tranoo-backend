@@ -444,6 +444,22 @@ try {
   console.warn('Agents routes non chargées:', e.message);
 }
 
+// Livreur routes
+try {
+  const livreurRoutes = require('./routes/livreur');
+  app.use('/api/livreurs', livreurRoutes);
+} catch (e) {
+  console.warn('Livreur routes non chargées:', e.message);
+}
+
+// Settings routes
+try {
+  const settingsRoutes = require('./routes/settings');
+  app.use('/api/settings', settingsRoutes);
+} catch (e) {
+  console.warn('Settings routes non chargées:', e.message);
+}
+
 // Obsolète: Routes propositions transitaires (désactivées)
 // try {
 //   const propositionTransitRoutes = require('./routes/propositionTransit');

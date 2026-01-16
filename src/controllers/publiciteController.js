@@ -26,7 +26,7 @@ exports.createPublicite = async (req, res) => {
   }
 };
 
-// Lister les demandes de pub (admin ou vendeur)
+// Lister les demandes de pub (admin ou vendeur via routes privées)
 exports.getPublicites = async (req, res) => {
   try {
     const { vendeur, statut, typePub } = req.query;
@@ -38,6 +38,20 @@ exports.getPublicites = async (req, res) => {
     res.json(publicites);
   } catch (error) {
     res.status(500).json({ message: 'Erreur lors de la récupération des demandes', error });
+  }
+};
+
+// Lister les publicités visibles publiquement (pour apps non authentifiées)
+// Ne renvoie que les pubs en statut "valide" (et éventuellement filtrées par typePub)
+exports.getPublicitesPublic = async (req, res) => {
+  try {
+    const { typePub } = req.query;
+    const filter = { statut: 'valide' };
+    if (typePub) filter.typePub = typePub;
+    const publicites = await Publicite.find(filter).populate('vendeur', 'nom prenoms entreprise');
+    res.json(publicites);
+  } catch (error) {
+    res.status(500).json({ message: 'Erreur lors de la récupération des publicités publiques', error });
   }
 };
 

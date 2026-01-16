@@ -72,7 +72,7 @@ const userSchema = new mongoose.Schema({
   fcmToken: { type: String, default: null }, // Token FCM pour notifications push
   role: { 
     type: String, 
-    enum: ['vendeur', 'acheteur', 'transitaire', 'admin', 'chauffeur', 'agentCommercial'], 
+    enum: ['vendeur', 'acheteur', 'transitaire', 'admin', 'chauffeur', 'livreur', 'agentCommercial'], 
     required: true 
   }, // Rôle principal
   statutContrat: {
