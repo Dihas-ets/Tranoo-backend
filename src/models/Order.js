@@ -27,7 +27,7 @@ const orderSchema = new mongoose.Schema({
   status: { 
     type: String, 
     required: true, 
-    enum: ['pending', 'paid', 'processing', 'shipped', 'delivered', 'cancelled'],
+    enum: ['pending', 'paid', 'processing', 'shipped', 'delivered', 'cancelled', 'commandé', 'assigné', 'en_cours', 'livré', 'refusé', 'retour'],
     default: 'pending'
   },
   deliveryAddress: { type: String, required: true },
@@ -36,6 +36,19 @@ const orderSchema = new mongoose.Schema({
   estimatedDelivery: { type: Date },
   actualDelivery: { type: Date },
   paymentId: { type: String }, // Pour les paiements en ligne
+  
+  // Nouveaux champs pour le système de livraison
+  deliveryId: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'Delivery',
+    default: null 
+  },
+  isDeliveryRequired: { type: Boolean, default: false }, // Si c'est une commande nécessitant livraison
+  conditionsRemboursement: {
+    affichee: { type: Boolean, default: false }, // Si les conditions ont été affichées à l'acheteur
+    dateAffichage: { type: Date }
+  },
+  
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
 });

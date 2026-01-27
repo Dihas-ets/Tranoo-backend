@@ -1,4 +1,5 @@
 const User = require('../models/User');
+const UserDevice = require('../models/UserDevice');
 const bcrypt = require('bcryptjs');
 const Article = require('../models/Article');
 const cloudinary = require('cloudinary').v2;
@@ -433,12 +434,33 @@ exports.uploadProfilePhoto = async (req, res) => {
  */
 exports.updateFcmToken = async (req, res) => {
   try {
-    const { fcmToken } = req.body;
+    const { fcmToken, deviceId } = req.body;
     if (!fcmToken) {
       return res.status(400).json({ message: 'Token FCM requis' });
     }
     req.user.fcmToken = fcmToken;
     await req.user.save();
+
+    // Enregistrer / mettre à jour le device comme "trusted" (device connu car l'utilisateur est connecté)
+    if (deviceId && String(deviceId).trim()) {
+      try {
+        await UserDevice.updateOne(
+          { userUid: req.user.uid, deviceId: String(deviceId).trim() },
+          {
+            $set: {
+              fcmToken: String(fcmToken).trim(),
+              isTrusted: true,
+              lastSeenAt: new Date(),
+            },
+          },
+          { upsert: true }
+        );
+      } catch (e) {
+        // Ne pas faire échouer la route si l'upsert device échoue
+        console.warn('[FCM] Upsert UserDevice échoué:', e.message);
+      }
+    }
+
     res.json({
       message: 'Token FCM mis à jour avec succès',
       fcmToken: fcmToken

@@ -21,7 +21,16 @@ const notificationSchema = new mongoose.Schema({
   },
   type: {
     type: String,
-    enum: ['chat', 'publicite', 'paiement', 'promotion', 'alerte', 'general', 'verification'],
+    enum: [
+      'chat',
+      'publicite',
+      'paiement',
+      'promotion',
+      'alerte',
+      'general',
+      'verification',
+      'delivery', // notifications liées aux livraisons
+    ],
     default: 'general'
   },
   isRead: {
@@ -34,7 +43,7 @@ const notificationSchema = new mongoose.Schema({
   },
   relatedModel: {
     type: String,
-    enum: ['ChatRoom', 'Publicite', 'Article', 'User', 'Achat']
+    enum: ['ChatRoom', 'Publicite', 'Article', 'User', 'Achat', 'Delivery']
   },
   // Nouveaux champs pour les notifications de vérification
   actions: [{

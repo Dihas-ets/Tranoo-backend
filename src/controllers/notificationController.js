@@ -2,8 +2,9 @@ const Notification = require('../models/Notification');
 const User = require('../models/User');
 const Article = require('../models/Article');
 const admin = require('firebase-admin');
+const { sendMail, buildVerificationEmailHtml } = require('../utils/emailService');
 
-// Créer une notification
+// Créer une notification générique
 exports.createNotification = async (recipientId, senderId, title, message, type = 'general', relatedId = null, relatedModel = null) => {
   try {
     const notification = new Notification({
@@ -44,6 +45,57 @@ exports.createNotification = async (recipientId, senderId, title, message, type 
     return notification;
   } catch (error) {
     console.error('[NOTIFICATION] Erreur création:', error);
+    throw error;
+  }
+};
+
+// Créer une notification liée à une livraison
+// type d'événement peut être: 'created', 'assigned', 'picked_up', 'delivered', 'refused', 'return'
+exports.createDeliveryNotification = async (recipientId, senderId, deliveryId, eventType, _extra = {}) => {
+  try {
+    let title = 'Mise à jour livraison';
+    let message = 'Votre livraison a été mise à jour.';
+
+    switch (eventType) {
+      case 'created':
+        title = 'Nouvelle livraison disponible';
+        message = 'Une nouvelle livraison est disponible pour prise en charge.';
+        break;
+      case 'assigned':
+        title = 'Livraison assignée';
+        message = 'Une livraison vous a été assignée.';
+        break;
+      case 'picked_up':
+        title = 'Colis récupéré';
+        message = 'Le colis a été récupéré par le livreur.';
+        break;
+      case 'delivered':
+        title = 'Colis livré';
+        message = 'Le colis a été livré.';
+        break;
+      case 'refused':
+        title = 'Colis refusé';
+        message = 'Le colis a été refusé par le client.';
+        break;
+      case 'return':
+        title = 'Retour de pièce signalé';
+        message = 'Le chauffeur a signalé un retour de pièce par l\'acheteur pour cette livraison.';
+        break;
+      default:
+        break;
+    }
+
+    return await exports.createNotification(
+      recipientId,
+      senderId,
+      title,
+      message,
+      'delivery',
+      deliveryId,
+      'Delivery'
+    );
+  } catch (error) {
+    console.error('[DELIVERY NOTIF] Erreur création:', error);
     throw error;
   }
 };
@@ -400,6 +452,40 @@ exports.createAdminMessageHTTP = async (req, res) => {
     const notification = new Notification(notifDoc);
     await notification.save();
     console.log('[ADMIN MSG] Notification enregistrée en base avec ID:', notification._id.toString());
+
+    // ENVOI EMAIL (Uniquement pour type "verification" côté web admin, et si sendEmail !== false)
+    const sendEmailFlag = req.body && Object.prototype.hasOwnProperty.call(req.body, 'sendEmail')
+      ? !!req.body.sendEmail
+      : normalizedType === 'verification';
+
+    if (normalizedType === 'verification' && sendEmailFlag) {
+      try {
+        if (user.email) {
+          const article =
+            articleId ? await Article.findById(articleId).select('titre type') : null;
+
+          const html = buildVerificationEmailHtml({
+            user,
+            title,
+            message,
+            details,
+            date,
+            article,
+          });
+
+          await sendMail({
+            to: user.email,
+            subject: `[Vérification] ${title}`,
+            html,
+          });
+          console.log('[ADMIN MSG] Email envoyé à', user.email);
+        } else {
+          console.warn('[ADMIN MSG] Aucun email disponible pour le destinataire, email non envoyé');
+        }
+      } catch (emailError) {
+        console.error('[ADMIN MSG] Erreur envoi email:', emailError?.message || emailError);
+      }
+    }
 
     res.status(201).json({ message: 'Message enregistré', notification });
   } catch (error) {

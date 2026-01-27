@@ -1,160 +1,351 @@
 const admin = require('firebase-admin');
-const axios = require('axios');
+const crypto = require('crypto');
 const User = require('../models/User');
-
-// Même liste de pays que dans inscription_page.dart, adaptée au backend
-
+const UserDevice = require('../models/UserDevice');
+const PasswordResetRequest = require('../models/PasswordResetRequest');
 
 // Store temporaire pour les codes OTP (en production, utiliser Redis)
 const otpStore = new Map();
 
-// Générer un code OTP à 6 chiffres
-const generateOTP = () => {
-  return Math.floor(100000 + Math.random() * 900000).toString();
+const generateOTP = () => Math.floor(100000 + Math.random() * 900000).toString();
+const generateSessionId = () => (crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(16).toString('hex'));
+const hashOtp = (otp) => crypto.createHash('sha256').update(String(otp)).digest('hex');
+const makeKey = ({ telephone, fcmToken, otpSessionId }) =>
+  `${String(telephone)}::${String(fcmToken)}::${String(otpSessionId)}`;
+
+const OTP_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const OTP_MAX_ATTEMPTS = 3;
+
+const normalizeEmail = (email) => String(email || '').trim().toLowerCase();
+
+const pushOtpMessage = ({ fcmToken, otpCode }) => ({
+  token: String(fcmToken).trim(),
+  notification: {
+    title: '🔐 Code de vérification Tranoo',
+    body: `Votre code : ${otpCode}`,
+  },
+  data: {
+    type: 'otp',
+    code: String(otpCode), // Code dans data pour extraction par l'app
+    timestamp: Date.now().toString(),
+    action: 'password_reset',
+  },
+  android: {
+    priority: 'high',
+    notification: { sound: 'default', priority: 'high' },
+  },
+  apns: {
+    payload: {
+      aps: {
+        contentAvailable: true,
+        badge: 1,
+        sound: 'default',
+        alert: {
+          title: 'Code de vérification Tranoo',
+          body: `Votre code : ${otpCode}`,
+        },
+      },
+    },
+  },
+});
+
+/**
+ * NOUVEAU FLUX (deviceId-first)
+ * Règle: OTP envoyé uniquement au device (deviceId) ayant initié la demande.
+ * Sécurité: demande autorisée uniquement depuis un device "trusted" déjà connu,
+ * sinon récupération assistée.
+ */
+exports.requestPasswordReset = async (req, res) => {
+  try {
+    const { identifier, deviceId, fcmToken } = req.body || {};
+    const email = normalizeEmail(identifier);
+
+    // UX neutre: même réponse si compte inexistant
+    const neutralOk = () =>
+      res.json({
+        success: true,
+        message: 'Si le compte existe, un code a été envoyé par notification sur cet appareil.',
+      });
+
+    if (!email || !email.includes('@')) return neutralOk();
+    if (!deviceId || typeof deviceId !== 'string' || !deviceId.trim()) return neutralOk();
+    if (!fcmToken || typeof fcmToken !== 'string' || !fcmToken.trim()) return neutralOk();
+
+    const user = await User.findOne({ email: email });
+    if (!user) return neutralOk();
+
+    // Vérifier que ce device est déjà connu + trusted
+    const trustedDevice = await UserDevice.findOne({
+      userUid: user.uid,
+      deviceId: deviceId.trim(),
+      isTrusted: true,
+    });
+
+    if (!trustedDevice) {
+      return res.status(403).json({
+        success: false,
+        message:
+          "Ce téléphone n'est pas autorisé pour cette récupération. Veuillez contacter le support.",
+      });
+    }
+
+    // Mettre à jour le token FCM sur le device
+    trustedDevice.fcmToken = fcmToken.trim();
+    trustedDevice.lastSeenAt = new Date();
+    await trustedDevice.save();
+
+    const otpCode = generateOTP();
+    const expiresAt = new Date(Date.now() + OTP_TTL_MS);
+
+    const requestDoc = await PasswordResetRequest.create({
+      userUid: user.uid,
+      deviceId: deviceId.trim(),
+      fcmToken: fcmToken.trim(),
+      otpHash: hashOtp(otpCode),
+      expiresAt,
+      attempts: 0,
+      status: 'pending',
+      audit: { attempts: [], requestedAt: new Date() },
+    });
+
+    await admin.messaging().send(pushOtpMessage({ fcmToken: fcmToken.trim(), otpCode }));
+
+    return res.json({
+      success: true,
+      message: 'Code envoyé par notification sur cet appareil.',
+      requestId: requestDoc._id,
+      expiresInSeconds: Math.floor(OTP_TTL_MS / 1000),
+    });
+  } catch (error) {
+    console.error('[RESET] Erreur requestPasswordReset:', error);
+    return res.status(500).json({ success: false, message: "Erreur. Réessayez." });
+  }
 };
 
-// Envoyer OTP via FCM + WhatsApp Cloud API
+exports.verifyPasswordResetOtp = async (req, res) => {
+  try {
+    const { requestId, deviceId, code } = req.body || {};
+    if (!requestId || !deviceId || !code) {
+      return res.status(400).json({ success: false, message: 'Champs requis manquants.' });
+    }
+
+    const requestDoc = await PasswordResetRequest.findById(requestId);
+    if (!requestDoc) {
+      return res.status(400).json({ success: false, message: 'Code invalide ou expiré.' });
+    }
+
+    if (String(requestDoc.deviceId) !== String(deviceId).trim()) {
+      requestDoc.audit.attempts.push({ ok: false, reason: 'device_mismatch' });
+      await requestDoc.save();
+      return res.status(403).json({ success: false, message: 'Ce téléphone ne correspond pas à la demande.' });
+    }
+
+    if (requestDoc.status !== 'pending') {
+      return res.status(400).json({ success: false, message: 'Demande invalide.' });
+    }
+
+    if (Date.now() > new Date(requestDoc.expiresAt).getTime()) {
+      requestDoc.status = 'expired';
+      requestDoc.audit.attempts.push({ ok: false, reason: 'expired' });
+      await requestDoc.save();
+      return res.status(400).json({ success: false, message: 'Code expiré. Redemandez un code.' });
+    }
+
+    if (requestDoc.attempts >= OTP_MAX_ATTEMPTS) {
+      requestDoc.status = 'locked';
+      requestDoc.audit.attempts.push({ ok: false, reason: 'locked' });
+      await requestDoc.save();
+      return res.status(429).json({ success: false, message: 'Trop de tentatives. Redemandez un code.' });
+    }
+
+    const ok = requestDoc.otpHash === hashOtp(String(code).trim());
+    if (!ok) {
+      requestDoc.attempts += 1;
+      requestDoc.audit.attempts.push({ ok: false, reason: 'bad_code' });
+      if (requestDoc.attempts >= OTP_MAX_ATTEMPTS) requestDoc.status = 'locked';
+      await requestDoc.save();
+      return res.status(400).json({ success: false, message: 'Code incorrect.' });
+    }
+
+    requestDoc.status = 'verified';
+    requestDoc.verifiedAt = new Date();
+    requestDoc.audit.attempts.push({ ok: true, reason: 'ok' });
+    await requestDoc.save();
+
+    return res.json({ success: true, message: 'Code vérifié.' });
+  } catch (error) {
+    console.error('[RESET] Erreur verifyPasswordResetOtp:', error);
+    return res.status(500).json({ success: false, message: "Erreur. Réessayez." });
+  }
+};
+
+exports.resetPasswordWithOtp = async (req, res) => {
+  try {
+    const { requestId, deviceId, newPassword } = req.body || {};
+    if (!requestId || !deviceId || !newPassword) {
+      return res.status(400).json({ success: false, message: 'Champs requis manquants.' });
+    }
+
+    const requestDoc = await PasswordResetRequest.findById(requestId);
+    if (!requestDoc) {
+      return res.status(400).json({ success: false, message: 'Demande invalide.' });
+    }
+
+    if (String(requestDoc.deviceId) !== String(deviceId).trim()) {
+      return res.status(403).json({ success: false, message: 'Ce téléphone ne correspond pas à la demande.' });
+    }
+
+    if (requestDoc.status !== 'verified') {
+      return res.status(400).json({ success: false, message: "Veuillez d'abord vérifier le code." });
+    }
+
+    if (Date.now() > new Date(requestDoc.expiresAt).getTime()) {
+      requestDoc.status = 'expired';
+      await requestDoc.save();
+      return res.status(400).json({ success: false, message: 'Code expiré. Redemandez un code.' });
+    }
+
+    const user = await User.findOne({ uid: requestDoc.userUid });
+    if (!user) return res.status(404).json({ success: false, message: 'Compte introuvable.' });
+
+    await admin.auth().updateUser(user.uid, { password: String(newPassword) });
+
+    if (user.password) {
+      const bcrypt = require('bcrypt');
+      user.password = await bcrypt.hash(String(newPassword), 10);
+      await user.save();
+    }
+
+    // Marquer OTP utilisé + device trusted
+    requestDoc.status = 'used';
+    requestDoc.usedAt = new Date();
+    await requestDoc.save();
+
+    await UserDevice.updateOne(
+      { userUid: user.uid, deviceId: requestDoc.deviceId },
+      {
+        $set: {
+          fcmToken: requestDoc.fcmToken,
+          isTrusted: true,
+          lastSeenAt: new Date(),
+        },
+      },
+      { upsert: true }
+    );
+
+    // Confirmation push sur le device demandeur uniquement
+    if (requestDoc.fcmToken) {
+      try {
+        await admin.messaging().send({
+          token: String(requestDoc.fcmToken).trim(),
+          notification: {
+            title: 'Mot de passe modifié',
+            body: 'Votre mot de passe a été modifié avec succès.',
+          },
+          data: { type: 'password_reset_success', timestamp: Date.now().toString() },
+        });
+      } catch (e) {
+        console.log('[RESET] Confirmation push échouée:', e);
+      }
+    }
+
+    return res.json({ success: true, message: 'Mot de passe réinitialisé.' });
+  } catch (error) {
+    console.error('[RESET] Erreur resetPasswordWithOtp:', error);
+    return res.status(500).json({ success: false, message: "Erreur. Réessayez." });
+  }
+};
+
+/**
+ * Envoyer OTP par notification push (Firebase Cloud Messaging) uniquement.
+ * SÉCURITÉ: OTP lié au téléphone + device (FCM token) + session (otpSessionId) + durée courte.
+ * L'app envoie le fcmToken du périphérique courant. Le backend vérifie qu'il correspond au token
+ * déjà associé au compte (user.fcmToken), pour éviter d'envoyer un OTP à un nouveau device non autorisé.
+ */
 exports.sendOTP = async (req, res) => {
   try {
-    const { telephone } = req.body;
-    
+    const { telephone, fcmToken } = req.body;
+
     if (!telephone) {
       return res.status(400).json({ message: 'Numéro de téléphone requis' });
     }
+    if (!fcmToken || typeof fcmToken !== 'string' || !fcmToken.trim()) {
+      return res.status(400).json({
+        message: 'Autorisez les notifications push pour recevoir le code sur cet appareil.',
+      });
+    }
 
-    // Vérifier que l'utilisateur existe
     const user = await User.findOne({ telephone });
     if (!user) {
-      console.log(`Utilisateur non trouvé pour le téléphone: ${telephone}`);
+      console.log(`[OTP] Utilisateur non trouvé pour le téléphone: ${telephone}`);
       return res.status(404).json({ message: 'Utilisateur introuvable' });
     }
 
-    console.log(`Utilisateur trouvé: ${user.email}, FCM Token: ${user.fcmToken ? 'présent' : 'absent'}`);
-
-    // Générer le code OTP
-    const otpCode = generateOTP();
-    const expiresAt = Date.now() + 5 * 60 * 1000; // 5 minutes
-
-    // Stocker le code temporairement
-    otpStore.set(telephone, { 
-      code: otpCode, 
-      expiresAt, 
-      uid: user.uid 
-    });
-
-    // --- Envoi via WhatsApp Cloud API ---
-    const whatsappToken = process.env.WHATSAPP_TOKEN;
-    const whatsappPhoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-    const whatsappTemplate = process.env.WHATSAPP_TEMPLATE_NAME || 'otp_reset';
-
-    if (!whatsappToken || !whatsappPhoneNumberId) {
-      console.warn('[OTP] Variables WhatsApp manquantes, saut de l\'envoi WhatsApp');
-    } else {
-      try {
-        // Normaliser le téléphone en E.164 si besoin (à adapter si nécessaire)
-        const toPhone = telephone;
-
-        const waUrl = `https://graph.facebook.com/v18.0/${whatsappPhoneNumberId}/messages`;
-        const waPayload = {
-          messaging_product: 'whatsapp',
-          to: toPhone,
-          type: 'template',
-          template: {
-            name: whatsappTemplate,
-            language: { code: 'fr' },
-            components: [
-              {
-                type: 'body',
-                parameters: [
-                  {
-                    type: 'text',
-                    text: otpCode,
-                  },
-                ],
-              },
-            ],
-          },
-        };
-
-        console.log('[OTP] Envoi WhatsApp vers', toPhone);
-        const waRes = await axios.post(waUrl, waPayload, {
-          headers: {
-            Authorization: `Bearer ${whatsappToken}`,
-            'Content-Type': 'application/json',
-          },
-          timeout: 15000,
-        });
-
-        console.log('[OTP] WhatsApp OK:', JSON.stringify(waRes.data));
-      } catch (waErr) {
-        console.error(
-          '[OTP] Erreur envoi WhatsApp:',
-          waErr.response?.status,
-          waErr.response?.data || waErr.message
-        );
-        // On continue, on ne bloque pas la feature si WhatsApp échoue
-      }
+    // Sécurité device: exiger que le device soit déjà associé à ce compte
+    if (!user.fcmToken) {
+      return res.status(400).json({
+        message:
+          "Aucun appareil n'est associé à ce compte pour les notifications. Connectez-vous une fois pour enregistrer l’appareil, ou contactez le support.",
+      });
+    }
+    if (String(user.fcmToken).trim() !== String(fcmToken).trim()) {
+      return res.status(403).json({
+        message:
+          "Ce téléphone n'est pas l'appareil associé à ce compte. Utilisez l’appareil habituel ou contactez le support.",
+      });
     }
 
-    // --- Envoi FCM (optionnel mais conservé comme fallback / double canal) ---
-    if (!user.fcmToken) {
-      console.log(
-        `Token FCM manquant pour l'utilisateur: ${user.email}, envoi uniquement WhatsApp.`
-      );
-    } else {
-      const message = {
-        token: user.fcmToken,
+    const otpCode = generateOTP();
+    const expiresAt = Date.now() + 5 * 60 * 1000; // 5 minutes
+    const otpSessionId = generateSessionId();
+
+    // Stocker un hash du code (pas le code en clair)
+    otpStore.set(makeKey({ telephone, fcmToken, otpSessionId }), {
+      codeHash: hashOtp(otpCode),
+      expiresAt,
+      uid: user.uid,
+      telephone,
+      fcmToken: String(fcmToken).trim(),
+      otpSessionId,
+    });
+
+    const message = {
+      token: fcmToken.trim(),
+      notification: {
+        title: '🔐 Code de vérification Tranoo',
+        body: `Votre code OTP : ${otpCode}`,
+      },
+      data: {
+        type: 'otp',
+        code: otpCode,
+        timestamp: Date.now().toString(),
+        action: 'password_reset',
+        otpSessionId: otpSessionId,
+      },
+      android: {
+        priority: 'high',
         notification: {
-          title: '🔐 Code de Vérification Tranoo',
-          body: `Votre code OTP: ${otpCode}`,
-        },
-        data: {
-          type: 'otp',
-          code: otpCode,
-          timestamp: Date.now().toString(),
-          action: 'password_reset',
-        },
-        android: {
+          sound: 'default',
           priority: 'high',
-          notification: {
-            icon: 'ic_notification',
-            color: '#FFA500', // Couleur amber de l'app
-            sound: 'default',
-            clickAction: 'FLUTTER_NOTIFICATION_CLICK',
-          },
         },
-        apns: {
-          payload: {
-            aps: {
-              contentAvailable: true,
-              badge: 1,
-              sound: 'default',
-              alert: {
-                title: '🔐 Code de Vérification Tranoo',
-                body: `Votre code OTP: ${otpCode}`,
-              },
+      },
+      apns: {
+        payload: {
+          aps: {
+            contentAvailable: true,
+            badge: 1,
+            sound: 'default',
+            alert: {
+              title: '🔐 Code de vérification Tranoo',
+              body: `Votre code OTP : ${otpCode}`,
             },
           },
         },
-      };
+      },
+    };
 
-      try {
-        console.log(
-          "Tentative d'envoi FCM pour:",
-          user.email,
-          'Token présent:',
-          !!user.fcmToken
-        );
-        const fcmRes = await admin.messaging().send(message);
-        console.log('OTP FCM envoyé avec succès:', fcmRes);
-      } catch (fcmErr) {
-        console.error(
-          '[OTP] Erreur envoi FCM:',
-          fcmErr.code,
-          fcmErr.message || fcmErr
-        );
-      }
-    }
+    await admin.messaging().send(message);
+    console.log(`[OTP] Push envoyé avec succès pour ${user.email}`);
 
     const maskedPhone =
       telephone.length > 4
@@ -163,29 +354,27 @@ exports.sendOTP = async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Code OTP envoyé par WhatsApp' + (user.fcmToken ? ' et notification push' : ''),
+      message: 'Code envoyé par notification push sur cet appareil.',
       phone: maskedPhone,
+      otpSessionId,
     });
-
   } catch (error) {
-    console.error('Erreur envoi OTP FCM:', error);
-    
-    // Gestion des erreurs spécifiques FCM
-    if (error.code === 'messaging/invalid-registration-token') {
-      return res.status(400).json({ 
-        message: 'Token FCM invalide. Veuillez vous reconnecter.' 
+    console.error('[OTP] Erreur envoi push:', error);
+
+    if (error.code === 'messaging/invalid-registration-token' || error.code === 'messaging/invalid-argument') {
+      return res.status(400).json({
+        message: 'Token de notification invalide. Fermez l’app, rouvrez-la puis réessayez.',
       });
     }
-    
     if (error.code === 'messaging/registration-token-not-registered') {
-      return res.status(400).json({ 
-        message: 'Token FCM expiré. Veuillez vous reconnecter.' 
+      return res.status(400).json({
+        message: 'Token de notification expiré. Rouvrez l’app et réessayez.',
       });
     }
 
-    res.status(500).json({ 
-      message: 'Erreur lors de l\'envoi du code OTP', 
-      error: error.message 
+    res.status(500).json({
+      message: "Erreur lors de l'envoi du code. Réessayez.",
+      error: error.message,
     });
   }
 };
@@ -193,26 +382,26 @@ exports.sendOTP = async (req, res) => {
 // Vérifier seulement le code OTP (sans réinitialiser le mot de passe)
 exports.verifyOTPCode = async (req, res) => {
   try {
-    const { telephone, code } = req.body;
+    const { telephone, code, fcmToken, otpSessionId } = req.body;
     
-    if (!telephone || !code) {
+    if (!telephone || !code || !fcmToken || !otpSessionId) {
       return res.status(400).json({ 
-        message: 'Champs requis: telephone, code' 
+        message: 'Champs requis: telephone, code, fcmToken, otpSessionId' 
       });
     }
 
     // Vérifier le code OTP
-    const otpEntry = otpStore.get(telephone);
+    const otpEntry = otpStore.get(makeKey({ telephone, fcmToken, otpSessionId }));
     if (!otpEntry) {
       return res.status(400).json({ message: 'Code OTP introuvable' });
     }
 
     if (Date.now() > otpEntry.expiresAt) {
-      otpStore.delete(telephone);
+      otpStore.delete(makeKey({ telephone, fcmToken, otpSessionId }));
       return res.status(400).json({ message: 'Code OTP expiré' });
     }
 
-    if (otpEntry.code !== code) {
+    if (otpEntry.codeHash !== hashOtp(code)) {
       return res.status(400).json({ message: 'Code OTP invalide' });
     }
 
@@ -234,26 +423,26 @@ exports.verifyOTPCode = async (req, res) => {
 // Vérifier OTP et réinitialiser mot de passe
 exports.verifyOTPAndResetPassword = async (req, res) => {
   try {
-    const { telephone, code, newPassword } = req.body;
+    const { telephone, code, newPassword, fcmToken, otpSessionId } = req.body;
     
-    if (!telephone || !code || !newPassword) {
+    if (!telephone || !code || !newPassword || !fcmToken || !otpSessionId) {
       return res.status(400).json({ 
-        message: 'Champs requis: telephone, code, newPassword' 
+        message: 'Champs requis: telephone, code, newPassword, fcmToken, otpSessionId' 
       });
     }
 
     // Vérifier le code OTP
-    const otpEntry = otpStore.get(telephone);
+    const otpEntry = otpStore.get(makeKey({ telephone, fcmToken, otpSessionId }));
     if (!otpEntry) {
       return res.status(400).json({ message: 'Code OTP introuvable' });
     }
 
     if (Date.now() > otpEntry.expiresAt) {
-      otpStore.delete(telephone);
+      otpStore.delete(makeKey({ telephone, fcmToken, otpSessionId }));
       return res.status(400).json({ message: 'Code OTP expiré' });
     }
 
-    if (otpEntry.code !== code) {
+    if (otpEntry.codeHash !== hashOtp(code)) {
       return res.status(400).json({ message: 'Code OTP invalide' });
     }
 
@@ -274,12 +463,12 @@ exports.verifyOTPAndResetPassword = async (req, res) => {
     }
 
     // Supprimer le code OTP utilisé
-    otpStore.delete(telephone);
+    otpStore.delete(makeKey({ telephone, fcmToken, otpSessionId }));
 
-    // Envoyer une notification de confirmation
-    if (user.fcmToken) {
+    // Envoyer une notification de confirmation sur le même appareil
+    if (fcmToken && fcmToken.trim()) {
       const confirmationMessage = {
-        token: user.fcmToken,
+        token: fcmToken.trim(),
         notification: {
           title: '✅ Mot de passe réinitialisé',
           body: 'Votre mot de passe a été modifié avec succès',
@@ -287,11 +476,32 @@ exports.verifyOTPAndResetPassword = async (req, res) => {
         data: {
           type: 'password_reset_success',
           timestamp: Date.now().toString()
-        }
+        },
+        android: {
+          priority: 'high',
+          notification: {
+            sound: 'default',
+            priority: 'high',
+          },
+        },
+        apns: {
+          payload: {
+            aps: {
+              contentAvailable: true,
+              badge: 1,
+              sound: 'default',
+              alert: {
+                title: '✅ Mot de passe réinitialisé',
+                body: 'Votre mot de passe a été modifié avec succès',
+              },
+            },
+          },
+        },
       };
 
       try {
         await admin.messaging().send(confirmationMessage);
+        console.log(`[OTP] Notification de confirmation envoyée pour ${user.email}`);
       } catch (notifError) {
         console.log('Erreur notification confirmation:', notifError);
         // Ne pas faire échouer la réinitialisation pour une erreur de notification
@@ -315,9 +525,9 @@ exports.verifyOTPAndResetPassword = async (req, res) => {
 // Nettoyer les codes OTP expirés (à appeler périodiquement)
 exports.cleanExpiredOTPs = () => {
   const now = Date.now();
-  for (const [telephone, entry] of otpStore.entries()) {
+  for (const [key, entry] of otpStore.entries()) {
     if (now > entry.expiresAt) {
-      otpStore.delete(telephone);
+      otpStore.delete(key);
     }
   }
 };

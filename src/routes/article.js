@@ -16,6 +16,8 @@ router.put('/:id', authMiddleware, articleController.updateArticle);
 router.delete('/:id', authMiddleware, articleController.deleteArticle);
 // Changer le statut d'un article (admin uniquement)
 router.put('/:id/statut', authMiddleware, articleController.updateStatut);
+// Rupture / disponible (vendeur ou admin)
+router.patch('/:id/stock', authMiddleware, articleController.updateStockStatus);
 // Marquer un article comme vendu
 router.put('/:id/vendu', articleController.markAsSold);
 router.get('/achats/:acheteurId', getAchatsByAcheteur);

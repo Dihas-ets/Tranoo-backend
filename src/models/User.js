@@ -47,6 +47,16 @@ const userSchema = new mongoose.Schema({
     numero: { type: String, default: null },
     relation: { type: String, default: null }
   },
+  // Champs spécifiques livreur/chauffeur - Informations véhicule
+  vehicule: {
+    immatriculation: { type: String, default: null }, // Numéro d'immatriculation
+    type: { type: String, default: null }, // Type: Moto, Voiture, Camion, etc.
+    marque: { type: String, default: null }, // Marque du véhicule
+    modele: { type: String, default: null }, // Modèle du véhicule
+    annee: { type: Number, default: null }, // Année de fabrication
+    couleur: { type: String, default: null }, // Couleur principale
+    urlPhoto: { type: String, default: null }, // Photo du véhicule
+  },
   // Champs spécifiques pour les admins (web)
   adresse: { type: String }, // Adresse (admin)
   ville: { type: String }, // Ville (admin)

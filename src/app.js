@@ -452,6 +452,22 @@ try {
   console.warn('Livreur routes non chargées:', e.message);
 }
 
+// Livreur balance routes
+try {
+  const livreurBalanceRoutes = require('./routes/livreurBalance');
+  app.use('/api/livreurs/balance', livreurBalanceRoutes);
+} catch (e) {
+  console.warn('Livreur balance routes non chargées:', e.message);
+}
+
+// Delivery routes
+try {
+  const deliveryRoutes = require('./routes/delivery');
+  app.use('/api/deliveries', deliveryRoutes);
+} catch (e) {
+  console.warn('Delivery routes non chargées:', e.message);
+}
+
 // Settings routes
 try {
   const settingsRoutes = require('./routes/settings');

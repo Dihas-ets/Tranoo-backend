@@ -37,6 +37,12 @@ const articleSchema = new mongoose.Schema({
     enum: ['en_attente', 'en_ligne', 'rejeté', 'vendu', 'non_vendu'],
     default: 'en_attente'
   },
+  // Rupture / disponible (vendeur) — rupture = vert côté vendeur, badge non cliquable côté acheteur ; disponible = rouge côté vendeur, rien côté acheteur
+  stockStatus: {
+    type: String,
+    enum: ['disponible', 'rupture'],
+    default: 'disponible'
+  },
   // Lien avec le vendeur (utilisateur)
   vendeur: { type: String, ref: 'User', required: true },
   dateCreation: { type: Date, default: Date.now },

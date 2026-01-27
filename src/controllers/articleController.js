@@ -157,6 +157,27 @@ exports.deleteArticle = async (req, res) => {
   }
 };
 
+// Mettre à jour le stock (rupture / disponible) — vendeur ou admin
+exports.updateStockStatus = async (req, res) => {
+  try {
+    const article = await Article.findById(req.params.id);
+    if (!article) return res.status(404).json({ message: 'Article non trouvé' });
+    if (req.user.role !== 'admin' && article.vendeur.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'Non autorisé à modifier le stock de cet article' });
+    }
+    const { stockStatus } = req.body;
+    if (!['disponible', 'rupture'].includes(stockStatus)) {
+      return res.status(400).json({ message: 'stockStatus doit être "disponible" ou "rupture"' });
+    }
+    article.stockStatus = stockStatus;
+    await article.save();
+    res.json({ message: 'Stock mis à jour', article: withVideoTransforms(article) });
+  } catch (error) {
+    console.error('Erreur updateStockStatus:', error);
+    res.status(500).json({ message: 'Erreur lors de la mise à jour du stock', error });
+  }
+};
+
 // Changer le statut d'un article (admin uniquement)
 exports.updateStatut = async (req, res) => {
   try {

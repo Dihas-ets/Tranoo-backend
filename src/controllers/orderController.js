@@ -1,7 +1,10 @@
 const Order = require('../models/Order');
+const Delivery = require('../models/Delivery');
 const User = require('../models/User');
+const Article = require('../models/Article');
+const notificationController = require('./notificationController');
 
-// Créer une nouvelle commande
+// Créer une nouvelle commande (pièces détachées ou autre)
 const createOrder = async (req, res) => {
   try {
     const {
@@ -12,7 +15,11 @@ const createOrder = async (req, res) => {
       total,
       paymentMethod,
       deliveryAddress,
-      deliveryNote
+      deliveryNote,
+      // Champs optionnels pour livraison
+      isDeliveryRequired,
+      deliveryInfo, // { distanceKm, lieuDepart, lieuDestination, fournisseur }
+      conditionsAffichee, // bool: conditions de remboursement affichées
     } = req.body;
 
     const userId = req.user.id;
@@ -37,7 +44,12 @@ const createOrder = async (req, res) => {
       paymentMethod,
       deliveryAddress,
       deliveryNote,
-      status: paymentMethod === 'cash' ? 'pending' : 'paid'
+      status: paymentMethod === 'cash' ? 'pending' : 'paid',
+      isDeliveryRequired: !!isDeliveryRequired,
+      conditionsRemboursement: {
+        affichee: !!conditionsAffichee,
+        dateAffichage: conditionsAffichee ? new Date() : null,
+      },
     });
 
     await order.save();
@@ -48,14 +60,99 @@ const createOrder = async (req, res) => {
     order.estimatedDelivery = estimatedDelivery;
     await order.save();
 
+    let deliveryCreated = null;
+
+    // Si livraison requise, créer une Delivery liée
+    if (order.isDeliveryRequired) {
+      const mappedPieces = (items || []).map((it) => ({
+        articleId: it.articleId,
+        titre: it.title,
+        quantite: it.quantity,
+        prix: it.totalPrice,
+      }));
+
+      const info = deliveryInfo || {};
+      let fournisseur = info.fournisseur;
+      if (!fournisseur?.userId && items?.length > 0 && items[0].articleId) {
+        const firstArt = await Article.findById(items[0].articleId).select('vendeur').lean();
+        if (firstArt?.vendeur) {
+          const v = await User.findById(firstArt.vendeur).select('nom prenoms entreprise adresse telephone').lean();
+          if (v) {
+            fournisseur = {
+              userId: v._id,
+              nom: [v.nom, v.prenoms].filter(Boolean).join(' '),
+              entreprise: v.entreprise,
+              adresse: v.adresse,
+              telephone: v.telephone,
+            };
+          }
+        }
+      }
+
+      deliveryCreated = await Delivery.create({
+        orderId: order._id,
+        acheteur: order.userId,
+        statut: 'commandé',
+        distanceKm: info.distanceKm,
+        lieuDepart: info.lieuDepart || {
+          nom: fournisseur?.nom || 'Fournisseur',
+          adresse: fournisseur?.adresse,
+          latitude: info?.lieuDepart?.latitude,
+          longitude: info?.lieuDepart?.longitude,
+          telephone: fournisseur?.telephone,
+        },
+        lieuDestination: info.lieuDestination || {
+          nom: 'Acheteur',
+          adresse: deliveryAddress,
+        },
+        pieces: mappedPieces,
+        fournisseur: fournisseur || info.fournisseur,
+        fraisLivraison: deliveryFee ?? 0,
+        fraisColis: subtotal ?? 0,
+        totalCommande: total ?? 0,
+      });
+
+      order.deliveryId = deliveryCreated._id;
+      order.status = 'commandé';
+      await order.save();
+
+      // Notifications : admin + livreur (à la commande)
+      try {
+        const admins = await User.find({
+          role: { $in: ['admin', 'superAdmin', 'principal', 'gestionnaire', 'responsablePaiement'] },
+        }).select('_id');
+        for (const a of admins) {
+          await notificationController.createDeliveryNotification(
+            a._id,
+            'system',
+            deliveryCreated._id,
+            'created'
+          );
+        }
+        const livreurs = await User.find({ role: 'livreur', isOnline: true }).select('_id');
+        for (const liv of livreurs) {
+          await notificationController.createDeliveryNotification(
+            liv._id,
+            'system',
+            deliveryCreated._id,
+            'created'
+          );
+        }
+      } catch (e) {
+        console.error('Erreur notif createOrder+delivery:', e.message);
+      }
+    }
+
     res.status(201).json({
       message: 'Commande créée avec succès',
       order: {
         id: order._id,
         status: order.status,
         total: order.total,
-        estimatedDelivery: order.estimatedDelivery
-      }
+        estimatedDelivery: order.estimatedDelivery,
+        deliveryId: order.deliveryId || null,
+      },
+      delivery: deliveryCreated,
     });
 
   } catch (error) {
@@ -123,7 +220,21 @@ const updateOrderStatus = async (req, res) => {
     const { id } = req.params;
     const { status, trackingNumber } = req.body;
 
-    const validStatuses = ['pending', 'paid', 'processing', 'shipped', 'delivered', 'cancelled'];
+    const validStatuses = [
+      'pending',
+      'paid',
+      'processing',
+      'shipped',
+      'delivered',
+      'cancelled',
+      // statuts liés aux livraisons
+      'commandé',
+      'assigné',
+      'en_cours',
+      'livré',
+      'refusé',
+      'retour',
+    ];
     if (!validStatuses.includes(status)) {
       return res.status(400).json({ message: 'Statut invalide' });
     }

@@ -1,5 +1,15 @@
 const User = require('../models/User');
+const Delivery = require('../models/Delivery');
+const LivreurBalance = require('../models/LivreurBalance');
 const admin = require('firebase-admin');
+
+// Helpers
+const getLivreurFromReq = async (req) => {
+  const uid = req.user?.uid || req.user?.id;
+  if (!uid) return null;
+  const user = await User.findOne({ uid });
+  return user && user.role === 'livreur' ? user : null;
+};
 
 // Toggle statut en ligne/hors ligne
 exports.toggleStatus = async (req, res) => {
@@ -54,22 +64,35 @@ exports.getStatus = async (req, res) => {
 // Mettre à jour la localisation GPS
 exports.updateLocation = async (req, res) => {
   try {
-    const userId = req.user.uid;
-    const { latitude, longitude, timestamp } = req.body;
-
-    const user = await User.findOne({ uid: userId });
-    if (!user || user.role !== 'livreur') {
-      return res.status(404).json({ message: 'Livreur non trouvé' });
+    const user = await getLivreurFromReq(req);
+    if (!user) {
+      return res.status(404).json({ message: 'Livreur non trouvé ou rôle invalide' });
     }
 
-    // Mettre à jour la localisation dans le modèle User
-    // Note: Vous devrez peut-être ajouter un champ 'location' au modèle User
-    // ou créer un modèle séparé pour les positions GPS
+    const { latitude, longitude, address, deliveryId } = req.body;
+    if (latitude == null || longitude == null) {
+      return res.status(400).json({ message: 'latitude et longitude requis' });
+    }
+
+    // Mettre à jour le lastSeen
     user.lastSeen = new Date();
     await user.save();
 
-    // Ici, vous pouvez aussi stocker la position dans une collection séparée
-    // pour l'historique des positions
+    // Si deliveryId fourni, pousser la localisation dans la livraison active
+    if (deliveryId) {
+      const delivery = await Delivery.findById(deliveryId);
+      if (delivery && String(delivery.livreur) === String(user._id)) {
+        const location = {
+          latitude,
+          longitude,
+          timestamp: new Date(),
+          address,
+        };
+        delivery.currentLocation = location;
+        delivery.locationHistory.push(location);
+        await delivery.save();
+      }
+    }
 
     res.json({
       success: true,
@@ -84,15 +107,19 @@ exports.updateLocation = async (req, res) => {
 // Récupérer les livraisons en attente
 exports.getPendingDeliveries = async (req, res) => {
   try {
-    const userId = req.user.uid;
-    
-    // TODO: Implémenter la logique pour récupérer les livraisons en attente
-    // Cela dépendra de votre modèle de données pour les livraisons
-    // Pour l'instant, on retourne une liste vide
-    
+    const user = await getLivreurFromReq(req);
+    if (!user) {
+      return res.status(404).json({ message: 'Livreur non trouvé ou rôle invalide' });
+    }
+
+    const deliveries = await Delivery.find({
+      statut: 'commandé',
+      livreur: null,
+    }).sort({ dateCommande: -1 });
+
     res.json({
-      deliveries: [],
-      message: 'Aucune livraison en attente',
+      deliveries,
+      message: deliveries.length ? 'Livraisons disponibles' : 'Aucune livraison en attente',
     });
   } catch (error) {
     console.error('Erreur récupération livraisons en attente:', error);
@@ -103,15 +130,19 @@ exports.getPendingDeliveries = async (req, res) => {
 // Récupérer les livraisons actives
 exports.getActiveDeliveries = async (req, res) => {
   try {
-    const userId = req.user.uid;
-    
-    // TODO: Implémenter la logique pour récupérer les livraisons actives
-    // Cela dépendra de votre modèle de données pour les livraisons
-    // Pour l'instant, on retourne une liste vide
-    
+    const user = await getLivreurFromReq(req);
+    if (!user) {
+      return res.status(404).json({ message: 'Livreur non trouvé ou rôle invalide' });
+    }
+
+    const deliveries = await Delivery.find({
+      livreur: user._id,
+      statut: { $in: ['assigné', 'en_cours'] },
+    }).sort({ updatedAt: -1 });
+
     res.json({
-      deliveries: [],
-      message: 'Aucune livraison active',
+      deliveries,
+      message: deliveries.length ? 'Livraisons actives' : 'Aucune livraison active',
     });
   } catch (error) {
     console.error('Erreur récupération livraisons actives:', error);
@@ -122,16 +153,30 @@ exports.getActiveDeliveries = async (req, res) => {
 // Accepter une livraison
 exports.acceptDelivery = async (req, res) => {
   try {
-    const userId = req.user.uid;
-    const { id } = req.params;
+    const user = await getLivreurFromReq(req);
+    if (!user) {
+      return res.status(404).json({ message: 'Livreur non trouvé ou rôle invalide' });
+    }
 
-    // TODO: Implémenter la logique pour accepter une livraison
-    // Cela dépendra de votre modèle de données pour les livraisons
-    
+    const { id } = req.params;
+    const delivery = await Delivery.findOne({
+      _id: id,
+      statut: 'commandé',
+      livreur: null,
+    });
+    if (!delivery) {
+      return res.status(404).json({ message: 'Livraison non disponible' });
+    }
+
+    delivery.livreur = user._id;
+    delivery.statut = 'assigné';
+    delivery.dateAcceptation = new Date();
+    await delivery.save();
+
     res.json({
       success: true,
       message: 'Livraison acceptée avec succès',
-      deliveryId: id,
+      delivery,
     });
   } catch (error) {
     console.error('Erreur acceptation livraison:', error);
@@ -142,16 +187,49 @@ exports.acceptDelivery = async (req, res) => {
 // Compléter une livraison
 exports.completeDelivery = async (req, res) => {
   try {
-    const userId = req.user.uid;
+    const user = await getLivreurFromReq(req);
+    if (!user) {
+      return res.status(404).json({ message: 'Livreur non trouvé ou rôle invalide' });
+    }
     const { id } = req.params;
 
-    // TODO: Implémenter la logique pour compléter une livraison
-    // Cela dépendra de votre modèle de données pour les livraisons
-    
+    const delivery = await Delivery.findById(id);
+    if (!delivery) return res.status(404).json({ message: 'Livraison introuvable' });
+    if (String(delivery.livreur) !== String(user._id)) {
+      return res.status(403).json({ message: 'Vous n’êtes pas assigné à cette livraison' });
+    }
+
+    delivery.statut = 'livré';
+    delivery.colisLivre = true;
+    delivery.dateLivraison = new Date();
+    if (!delivery.gainLivreur || delivery.gainLivreur <= 0) {
+      delivery.gainLivreur = delivery.fraisLivraison || 0;
+    }
+    await delivery.save();
+
+    // Crédite la balance du livreur
+    const balance = await LivreurBalance.findOneAndUpdate(
+      { livreur: user._id },
+      { $setOnInsert: { livreur: user._id } },
+      { upsert: true, new: true }
+    );
+    balance.balance = (balance.balance || 0) + delivery.gainLivreur;
+    balance.totalGains = (balance.totalGains || 0) + delivery.gainLivreur;
+    balance.nombreLivraisons = (balance.nombreLivraisons || 0) + 1;
+    balance.nombreLivraisonsReussies = (balance.nombreLivraisonsReussies || 0) + 1;
+    balance.transactions.push({
+      type: 'gain',
+      montant: delivery.gainLivreur,
+      deliveryId: delivery._id,
+      description: `Livraison ${delivery._id} (livré)`,
+      statut: 'valide',
+    });
+    await balance.save();
+
     res.json({
       success: true,
       message: 'Livraison complétée avec succès',
-      deliveryId: id,
+      delivery,
     });
   } catch (error) {
     console.error('Erreur complétion livraison:', error);
@@ -162,14 +240,19 @@ exports.completeDelivery = async (req, res) => {
 // Récupérer l'historique des livraisons
 exports.getDeliveryHistory = async (req, res) => {
   try {
-    const userId = req.user.uid;
-    
-    // TODO: Implémenter la logique pour récupérer l'historique
-    // Cela dépendra de votre modèle de données pour les livraisons
-    
+    const user = await getLivreurFromReq(req);
+    if (!user) {
+      return res.status(404).json({ message: 'Livreur non trouvé ou rôle invalide' });
+    }
+
+    const deliveries = await Delivery.find({
+      livreur: user._id,
+      statut: { $in: ['livré', 'refusé', 'annulé'] },
+    }).sort({ updatedAt: -1 });
+
     res.json({
-      deliveries: [],
-      message: 'Aucun historique disponible',
+      deliveries,
+      message: deliveries.length ? 'Historique des livraisons' : 'Aucun historique disponible',
     });
   } catch (error) {
     console.error('Erreur récupération historique:', error);

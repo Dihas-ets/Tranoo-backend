@@ -26,7 +26,8 @@ exports.register = async (req, res) => {
       typeAdmin,
       statutContrat,
       password,
-      referralCode // Code de parrainage optionnel
+      referralCode, // Code de parrainage optionnel
+      vehicule // Objet véhicule (livreur/chauffeur)
     } = req.body;
 
     // Cas spécial : création d'admin ou agent commercial via dashboard (avec mot de passe)
@@ -98,6 +99,16 @@ exports.register = async (req, res) => {
         ville,
         photo,
         typeAdmin,
+        // Ajouter les données véhicule si présentes (livreur/chauffeur)
+        vehicule: vehicule && typeof vehicule === 'object' ? {
+          immatriculation: vehicule.immatriculation || null,
+          type: vehicule.type || null,
+          marque: vehicule.marque || null,
+          modele: vehicule.modele || null,
+          annee: vehicule.annee ? parseInt(vehicule.annee) : null,
+          couleur: vehicule.couleur || null,
+          urlPhoto: vehicule.urlPhoto || null,
+        } : undefined,
         statutContrat,
         password: hashedPassword,
         statut: 'actif',
@@ -204,6 +215,16 @@ exports.register = async (req, res) => {
       statutContrat,
       statut: 'actif',
       dateInscription: new Date(),
+      // Ajouter les données véhicule si présentes (livreur/chauffeur)
+      vehicule: vehicule && typeof vehicule === 'object' ? {
+        immatriculation: vehicule.immatriculation || null,
+        type: vehicule.type || null,
+        marque: vehicule.marque || null,
+        modele: vehicule.modele || null,
+        annee: vehicule.annee ? parseInt(vehicule.annee) : null,
+        couleur: vehicule.couleur || null,
+        urlPhoto: vehicule.urlPhoto || null,
+      } : undefined,
     });
 
     console.log('[REGISTER] Sauvegarde initiale dans MongoDB...');
