@@ -8,6 +8,15 @@ const chatRoomSchema = new mongoose.Schema({
   ],
   // Article concerné par la discussion (optionnel mais recommandé)
   article: { type: mongoose.Schema.Types.ObjectId, ref: 'Article' },
+
+  // Contexte non-article (ex: Tricycle)
+  contextType: {
+    type: String,
+    enum: ['article', 'tricycle'],
+    default: 'article',
+  },
+  contextId: { type: mongoose.Schema.Types.ObjectId, default: null },
+
   // Date de création de la room
   createdAt: { type: Date, default: Date.now }
 });

@@ -44,7 +44,7 @@ const createOrder = async (req, res) => {
       paymentMethod,
       deliveryAddress,
       deliveryNote,
-      status: paymentMethod === 'cash' ? 'pending' : 'paid',
+      status: 'pending', // Toujours 'pending' car le paiement en ligne se fait après réception du colis
       isDeliveryRequired: !!isDeliveryRequired,
       conditionsRemboursement: {
         affichee: !!conditionsAffichee,

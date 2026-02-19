@@ -105,10 +105,33 @@ const userSchema = new mongoose.Schema({
     }
   },
   // Attribution du tarif de parrainage (pour agents commerciaux)
-  assignedReferralTariff: { type: mongoose.Schema.Types.ObjectId, ref: 'ReferralTariff', default: null }
+  assignedReferralTariff: { type: mongoose.Schema.Types.ObjectId, ref: 'ReferralTariff', default: null },
+
+  // ==========================
+  // GEOLOCALISATION (Tricycle / Tracking)
+  // ==========================
+  // Format GeoJSON Point: [longitude, latitude]
+  location: {
+    type: {
+      type: String,
+      enum: ['Point'],
+      default: 'Point',
+    },
+    coordinates: { type: [Number], default: undefined },
+  },
+  lastLocationAt: { type: Date, default: null },
+
+  // Statut de disponibilité (principalement pour role=chauffeur)
+  availabilityStatus: {
+    type: String,
+    enum: ['available', 'busy', 'offline'],
+    default: 'offline',
+  },
 });
 
 // Index utile sur le téléphone pour OTP
 userSchema.index({ telephone: 1 });
+// Index géospatial (tricycle / tracking)
+userSchema.index({ location: '2dsphere' });
 
 module.exports = mongoose.model('User', userSchema); 

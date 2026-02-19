@@ -95,6 +95,20 @@ io.on('connection', (socket) => {
 
       socket.userId = userId;
 
+      // IMPORTANT: compatibilité MongoDB _id
+      // Certains flux (ex: chatController.sendMessage) utilisent l'_id Mongo comme clé
+      try {
+        const User = require('./models/User');
+        const userDoc = await User.findOne({ uid: userId }).select('_id');
+        if (userDoc && userDoc._id) {
+          const mongoId = userDoc._id.toString();
+          userSockets.set(mongoId, socket.id);
+          socket.mongoId = mongoId;
+        }
+      } catch (e) {
+        console.warn('[Socket.io] Liaison mongoId échouée:', e.message);
+      }
+
       
 
       // Mettre à jour le statut en ligne
@@ -198,6 +212,11 @@ io.on('connection', (socket) => {
     if (socket.userId) {
 
       userSockets.delete(socket.userId);
+
+      // Supprimer aussi le mapping mongoId si présent
+      if (socket.mongoId) {
+        userSockets.delete(socket.mongoId);
+      }
 
       
 
@@ -360,6 +379,14 @@ try {
   console.warn('Push OTP routes non chargées:', e.message);
 }
 
+// Routes géographiques Bénin (départements/communes/villes/quartiers)
+try {
+  const geoBeninRoutes = require('./routes/geoBenin');
+  app.use('/api/geo/benin', geoBeninRoutes);
+} catch (e) {
+  console.warn('Geo Benin routes non chargées:', e.message);
+}
+
 
 
 // Wallet routes (dynamique)
@@ -468,6 +495,22 @@ try {
   console.warn('Delivery routes non chargées:', e.message);
 }
 
+// Delivery zones routes
+try {
+  const deliveryZoneRoutes = require('./routes/deliveryZone');
+  app.use('/api/delivery-zones', deliveryZoneRoutes);
+} catch (e) {
+  console.warn('Delivery zones routes non chargées:', e.message);
+}
+
+// Tricycle routes
+try {
+  const tricycleRoutes = require('./routes/tricycle');
+  app.use('/api/tricycles', tricycleRoutes);
+} catch (e) {
+  console.warn('Tricycle routes non chargées:', e.message);
+}
+
 // Settings routes
 try {
   const settingsRoutes = require('./routes/settings');
@@ -510,6 +553,14 @@ server.listen(PORT, () => {
     startCronJobs();
   } catch (e) {
     console.warn('Tâches automatiques publicités non démarrées:', e.message);
+  }
+
+  // Démarrer le worker de réoffre des livraisons (toutes les 60s)
+  try {
+    const deliveryController = require('./controllers/deliveryController');
+    deliveryController.startDeliveryOfferWorker();
+  } catch (e) {
+    console.warn('Worker réoffre livraisons non démarré:', e.message);
   }
 
 });

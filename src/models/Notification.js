@@ -30,6 +30,7 @@ const notificationSchema = new mongoose.Schema({
       'general',
       'verification',
       'delivery', // notifications liées aux livraisons
+      'tricycle', // notifications liées aux contacts tricycle
     ],
     default: 'general'
   },
@@ -43,7 +44,7 @@ const notificationSchema = new mongoose.Schema({
   },
   relatedModel: {
     type: String,
-    enum: ['ChatRoom', 'Publicite', 'Article', 'User', 'Achat', 'Delivery']
+    enum: ['ChatRoom', 'Publicite', 'Article', 'User', 'Achat', 'Delivery', 'TricycleContact']
   },
   // Nouveaux champs pour les notifications de vérification
   actions: [{

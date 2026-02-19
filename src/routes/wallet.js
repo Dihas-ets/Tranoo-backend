@@ -4,6 +4,7 @@ const walletController = require('../controllers/walletController');
 
 router.get('/me', walletController.getMyWallet);
 router.get('/me/transactions', walletController.getMyTransactions);
+router.get('/me/stats', walletController.getMyWalletStats);
 
 module.exports = router;
 

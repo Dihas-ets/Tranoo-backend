@@ -5,7 +5,16 @@ const admin = require('firebase-admin');
 const { sendMail, buildVerificationEmailHtml } = require('../utils/emailService');
 
 // Créer une notification générique
-exports.createNotification = async (recipientId, senderId, title, message, type = 'general', relatedId = null, relatedModel = null) => {
+exports.createNotification = async (
+  recipientId,
+  senderId,
+  title,
+  message,
+  type = 'general',
+  relatedId = null,
+  relatedModel = null,
+  extraData = {}
+) => {
   try {
     const notification = new Notification({
       recipient: recipientId,
@@ -33,7 +42,8 @@ exports.createNotification = async (recipientId, senderId, title, message, type 
             type: type,
             notificationId: notification._id.toString(),
             relatedId: relatedId ? relatedId.toString() : '',
-            relatedModel: relatedModel || ''
+            relatedModel: relatedModel || '',
+            ...(extraData && typeof extraData === 'object' ? extraData : {})
           }
         });
         console.log(`[NOTIFICATION] Push envoyée à ${recipient.email}`);
@@ -50,7 +60,7 @@ exports.createNotification = async (recipientId, senderId, title, message, type 
 };
 
 // Créer une notification liée à une livraison
-// type d'événement peut être: 'created', 'assigned', 'picked_up', 'delivered', 'refused', 'return'
+// type d'événement peut être: 'created', 'assigned', 'picked_up', 'arrived', 'delivered', 'refused', 'return'
 exports.createDeliveryNotification = async (recipientId, senderId, deliveryId, eventType, _extra = {}) => {
   try {
     let title = 'Mise à jour livraison';
@@ -68,6 +78,10 @@ exports.createDeliveryNotification = async (recipientId, senderId, deliveryId, e
       case 'picked_up':
         title = 'Colis récupéré';
         message = 'Le colis a été récupéré par le livreur.';
+        break;
+      case 'arrived':
+        title = 'Livreur arrivé';
+        message = 'Votre livreur est arrivé. Choisissez de payer ou de retourner le colis.';
         break;
       case 'delivered':
         title = 'Colis livré';
@@ -92,7 +106,11 @@ exports.createDeliveryNotification = async (recipientId, senderId, deliveryId, e
       message,
       'delivery',
       deliveryId,
-      'Delivery'
+      'Delivery',
+      {
+        eventType: eventType,
+        ...(typeof _extra === 'object' && _extra ? _extra : {})
+      }
     );
   } catch (error) {
     console.error('[DELIVERY NOTIF] Erreur création:', error);

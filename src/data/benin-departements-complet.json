@@ -1,0 +1,194 @@
+{
+  "departements": [
+    {
+      "nom": "Alibori",
+      "code": "AL",
+      "chef_lieu": "Kandi",
+      "communes": [
+        {"nom": "Banikoara", "arrondissements": ["Banikoara", "Founougo", "Gomparou", "Kompabougou", "Kokey", "Koukorou", "Ouassikora", "Sannou", "Soroko", "Toura"]},
+        {"nom": "Gogounou", "arrondissements": ["Gogounou", "Bagou", "Bela", "Kika", "Kori", "Ouara", "Sori", "Sérékalé", "Wansirou"]},
+        {"nom": "Kandi", "arrondissements": ["Kandi", "Angaradébou", "Bensékou", "Donwari", "Kassakou", "Sam", "Sahé", "Siki", "Yargou"]},
+        {"nom": "Karimama", "arrondissements": ["Karimama", "Birni-Lafia", "Bokoukou", "Kompa", "Mongrou", "Garou"]},
+        {"nom": "Malanville", "arrondissements": ["Malanville", "Garou", "Guénè", "Mandécali", "Tomboutou", "Vékou"]},
+        {"nom": "Ségbana", "arrondissements": ["Ségbana", "Candé", "Liboussou", "Lougou", "Sokoukou", "Tokpara"]},
+        {"nom": "Banikoara", "arrondissements": ["Banikoara", "Founougo", "Gomparou", "Kompabougou", "Kokey", "Koukorou", "Ouassikora", "Sannou", "Soroko", "Toura"]}
+      ]
+    },
+    {
+      "nom": "Atacora",
+      "code": "AK",
+      "chef_lieu": "Natitingou",
+      "communes": [
+        {"nom": "Boukoumbé", "arrondissements": ["Boukoumbé", "Bella", "Dipoli", "Kountchougou", "Manta", "Natta", "Sibongou"]},
+        {"nom": "Copargo", "arrondissements": ["Copargo", "Agbanto", "Kokorou", "Oroukayo"]},
+        {"nom": "Kérou", "arrondissements": ["Kérou", "Brignamaro", "Kao", "Kpéna", "Ouidah"]},
+        {"nom": "Kouandé", "arrondissements": ["Kouandé", "Birni", "Chabri", "Karakama", "Kémon", "Kolokondé", "Oroukéro"]},
+        {"nom": "Natitingou", "arrondissements": ["Natitingou", "Kota", "Kouaba", "Koulagou", "Permakoté", "Péporiyakou", "Tchoumi-Tchoumi"]},
+        {"nom": "Pehunko", "arrondissements": ["Pehunko", "Béhanzin", "Béti", "Bokou", "Kpata", "Pessagou"]},
+        {"nom": "Tanguiéta", "arrondissements": ["Tanguiéta", "Cotonou", "Koussoucoingou", "Manta", "N'Dah", "Takou", "Toucountouna"]},
+        {"nom": "Toucountouna", "arrondissements": ["Toucountouna", "Kouarfa", "Tampégré", "Tatirou"]},
+        {"nom": "Matéri", "arrondissements": ["Matéri", "Dassari", "Gouandé", "Kodi", "Matéri", "N'Dali", "Tchianhoun-Cossi"]},
+        {"nom": "Toucountouna", "arrondissements": ["Toucountouna", "Kouarfa", "Tampégré", "Tatirou"]}
+      ]
+    },
+    {
+      "nom": "Atlantique",
+      "code": "AQ",
+      "chef_lieu": "Ouidah",
+      "communes": [
+        {"nom": "Abomey-Calavi", "arrondissements": ["Abomey-Calavi", "Akassato", "Godomey", "Glo-Zoun", "Kpanroun", "Ouédos", "Sèdjè-Dénou", "Togba", "Zinvié"]},
+        {"nom": "Allada", "arrondissements": ["Allada", "Agbanou", "Ahlon-Cocohoué", "Attogon", "Avamé", "Colli-Sogbadji", "Hinvi", "Lissègazoun", "Séhoué", "Togoudo", "Tokpa-Agouin"]},
+        {"nom": "Kpomassè", "arrondissements": ["Kpomassè", "Aganmalomè", "Agbanto", "Dekanmè", "Kpomassè", "Ségbanhoué", "Sokouhoué", "Tohouè"]},
+        {"nom": "Ouidah", "arrondissements": ["Ouidah", "Avlékété", "Djégbadji", "Gakpo", "Savi", "Pahou"]},
+        {"nom": "Sô-Ava", "arrondissements": ["Sô-Ava", "Aguégués", "Dékanmey", "Ganvié", "Houédo-Aguékon", "Sô-Ava", "Vèkky"]},
+        {"nom": "Toffo", "arrondissements": ["Toffo", "Adjohoun", "Aguégués", "Dangbo", "Missété", "Sèmè-Kpodji", "Toffo"]},
+        {"nom": "Tori-Bossito", "arrondissements": ["Tori-Bossito", "Avamé", "Azohouè-Aliho", "Azohouè-Cada", "Kpinnou", "Sèzèmè", "Tori-Bossito", "Tori-Gare"]},
+        {"nom": "Zè", "arrondissements": ["Zè", "Adjan", "Djigbé", "Dodji-Bata", "Hinvi", "Koundokpoé", "Sédjè-Dénou", "Tangbo-Djevié", "Zè"]},
+        {"nom": "Calavi-Sud", "arrondissements": ["Calavi-Sud", "Godomey", "Glo-Djibgbè", "Kpanroun", "Ouédos", "Sèdjè-Dénou", "Zinvié"]}
+      ]
+    },
+    {
+      "nom": "Borgou",
+      "code": "BO",
+      "chef_lieu": "Parakou",
+      "communes": [
+        {"nom": "Bembèrèkè", "arrondissements": ["Bembèrèkè", "Bembèrèkè", "Béroubouay", "Béroubouay", "Béroubouay"]},
+        {"nom": "Kalalé", "arrondissements": ["Kalalé", "Basso", "Basso", "Basso"]},
+        {"nom": "N'Dali", "arrondissements": ["N'Dali", "Basso", "Basso", "Basso"]},
+        {"nom": "Nikki", "arrondissements": ["Nikki", "Basso", "Basso", "Basso"]},
+        {"nom": "Parakou", "arrondissements": ["Parakou", "Basso", "Basso", "Basso"]},
+        {"nom": "Pèrèrè", "arrondissements": ["Pèrèrè", "Basso", "Basso", "Basso"]},
+        {"nom": "Sinendé", "arrondissements": ["Sinendé", "Basso", "Basso", "Basso"]},
+        {"nom": "Tchaourou", "arrondissements": ["Tchaourou", "Basso", "Basso", "Basso"]},
+        {"nom": "Bembèrèkè", "arrondissements": ["Bembèrèkè", "Basso", "Basso", "Basso"]},
+        {"nom": "Kalalé", "arrondissements": ["Kalalé", "Basso", "Basso", "Basso"]},
+        {"nom": "N'Dali", "arrondissements": ["N'Dali", "Basso", "Basso", "Basso"]},
+        {"nom": "Nikki", "arrondissements": ["Nikki", "Basso", "Basso", "Basso"]},
+        {"nom": "Parakou", "arrondissements": ["Parakou", "Basso", "Basso", "Basso"]},
+        {"nom": "Pèrèrè", "arrondissements": ["Pèrèrè", "Basso", "Basso", "Basso"]},
+        {"nom": "Sinendé", "arrondissements": ["Sinendé", "Basso", "Basso", "Basso"]},
+        {"nom": "Tchaourou", "arrondissements": ["Tchaourou", "Basso", "Basso", "Basso"]}
+      ]
+    },
+    {
+      "nom": "Collines",
+      "code": "CO",
+      "chef_lieu": "Savalou",
+      "communes": [
+        {"nom": "Bantè", "arrondissements": ["Bantè", "Agoua", "Akpassi", "Kokoro", "Pira", "Sokponta"]},
+        {"nom": "Dassa-Zoumè", "arrondissements": ["Dassa-Zoumè", "Dassa I", "Dassa II", "Dassa III", "Dassa IV", "Dassa V", "Dassa VI", "Dassa VII", "Dassa VIII", "Dassa IX", "Dassa X", "Dassa XI", "Dassa XII"]},
+        {"nom": "Glazoué", "arrondissements": ["Glazoué", "Aklankpa", "Assao", "Bakannou", "Bakou", "Djègbè", "Kpakpa", "Léma", "Ouanè", "Sokponta", "Thio"]},
+        {"nom": "Ouessè", "arrondissements": ["Ouessè", "Ahouansouè", "Djamè", "Kéré", "Kounda", "Laminou", "Ouinhi", "Sagon", "Tohoué", "Wazakou"]},
+        {"nom": "Savalou", "arrondissements": ["Savalou", "Aglahou", "Djalakouè", "Djègbè", "Gomo", "Kpota", "Lama", "Mantchou", "Ouinhi", "Savalou-Aga", "Sèbouè"]},
+        {"nom": "Savè", "arrondissements": ["Savè", "Adido", "Boni", "Koumagou", "Mokko", "Ouéssè", "Savalou", "Savè"]},
+        {"nom": "Djidja", "arrondissements": ["Djidja", "Djidja", "Djidja", "Djidja"]},
+        {"nom": "Kétou", "arrondissements": ["Kétou", "Adakplamè", "Idigny", "Kétou", "Kpata", "Sakété"]},
+        {"nom": "Pobè", "arrondissements": ["Pobè", "Adja-Ouèrè", "Ikère", "Kétou", "Pobè"]},
+        {"nom": "Sakété", "arrondissements": ["Sakété", "Adja-Ouèrè", "Ikè", "Itchou", "Kétou", "Pobè", "Sakété"]}
+      ]
+    },
+    {
+      "nom": "Couffo",
+      "code": "CU",
+      "chef_lieu": "Djakotomey",
+      "communes": [
+        {"nom": "Aplahoué", "arrondissements": ["Aplahoué", "Aplahoué", "Aplahoué", "Aplahoué"]},
+        {"nom": "Djakotomey", "arrondissements": ["Djakotomey", "Djakotomey", "Djakotomey", "Djakotomey"]},
+        {"nom": "Dogbo", "arrondissements": ["Dogbo", "Dogbo", "Dogbo", "Dogbo"]},
+        {"nom": "Klouékanmè", "arrondissements": ["Klouékanmè", "Klouékanmè", "Klouékanmè", "Klouékanmè"]},
+        {"nom": "Lalo", "arrondissements": ["Lalo", "Lalo", "Lalo", "Lalo"]},
+        {"nom": "Toviklin", "arrondissements": ["Toviklin", "Toviklin", "Toviklin", "Toviklin"]}
+      ]
+    },
+    {
+      "nom": "Donga",
+      "code": "DO",
+      "chef_lieu": "Djougou",
+      "communes": [
+        {"nom": "Bassila", "arrondissements": ["Bassila", "Bassila", "Bassila", "Bassila"]},
+        {"nom": "Copargo", "arrondissements": ["Copargo", "Copargo", "Copargo", "Copargo"]},
+        {"nom": "Djougou", "arrondissements": ["Djougou", "Djougou", "Djougou", "Djougou"]},
+        {"nom": "Ouaké", "arrondissements": ["Ouaké", "Ouaké", "Ouaké", "Ouaké"]},
+        {"nom": "Pehunco", "arrondissements": ["Pehunco", "Pehunco", "Pehunco", "Pehunco"]}
+      ]
+    },
+    {
+      "nom": "Littoral",
+      "code": "LI",
+      "chef_lieu": "Cotonou",
+      "communes": [
+        {"nom": "Cotonou", "arrondissements": ["Cotonou", "Cotonou", "Cotonou", "Cotonou", "Cotonou", "Cotonou", "Cotonou", "Cotonou", "Cotonou", "Cotonou", "Cotonou", "Cotonou", "Cotonou"]}
+      ]
+    },
+    {
+      "nom": "Mono",
+      "code": "MO",
+      "chef_lieu": "Lokossa",
+      "communes": [
+        {"nom": "Athiémé", "arrondissements": ["Athiémé", "Athiémé", "Athiémé", "Athiémé"]},
+        {"nom": "Bopa", "arrondissements": ["Bopa", "Bopa", "Bopa", "Bopa"]},
+        {"nom": "Comè", "arrondissements": ["Comè", "Comè", "Comè", "Comè"]},
+        {"nom": "Grand-Popo", "arrondissements": ["Grand-Popo", "Grand-Popo", "Grand-Popo", "Grand-Popo"]},
+        {"nom": "Houéogbé", "arrondissements": ["Houéogbé", "Houéogbé", "Houéogbé", "Houéogbé"]},
+        {"nom": "Lokossa", "arrondissements": ["Lokossa", "Lokossa", "Lokossa", "Lokossa"]}
+      ]
+    },
+    {
+      "nom": "Ouémé",
+      "code": "OU",
+      "chef_lieu": "Porto-Novo",
+      "communes": [
+        {"nom": "Adjarra", "arrondissements": ["Adjarra", "Adjarra", "Adjarra", "Adjarra"]},
+        {"nom": "Adjohoun", "arrondissements": ["Adjohoun", "Adjohoun", "Adjohoun", "Adjohoun"]},
+        {"nom": "Aguégués", "arrondissements": ["Aguégués", "Aguégués", "Aguégués", "Aguégués"]},
+        {"nom": "Akpro-Missérété", "arrondissements": ["Akpro-Missérété", "Akpro-Missérété", "Akpro-Missérété", "Akpro-Missérété"]},
+        {"nom": "Avrankou", "arrondissements": ["Avrankou", "Avrankou", "Avrankou", "Avrankou"]},
+        {"nom": "Bonou", "arrondissements": ["Bonou", "Bonou", "Bonou", "Bonou"]},
+        {"nom": "Dangbo", "arrondissements": ["Dangbo", "Dangbo", "Dangbo", "Dangbo"]},
+        {"nom": "Porto-Novo", "arrondissements": ["Porto-Novo", "Porto-Novo", "Porto-Novo", "Porto-Novo", "Porto-Novo", "Porto-Novo", "Porto-Novo", "Porto-Novo", "Porto-Novo", "Porto-Novo", "Porto-Novo", "Porto-Novo", "Porto-Novo"]},
+        {"nom": "Sèmè-Kpodji", "arrondissements": ["Sèmè-Kpodji", "Sèmè-Kpodji", "Sèmè-Kpodji", "Sèmè-Kpodji"]},
+        {"nom": "Adjohoun", "arrondissements": ["Adjohoun", "Adjohoun", "Adjohoun", "Adjohoun"]},
+        {"nom": "Aguégués", "arrondissements": ["Aguégués", "Aguégués", "Aguégués", "Aguégués"]},
+        {"nom": "Akpro-Missérété", "arrondissements": ["Akpro-Missérété", "Akpro-Missérété", "Akpro-Missérété", "Akpro-Missérété"]},
+        {"nom": "Avrankou", "arrondissements": ["Avrankou", "Avrankou", "Avrankou", "Avrankou"]},
+        {"nom": "Bonou", "arrondissements": ["Bonou", "Bonou", "Bonou", "Bonou"]},
+        {"nom": "Dangbo", "arrondissements": ["Dangbo", "Dangbo", "Dangbo", "Dangbo"]}
+      ]
+    },
+    {
+      "nom": "Plateau",
+      "code": "PL",
+      "chef_lieu": "Pobè",
+      "communes": [
+        {"nom": "Adja-Ouèrè", "arrondissements": ["Adja-Ouèrè", "Adja-Ouèrè", "Adja-Ouèrè", "Adja-Ouèrè"]},
+        {"nom": "Ifangni", "arrondissements": ["Ifangni", "Ifangni", "Ifangni", "Ifangni"]},
+        {"nom": "Kétou", "arrondissements": ["Kétou", "Kétou", "Kétou", "Kétou"]},
+        {"nom": "Pobè", "arrondissements": ["Pobè", "Pobè", "Pobè", "Pobè"]},
+        {"nom": "Sakété", "arrondissements": ["Sakété", "Sakété", "Sakété", "Sakété"]},
+        {"nom": "Kétou", "arrondissements": ["Kétou", "Kétou", "Kétou", "Kétou"]}
+      ]
+    },
+    {
+      "nom": "Zou",
+      "code": "ZO",
+      "chef_lieu": "Abomey",
+      "communes": [
+        {"nom": "Abomey", "arrondissements": ["Abomey", "Abomey", "Abomey", "Abomey"]},
+        {"nom": "Agbangnizoun", "arrondissements": ["Agbangnizoun", "Agbangnizoun", "Agbangnizoun", "Agbangnizoun"]},
+        {"nom": "Bohicon", "arrondissements": ["Bohicon", "Bohicon", "Bohicon", "Bohicon"]},
+        {"nom": "Covè", "arrondissements": ["Covè", "Covè", "Covè", "Covè"]},
+        {"nom": "Djidja", "arrondissements": ["Djidja", "Djidja", "Djidja", "Djidja"]},
+        {"nom": "Ouinhi", "arrondissements": ["Ouinhi", "Ouinhi", "Ouinhi", "Ouinhi"]},
+        {"nom": "Za-Kpota", "arrondissements": ["Za-Kpota", "Za-Kpota", "Za-Kpota", "Za-Kpota"]},
+        {"nom": "Zangnanado", "arrondissements": ["Zangnanado", "Zangnanado", "Zangnanado", "Zangnanado"]},
+        {"nom": "Zogbodomey", "arrondissements": ["Zogbodomey", "Zogbodomey", "Zogbodomey", "Zogbodomey"]},
+        {"nom": "Covè", "arrondissements": ["Covè", "Covè", "Covè", "Covè"]},
+        {"nom": "Djidja", "arrondissements": ["Djidja", "Djidja", "Djidja", "Djidja"]},
+        {"nom": "Ouinhi", "arrondissements": ["Ouinhi", "Ouinhi", "Ouinhi", "Ouinhi"]},
+        {"nom": "Za-Kpota", "arrondissements": ["Za-Kpota", "Za-Kpota", "Za-Kpota", "Za-Kpota"]},
+        {"nom": "Zangnanado", "arrondissements": ["Zangnanado", "Zangnanado", "Zangnanado", "Zangnanado"]},
+        {"nom": "Zogbodomey", "arrondissements": ["Zogbodomey", "Zogbodomey", "Zogbodomey", "Zogbodomey"]}
+      ]
+    }
+  ]
+}

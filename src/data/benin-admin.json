@@ -1,0 +1,75 @@
+{
+  "departements": {
+    "Atlantique": {
+      "communes": {
+        "Abomey-Calavi": {
+          "villes": {
+            "Calavi centre": { "quartiers": ["Zogbadjè", "Kpota", "Womey"] },
+            "Godomey": { "quartiers": ["Godomey centre", "Togoudo", "Gbodjè"] },
+            "Akassato": { "quartiers": ["Akassato centre", "Djadjo"] }
+          }
+        },
+        "Allada": {
+          "villes": {
+            "Allada centre": { "quartiers": ["Agbanou", "Missa Houn"] }
+          }
+        },
+        "Ouidah": {
+          "villes": {
+            "Ouidah": { "quartiers": ["Avlékété", "Pahou"] }
+          }
+        }
+      }
+    },
+    "Littoral": {
+      "communes": {
+        "Cotonou": {
+          "villes": {
+            "Fidjrossè": { "quartiers": ["Plage", "Centre", "Kpota"] },
+            "Akpakpa": { "quartiers": ["Midombo", "Cité Vie Nouvelle"] },
+            "Cadjèhoun": { "quartiers": ["Aibatin", "St Jean"] },
+            "Gbedjromédé": { "quartiers": ["Gbedjromédé centre"] }
+          }
+        }
+      }
+    },
+    "Borgou": {
+      "communes": {
+        "Parakou": {
+          "villes": {
+            "Parakou": { "quartiers": ["Zongo", "Albarika", "Guéma"] }
+          }
+        }
+      }
+    },
+    "Ouémé": {
+      "communes": {
+        "Porto-Novo": {
+          "villes": {
+            "Porto-Novo": { "quartiers": ["Adjégounlè", "Azowlissè"] }
+          }
+        },
+        "Sèmè-Kpodji": {
+          "villes": {
+            "Sèmè": { "quartiers": ["Sèmè Kpodji centre"] }
+          }
+        }
+      }
+    },
+    "Zou": {
+      "communes": {
+        "Abomey": {
+          "villes": {
+            "Abomey": { "quartiers": ["Doga", "Houndjro"] }
+          }
+        },
+        "Bohicon": {
+          "villes": {
+            "Bohicon": { "quartiers": ["Agbangnizoun", "Gnidjazoun"] }
+          }
+        }
+      }
+    }
+  }
+}
+

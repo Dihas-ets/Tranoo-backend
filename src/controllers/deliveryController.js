@@ -2,7 +2,23 @@ const Delivery = require('../models/Delivery');
 const Order = require('../models/Order');
 const User = require('../models/User');
 const LivreurBalance = require('../models/LivreurBalance');
+const DeliverySettings = require('../models/DeliverySettings');
 const notificationController = require('./notificationController');
+
+// Haversine distance (km)
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371; // km
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
 
 // Helpers
 const getUserFromReq = async (req) => {
@@ -72,6 +88,15 @@ exports.createDelivery = async (req, res) => {
     const order = await Order.findById(orderId);
     if (!order) return res.status(404).json({ message: 'Commande introuvable' });
 
+    // Récupérer les settings de livraison (tarif/km, rayon, etc.)
+    const settings = await DeliverySettings.getSettings();
+    
+    // Calculer le prix estimé si distanceKm est fourni
+    let prixEstime = null;
+    if (distanceKm != null && distanceKm > 0) {
+      prixEstime = Math.round(distanceKm * settings.pricePerKm);
+    }
+
     const delivery = await Delivery.create({
       orderId,
       acheteur: order.userId,
@@ -81,9 +106,12 @@ exports.createDelivery = async (req, res) => {
       lieuDestination,
       pieces,
       fournisseur,
-      fraisLivraison: fraisLivraison ?? order.deliveryFee ?? 0,
+      fraisLivraison: fraisLivraison ?? prixEstime ?? order.deliveryFee ?? 0,
       fraisColis: fraisColis ?? order.subtotal ?? 0,
       totalCommande: totalCommande ?? order.total ?? 0,
+      prixEstime,
+      notificationRound: 1,
+      lastNotificationAt: new Date(),
     });
 
     await updateOrderStatus(orderId, 'commandé');
@@ -91,7 +119,7 @@ exports.createDelivery = async (req, res) => {
     // Notifications :
     // - Acheteur: nouvelle livraison créée
     // - Admins: nouvelle commande avec livraison
-    // - Livreurs: nouvelle livraison disponible
+    // - Livreurs PROCHES uniquement (géolocalisation)
     try {
       // Acheteur
       await notificationController.createDeliveryNotification(
@@ -114,19 +142,8 @@ exports.createDelivery = async (req, res) => {
         );
       }
 
-      // Livreurs (par défaut tous les livreurs actifs/en ligne)
-      const livreurs = await User.find({
-        role: 'livreur',
-        isOnline: true,
-      }).select('_id');
-      for (const liv of livreurs) {
-        await notificationController.createDeliveryNotification(
-          liv._id,
-          'system',
-          delivery._id,
-          'created'
-        );
-      }
+      // Livreurs PROCHES uniquement (géolocalisation)
+      await notifyNearbyLivreurs(delivery, settings);
     } catch (e) {
       console.error('Erreur notif createDelivery:', e.message);
     }
@@ -300,6 +317,56 @@ exports.notifyPickup = async (req, res) => {
   }
 };
 
+// Notifier arrivée du livreur chez l'acheteur (avant paiement / retour)
+exports.notifyArrival = async (req, res) => {
+  try {
+    const user = await getUserFromReq(req);
+    if (!ensureLivreur(user)) {
+      return res.status(403).json({ message: 'Accès réservé aux livreurs' });
+    }
+
+    const delivery = await Delivery.findById(req.params.id);
+    if (!delivery) return res.status(404).json({ message: 'Livraison introuvable' });
+    if (String(delivery.livreur) !== String(user._id)) {
+      return res.status(403).json({ message: 'Vous n’êtes pas assigné à cette livraison' });
+    }
+
+    // Marquer l'arrivée sans changer forcément le statut (garde en_cours si déjà)
+    delivery.dateArrivee = new Date();
+    if (delivery.statut === 'assigné') {
+      delivery.statut = 'en_cours';
+    }
+    await delivery.save();
+
+    // Mettre à jour la commande (statut en_cours si nécessaire)
+    await updateOrderStatus(delivery.orderId, delivery.statut === 'en_cours' ? 'en_cours' : 'assigné');
+
+    // Notifier l'acheteur (push + DB)
+    try {
+      await notificationController.createDeliveryNotification(
+        delivery.acheteur,
+        user._id,
+        delivery._id,
+        'arrived',
+        {
+          deliveryId: delivery._id.toString(),
+          orderId: delivery.orderId?.toString() || '',
+          totalCommande: String(delivery.totalCommande ?? 0),
+          fraisLivraison: String(delivery.fraisLivraison ?? 0),
+          fraisColis: String(delivery.fraisColis ?? 0),
+        }
+      );
+    } catch (e) {
+      console.error('Erreur notif notifyArrival:', e.message);
+    }
+
+    res.json({ success: true, message: 'Arrivée notifiée', delivery });
+  } catch (error) {
+    console.error('Erreur notifyArrival:', error);
+    res.status(500).json({ message: 'Erreur serveur', error: error.message });
+  }
+};
+
 // Notifier livraison (côté livreur)
 exports.notifyDelivery = async (req, res) => {
   try {
@@ -369,6 +436,66 @@ exports.notifyDelivery = async (req, res) => {
     res.json({ success: true, message: 'Livraison notifiée', delivery });
   } catch (error) {
     console.error('Erreur notifyDelivery:', error);
+    res.status(500).json({ message: 'Erreur serveur', error: error.message });
+  }
+};
+
+// Demande de retour par l'acheteur (avec motif obligatoire)
+exports.requestReturnByAcheteur = async (req, res) => {
+  try {
+    const user = await getUserFromReq(req);
+    if (!user) return res.status(401).json({ message: 'Non authentifié' });
+
+    const { reason } = req.body || {};
+    if (!reason || String(reason).trim().length < 3) {
+      return res.status(400).json({ message: 'Motif de retour requis' });
+    }
+
+    const delivery = await Delivery.findById(req.params.id);
+    if (!delivery) return res.status(404).json({ message: 'Livraison introuvable' });
+
+    // Autoriser uniquement l'acheteur de cette livraison
+    if (String(delivery.acheteur) !== String(user._id)) {
+      return res.status(403).json({ message: 'Accès refusé' });
+    }
+
+    delivery.statut = 'retour';
+    delivery.dateRetour = new Date();
+    delivery.raisonRetour = String(reason).trim();
+    await delivery.save();
+
+    await updateOrderStatus(delivery.orderId, 'retour');
+
+    // Notifier admins + livreur
+    try {
+      const admins = await User.find({
+        role: { $in: ['admin', 'superAdmin', 'principal', 'gestionnaire', 'responsablePaiement'] },
+      }).select('_id');
+      for (const adm of admins) {
+        await notificationController.createDeliveryNotification(
+          adm._id,
+          user._id,
+          delivery._id,
+          'return',
+          { reason: delivery.raisonRetour }
+        );
+      }
+      if (delivery.livreur) {
+        await notificationController.createDeliveryNotification(
+          delivery.livreur,
+          user._id,
+          delivery._id,
+          'return',
+          { reason: delivery.raisonRetour }
+        );
+      }
+    } catch (e) {
+      console.error('Erreur notif requestReturnByAcheteur:', e.message);
+    }
+
+    res.json({ success: true, message: 'Retour signalé', delivery });
+  } catch (error) {
+    console.error('Erreur requestReturnByAcheteur:', error);
     res.status(500).json({ message: 'Erreur serveur', error: error.message });
   }
 };
@@ -606,6 +733,64 @@ exports.updateLocation = async (req, res) => {
   }
 };
 
+// Helper: Notifier les livreurs proches d'une livraison
+async function notifyNearbyLivreurs(delivery, settings) {
+  const departLat = delivery.lieuDepart?.latitude;
+  const departLng = delivery.lieuDepart?.longitude;
+  
+  if (!departLat || !departLng) {
+    console.warn('[DELIVERY] Pas de coordonnées départ pour notifier livreurs proches');
+    return;
+  }
+
+  const searchRadiusMeters = Math.round(settings.searchRadiusKm * 1000);
+  
+  // Trouver les livreurs en ligne avec localisation dans le rayon
+  const livreurs = await User.find({
+    role: 'livreur',
+    isOnline: true,
+    'location.coordinates': { $exists: true, $type: 'array' },
+    location: {
+      $near: {
+        $geometry: { type: 'Point', coordinates: [departLng, departLat] },
+        $maxDistance: searchRadiusMeters,
+      },
+    },
+  }).select('_id location');
+
+  if (livreurs.length === 0) {
+    console.log('[DELIVERY] Aucun livreur proche trouvé pour la livraison', delivery._id);
+    return;
+  }
+
+  // Notifier chaque livreur proche et enregistrer dans livreursNotifies
+  const notifiedIds = [];
+  for (const liv of livreurs) {
+    try {
+      await notificationController.createDeliveryNotification(
+        liv._id,
+        'system',
+        delivery._id,
+        'created'
+      );
+      notifiedIds.push({
+        livreur: liv._id,
+        notifiedAt: new Date(),
+        round: delivery.notificationRound || 1,
+      });
+    } catch (e) {
+      console.error(`[DELIVERY] Erreur notif livreur ${liv._id}:`, e.message);
+    }
+  }
+
+  // Mettre à jour la livraison avec les livreurs notifiés
+  delivery.livreursNotifies = notifiedIds;
+  delivery.lastNotificationAt = new Date();
+  await delivery.save();
+  
+  console.log(`[DELIVERY] ${notifiedIds.length} livreur(s) proche(s) notifié(s) pour livraison ${delivery._id}`);
+}
+
 // Historique des livraisons (livreur ou acheteur)
 exports.getDeliveryHistory = async (req, res) => {
   try {
@@ -626,4 +811,155 @@ exports.getDeliveryHistory = async (req, res) => {
     console.error('Erreur getDeliveryHistory:', error);
     res.status(500).json({ message: 'Erreur serveur', error: error.message });
   }
+};
+
+// Récupérer les settings de livraison
+exports.getDeliverySettings = async (req, res) => {
+  try {
+    const settings = await DeliverySettings.getSettings();
+    res.json({ settings });
+  } catch (error) {
+    console.error('Erreur getDeliverySettings:', error);
+    res.status(500).json({ message: 'Erreur serveur', error: error.message });
+  }
+};
+
+// Modifier le tarif par km (admin uniquement)
+exports.updatePricePerKm = async (req, res) => {
+  try {
+    const user = await getUserFromReq(req);
+    if (!user) return res.status(401).json({ message: 'Non authentifié' });
+    
+    const isAdmin = ['admin', 'superAdmin', 'principal'].includes(user.role);
+    if (!isAdmin) {
+      return res.status(403).json({ message: 'Accès réservé aux administrateurs' });
+    }
+
+    const { pricePerKm } = req.body;
+    if (pricePerKm == null || pricePerKm < 0) {
+      return res.status(400).json({ message: 'pricePerKm invalide (doit être >= 0)' });
+    }
+
+    const settings = await DeliverySettings.getSettings();
+    settings.pricePerKm = pricePerKm;
+    settings.updatedBy = user._id;
+    settings.updatedAt = new Date();
+    await settings.save();
+
+    res.json({ success: true, settings });
+  } catch (error) {
+    console.error('Erreur updatePricePerKm:', error);
+    res.status(500).json({ message: 'Erreur serveur', error: error.message });
+  }
+};
+
+// Calcul des frais de livraison basé sur la distance
+exports.calculateDeliveryFee = async (req, res) => {
+  try {
+    const { supplier_lat, supplier_lng, delivery_lat, delivery_lng } = req.body;
+    
+    if (!supplier_lat || !supplier_lng || !delivery_lat || !delivery_lng) {
+      return res.status(400).json({ 
+        message: 'Coordonnées fournisseur et livraison requises' 
+      });
+    }
+    
+    // Calculer la distance en km
+    const distanceKm = haversineKm(
+      parseFloat(supplier_lat), 
+      parseFloat(supplier_lng), 
+      parseFloat(delivery_lat), 
+      parseFloat(delivery_lng)
+    );
+    
+    // Récupérer les settings de livraison
+    const settings = await DeliverySettings.getSettings();
+    
+    // Calculer les frais de livraison
+    const deliveryFee = Math.round(distanceKm * settings.pricePerKm);
+    
+    res.json({ 
+      success: true,
+      distanceKm: Math.round(distanceKm * 100) / 100, // 2 décimales
+      deliveryFee,
+      pricePerKm: settings.pricePerKm
+    });
+  } catch (error) {
+    console.error('Erreur calculateDeliveryFee:', error);
+    res.status(500).json({ message: 'Erreur serveur', error: error.message });
+  }
+};
+
+// Worker de réoffre des livraisons (toutes les 60s)
+let deliveryOfferWorkerInterval = null;
+
+exports.startDeliveryOfferWorker = () => {
+  if (deliveryOfferWorkerInterval) {
+    console.log('[DELIVERY WORKER] Déjà démarré');
+    return;
+  }
+
+  console.log('⏱️  Worker de réoffre livraisons démarré (60s)');
+  
+  deliveryOfferWorkerInterval = setInterval(async () => {
+    try {
+      const settings = await DeliverySettings.getSettings();
+      const now = new Date();
+      const sixtySecondsAgo = new Date(now.getTime() - settings.notificationDisplayDuration * 1000);
+
+      // Trouver les livraisons non acceptées depuis plus de 60s
+      const pendingDeliveries = await Delivery.find({
+        statut: 'commandé',
+        livreur: null,
+        lastNotificationAt: { $lt: sixtySecondsAgo },
+      }).limit(50); // Limiter pour éviter la surcharge
+
+      for (const delivery of pendingDeliveries) {
+        const departLat = delivery.lieuDepart?.latitude;
+        const departLng = delivery.lieuDepart?.longitude;
+        
+        if (!departLat || !departLng) {
+          console.warn(`[DELIVERY WORKER] Livraison ${delivery._id} sans coordonnées départ`);
+          continue;
+        }
+
+        // Récupérer les IDs des livreurs déjà notifiés dans ce tour
+        const alreadyNotifiedIds = delivery.livreursNotifies
+          .filter(n => n.round === delivery.notificationRound)
+          .map(n => n.livreur.toString());
+
+        // Trouver de nouveaux livreurs proches non encore notifiés dans ce tour
+        const searchRadiusMeters = Math.round(settings.searchRadiusKm * 1000);
+        const newLivreurs = await User.find({
+          role: 'livreur',
+          isOnline: true,
+          _id: { $nin: alreadyNotifiedIds },
+          'location.coordinates': { $exists: true, $type: 'array' },
+          location: {
+            $near: {
+              $geometry: { type: 'Point', coordinates: [departLng, departLat] },
+              $maxDistance: searchRadiusMeters,
+            },
+          },
+        }).select('_id location').limit(10); // Limiter à 10 par tour
+
+        if (newLivreurs.length === 0) {
+          // Aucun nouveau livreur proche: incrémenter le tour et réoffrir aux mêmes
+          delivery.notificationRound = (delivery.notificationRound || 1) + 1;
+          delivery.livreursNotifies = []; // Réinitialiser pour réoffrir aux mêmes
+          await delivery.save();
+          await notifyNearbyLivreurs(delivery, settings);
+        } else {
+          // Notifier les nouveaux livreurs
+          await notifyNearbyLivreurs(delivery, settings);
+        }
+      }
+
+      if (pendingDeliveries.length > 0) {
+        console.log(`[DELIVERY WORKER] ${pendingDeliveries.length} livraison(s) réofferte(s)`);
+      }
+    } catch (error) {
+      console.error('[DELIVERY WORKER] Erreur:', error.message);
+    }
+  }, 60000); // Toutes les 60 secondes
 };

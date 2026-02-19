@@ -23,7 +23,20 @@ const articleSchema = new mongoose.Schema({
   condition: String,   // Condition (Nouveau/Occasion)
   couleur: String,     // Couleur du véhicule
   dedouanement: Boolean, // Dédouanement (true = Oui, false = Non)
-  lieu: String,        // Localisation
+  lieu: String,        // Localisation (ancienne version, garde pour compatibilité)
+  // Informations détaillées sur le fournisseur (pour le parcours livreur)
+  fournisseur: {
+    nom: String,
+    prenom: String,
+    telephone: String,
+    adresseTexte: String, // Adresse lisible (texte libre)
+    departement: String,
+    commune: String,
+    ville: String,
+    quartier: String,
+    latitude: Number,
+    longitude: Number,
+  },
   // Champs spécifiques pièce
   categorie: String,   // Catégorie de pièce (frein, moteur, electricité, etc.)
   typeMoteur: String,  // Type de moteur (Essence, Gazoil, etc.)

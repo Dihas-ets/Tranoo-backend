@@ -1,5 +1,6 @@
 const Article = require('../models/Article');
 const Payment = require('../models/Payment');
+const Delivery = require('../models/Delivery');
 
 // Retourne le solde de l'utilisateur connecté et la devise
 exports.getMyWallet = async (req, res) => {
@@ -79,6 +80,69 @@ exports.getMyTransactions = async (req, res) => {
     res.json({ transactions });
   } catch (err) {
     res.status(500).json({ message: 'Erreur transactions', error: err.message });
+  }
+};
+
+// Stats pour livreur : commandes honorées, kilométrage, données hebdo
+exports.getMyWalletStats = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const role = req.user.role;
+
+    const stats = {
+      totalOrders: 0,
+      totalKm: 0,
+      weeklyData: [0, 0, 0, 0, 0, 0, 0], // Lun-Dim
+    };
+
+    if (role === 'livreur' && Delivery && Delivery.aggregate) {
+      const now = new Date();
+      const startOfWeek = new Date(now);
+      startOfWeek.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+      startOfWeek.setHours(0, 0, 0, 0);
+
+      const [totals, weekByDay] = await Promise.all([
+        Delivery.aggregate([
+          { $match: { livreur: userId, statut: 'livré' } },
+          {
+            $group: {
+              _id: null,
+              totalOrders: { $sum: 1 },
+              totalKm: { $sum: { $ifNull: ['$distanceKm', 0] } },
+            },
+          },
+        ]),
+        Delivery.aggregate([
+          {
+            $match: {
+              livreur: userId,
+              statut: 'livré',
+              dateLivraison: { $gte: startOfWeek },
+            },
+          },
+          {
+            $group: {
+              _id: { $dayOfWeek: '$dateLivraison' },
+              count: { $sum: 1 },
+            },
+          },
+        ]),
+      ]);
+
+      if (totals && totals[0]) {
+        stats.totalOrders = totals[0].totalOrders || 0;
+        stats.totalKm = Math.round((totals[0].totalKm || 0) * 10) / 10;
+      }
+      // dayOfWeek: 1 = dimanche, 2 = lundi ... 7 = samedi → index 0 = lun, 6 = dim
+      (weekByDay || []).forEach((d) => {
+        const idx = (d._id - 2 + 7) % 7;
+        if (idx >= 0 && idx < 7) stats.weeklyData[idx] = d.count || 0;
+      });
+    }
+
+    res.json(stats);
+  } catch (err) {
+    res.status(500).json({ message: 'Erreur stats wallet', error: err.message });
   }
 };
 

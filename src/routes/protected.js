@@ -3,7 +3,9 @@ const router = express.Router();
 const statsController = require('../controllers/statsController');
 
 router.get('/me', (req, res) => {
-  res.json({ user: req.user });
+  const u = req.user.toObject ? req.user.toObject() : { ...req.user };
+  delete u.password;
+  res.json({ user: u });
 });
 
 router.get('/stats', statsController.getStats);

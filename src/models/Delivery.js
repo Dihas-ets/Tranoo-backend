@@ -85,6 +85,7 @@ const deliverySchema = new mongoose.Schema({
   dateCommande: { type: Date, default: Date.now },
   dateAcceptation: { type: Date },
   dateRecuperation: { type: Date }, // Quand le livreur récupère le colis
+  dateArrivee: { type: Date }, // Quand le livreur est arrivé chez l'acheteur (avant paiement/retour)
   dateLivraison: { type: Date }, // Quand le colis est livré
   dateRefus: { type: Date }, // Si le client refuse
   
@@ -92,6 +93,22 @@ const deliverySchema = new mongoose.Schema({
   fraisLivraison: { type: Number, required: true }, // Toujours payé
   fraisColis: { type: Number, required: true }, // Remboursé si refus
   totalCommande: { type: Number, required: true },
+  
+  // Prix estimé calculé (distanceKm × pricePerKm)
+  prixEstime: { type: Number },
+  
+  // Livreurs déjà notifiés (pour éviter les doublons dans la boucle de réoffre)
+  livreursNotifies: [{
+    livreur: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    notifiedAt: { type: Date, default: Date.now },
+    round: { type: Number, default: 1 }, // Numéro de tour de notification
+  }],
+  
+  // Dernière notification envoyée
+  lastNotificationAt: { type: Date },
+  
+  // Tour actuel de notification (incrémenté à chaque réoffre)
+  notificationRound: { type: Number, default: 1 },
   
   // Remboursement (si refus)
   remboursement: {
@@ -135,6 +152,7 @@ deliverySchema.index({ livreur: 1, statut: 1 });
 deliverySchema.index({ acheteur: 1, statut: 1 });
 deliverySchema.index({ statut: 1, dateCommande: -1 });
 deliverySchema.index({ orderId: 1 });
+deliverySchema.index({ statut: 1, livreur: 1, lastNotificationAt: 1 }); // Pour le worker de réoffre
 
 // Middleware pour mettre à jour updatedAt
 deliverySchema.pre('save', function(next) {
