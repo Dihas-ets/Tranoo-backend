@@ -1,3 +1,165 @@
+// const mongoose = require('mongoose');
+
+// // Schéma User unique pour tous les rôles (mobile et web)
+// const userSchema = new mongoose.Schema({
+//   uid: { type: String, required: true, unique: true }, // UID Firebase
+//   nom: { type: String, required: true }, // Nom de famille
+//   prenoms: { type: String, required: true }, // Prénoms
+//   email: { type: String, required: true, unique: true }, // Email
+//   telephone: { type: String, required: true }, // Numéro de téléphone
+//   pays: { type: String }, // Pays de résidence (mobile)
+//   maison: { type: String }, // Maison (mobile)
+//   entreprise: { type: String }, // Nom de l'entreprise (pour transitaire)
+//   // Champs spécifiques vendeur
+//   registreCommerce: { type: String }, // Numéro du registre de commerce
+//   numeroIFU: { type: String }, // Numéro IFU
+//   entrepriseProvenance: { type: String }, // Entreprise de provenance
+//   // Champs spécifiques chauffeur
+//   pieceIdentite: {
+//     type: {
+//       type: String, // CNI, Passeport, etc.
+//       default: null
+//     },
+//     numero: { type: String, default: null },
+//     urlRecto: { type: String, default: null },
+//     urlVerso: { type: String, default: null }
+//   },
+//   permis: {
+//     numero: { type: String, default: null },
+//     urlRecto: { type: String, default: null },
+//     urlVerso: { type: String, default: null },
+//     dateValidite: { type: Date, default: null }
+//   },
+//   entrepriseAssociee: {
+//     nom: { type: String, default: null },
+//     adresse: { type: String, default: null },
+//     telephone: { type: String, default: null }
+//   },
+//   garant: {
+//     nom: { type: String, default: null },
+//     prenom: { type: String, default: null },
+//     numero: { type: String, default: null },
+//     relation: { type: String, default: null }
+//   },
+//   informationsCapitales: {
+//     nom: { type: String, default: null },
+//     prenom: { type: String, default: null },
+//     numero: { type: String, default: null },
+//     relation: { type: String, default: null }
+//   },
+//   // Champs spécifiques livreur/chauffeur - Informations véhicule
+//   vehicule: {
+//     immatriculation: { type: String, default: null }, // Numéro d'immatriculation
+//     type: { type: String, default: null }, // Type: Moto, Voiture, Camion, etc.
+//     marque: { type: String, default: null }, // Marque du véhicule
+//     modele: { type: String, default: null }, // Modèle du véhicule
+//     annee: { type: Number, default: null }, // Année de fabrication
+//     couleur: { type: String, default: null }, // Couleur principale
+//     urlPhoto: { type: String, default: null }, // Photo du véhicule
+//   },
+//   // Champs spécifiques pour les admins (web)
+//   adresse: { type: String }, // Adresse (admin)
+//   ville: { type: String }, // Ville (admin)
+//   photo: { type: String }, // URL de la photo de profil
+//   password: { type: String }, // Mot de passe hashé
+//   typeAdmin: { 
+//     type: String, 
+//     enum: [
+//       'superAdmin', 'principal', 'moderateur', 'gestionnaire', 
+//       'responsablePaiement', 'responsableService', 'responsablePartenaires', 
+//       'analyste', 'marketing', null
+//     ],
+//     default: null
+//   }, // Type d'admin (si role = admin)
+//   statut: { type: String, enum: ['actif', 'inactif'], default: 'actif' }, // Statut du compte
+//   isBlocked: { type: Boolean, default: false }, // Utilisateur bloqué par admin
+//   blockedAt: { type: Date }, // Date de blocage
+//   blockedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // Admin qui a bloqué
+//   langue: { type: String, default: 'fr' }, // Langue préférée
+//   devise: { type: String, default: 'XOF' }, // Devise préférée
+//   dateInscription: { type: Date, default: Date.now }, // Date d'inscription
+//   dernierAcces: { type: Date }, // Dernière connexion
+//   fcmToken: { type: String, default: null }, // Token FCM pour notifications push
+//   role: { 
+//     type: String, 
+//     enum: ['vendeur', 'acheteur', 'transitaire', 'admin', 'chauffeur', 'livreur', 'agentCommercial'], 
+//     required: true 
+//   }, // Rôle principal
+//   statutContrat: {
+//     type: String,
+//     enum: ['CDD', 'CDI', 'En mission', null],
+//     default: null
+//   },
+//   // Favoris d'articles (voitures/pieces) liés à l'utilisateur
+//   favoris: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Article' }],
+//   // NOUVEAUX CHAMPS POUR LE STATUT EN LIGNE
+//   isOnline: { type: Boolean, default: false }, // Statut en ligne/hors ligne
+//   lastSeen: { type: Date, default: Date.now }, // Dernière activité
+//   // CHAMP POUR LE PARRAINAGE
+//   referralCode: { type: String, unique: true, sparse: true }, // Code de parrainage unique
+//   referralStats: {
+//     totalReferred: { type: Number, default: 0 },
+//     referredUserIds: {
+//       type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+//       default: []
+//     }
+//   },
+//   // Attribution du tarif de parrainage (pour agents commerciaux)
+//   assignedReferralTariff: { type: mongoose.Schema.Types.ObjectId, ref: 'ReferralTariff', default: null },
+
+//   // ==========================
+//   // GEOLOCALISATION (Tricycle / Tracking)
+//   // ==========================
+//   // Format GeoJSON Point: [longitude, latitude]
+//   location: {
+//     type: {
+//       type: String,
+//       enum: ['Point'],
+//     },
+//     // On ne met pas de valeur par défaut ici :
+//     // le champ "location" sera complètement absent tant qu'on n'aura pas de coordonnées.
+//     coordinates: { type: [Number], default: undefined },
+//   },
+//   lastLocationAt: { type: Date, default: null },
+
+//   // Statut de disponibilité (principalement pour role=chauffeur)
+//   availabilityStatus: {
+//     type: String,
+//     enum: ['available', 'busy', 'offline'],
+//     default: 'offline',
+//   },
+// });
+
+// // Index utile sur le téléphone pour OTP
+// userSchema.index({ telephone: 1 });
+// // Index géospatial (tricycle / tracking)
+// userSchema.index({ location: '2dsphere' });
+
+// // Sécuriser le champ de géolocalisation : si les coordonnées sont invalides
+// // (ou absentes), on supprime complètement "location" pour éviter l'erreur
+// // "Can't extract geo keys: ... Point must be an array or object".
+// userSchema.pre('save', function (next) {
+//   if (this.location) {
+//     const coords = this.location.coordinates;
+//     const isValidPoint =
+//       this.location.type === 'Point' &&
+//       Array.isArray(coords) &&
+//       coords.length === 2 &&
+//       typeof coords[0] === 'number' &&
+//       typeof coords[1] === 'number';
+
+//     if (!isValidPoint) {
+//       this.location = undefined;
+//     }
+//   }
+//   next();
+// });
+
+// module.exports = mongoose.model('User', userSchema); 
+
+
+
+
 const mongoose = require('mongoose');
 
 // Schéma User unique pour tous les rôles (mobile et web)
@@ -5,123 +167,108 @@ const userSchema = new mongoose.Schema({
   uid: { type: String, required: true, unique: true }, // UID Firebase
   nom: { type: String, required: true }, // Nom de famille
   prenoms: { type: String, required: true }, // Prénoms
-  email: { type: String, required: true, unique: true }, // Email
-  telephone: { type: String, required: true }, // Numéro de téléphone
-  pays: { type: String }, // Pays de résidence (mobile)
-  maison: { type: String }, // Maison (mobile)
-  entreprise: { type: String }, // Nom de l'entreprise (pour transitaire)
-  // Champs spécifiques vendeur
-  registreCommerce: { type: String }, // Numéro du registre de commerce
-  numeroIFU: { type: String }, // Numéro IFU
-  entrepriseProvenance: { type: String }, // Entreprise de provenance
-  // Champs spécifiques chauffeur
+  email: { type: String, required: true, unique: true }, // Email obligatoire
+  telephone: { type: String, required: true }, // Numéro de téléphone obligatoire
+  pays: { type: String },
+  maison: { type: String },
+  entreprise: { type: String },
+  registreCommerce: { type: String },
+  numeroIFU: { type: String },
+  entrepriseProvenance: { type: String },
   pieceIdentite: {
     type: {
-      type: String, // CNI, Passeport, etc.
-      default: null
+      type: String,
+      default: null,
     },
     numero: { type: String, default: null },
     urlRecto: { type: String, default: null },
-    urlVerso: { type: String, default: null }
+    urlVerso: { type: String, default: null },
   },
   permis: {
     numero: { type: String, default: null },
     urlRecto: { type: String, default: null },
     urlVerso: { type: String, default: null },
-    dateValidite: { type: Date, default: null }
+    dateValidite: { type: Date, default: null },
   },
   entrepriseAssociee: {
     nom: { type: String, default: null },
     adresse: { type: String, default: null },
-    telephone: { type: String, default: null }
+    telephone: { type: String, default: null },
   },
   garant: {
     nom: { type: String, default: null },
     prenom: { type: String, default: null },
     numero: { type: String, default: null },
-    relation: { type: String, default: null }
+    relation: { type: String, default: null },
   },
   informationsCapitales: {
     nom: { type: String, default: null },
     prenom: { type: String, default: null },
     numero: { type: String, default: null },
-    relation: { type: String, default: null }
+    relation: { type: String, default: null },
   },
-  // Champs spécifiques livreur/chauffeur - Informations véhicule
   vehicule: {
-    immatriculation: { type: String, default: null }, // Numéro d'immatriculation
-    type: { type: String, default: null }, // Type: Moto, Voiture, Camion, etc.
-    marque: { type: String, default: null }, // Marque du véhicule
-    modele: { type: String, default: null }, // Modèle du véhicule
-    annee: { type: Number, default: null }, // Année de fabrication
-    couleur: { type: String, default: null }, // Couleur principale
-    urlPhoto: { type: String, default: null }, // Photo du véhicule
+    immatriculation: { type: String, default: null },
+    type: { type: String, default: null },
+    marque: { type: String, default: null },
+    modele: { type: String, default: null },
+    annee: { type: Number, default: null },
+    couleur: { type: String, default: null },
+    urlPhoto: { type: String, default: null },
   },
-  // Champs spécifiques pour les admins (web)
-  adresse: { type: String }, // Adresse (admin)
-  ville: { type: String }, // Ville (admin)
-  photo: { type: String }, // URL de la photo de profil
-  password: { type: String }, // Mot de passe hashé
-  typeAdmin: { 
-    type: String, 
+  adresse: { type: String },
+  ville: { type: String },
+  photo: { type: String },
+  password: { type: String },
+  typeAdmin: {
+    type: String,
     enum: [
-      'superAdmin', 'principal', 'moderateur', 'gestionnaire', 
-      'responsablePaiement', 'responsableService', 'responsablePartenaires', 
-      'analyste', 'marketing', null
+      'superAdmin',
+      'principal',
+      'moderateur',
+      'gestionnaire',
+      'responsablePaiement',
+      'responsableService',
+      'responsablePartenaires',
+      'analyste',
+      'marketing',
+      null,
     ],
-    default: null
-  }, // Type d'admin (si role = admin)
-  statut: { type: String, enum: ['actif', 'inactif'], default: 'actif' }, // Statut du compte
-  isBlocked: { type: Boolean, default: false }, // Utilisateur bloqué par admin
-  blockedAt: { type: Date }, // Date de blocage
-  blockedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // Admin qui a bloqué
-  langue: { type: String, default: 'fr' }, // Langue préférée
-  devise: { type: String, default: 'XOF' }, // Devise préférée
-  dateInscription: { type: Date, default: Date.now }, // Date d'inscription
-  dernierAcces: { type: Date }, // Dernière connexion
-  fcmToken: { type: String, default: null }, // Token FCM pour notifications push
-  role: { 
-    type: String, 
-    enum: ['vendeur', 'acheteur', 'transitaire', 'admin', 'chauffeur', 'livreur', 'agentCommercial'], 
-    required: true 
-  }, // Rôle principal
+    default: null,
+  },
+  statut: { type: String, enum: ['actif', 'inactif'], default: 'actif' },
+  isBlocked: { type: Boolean, default: false },
+  blockedAt: { type: Date },
+  blockedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  langue: { type: String, default: 'fr' },
+  devise: { type: String, default: 'XOF' },
+  dateInscription: { type: Date, default: Date.now },
+  dernierAcces: { type: Date },
+  fcmToken: { type: String, default: null },
+  role: {
+    type: String,
+    enum: ['vendeur', 'acheteur', 'transitaire', 'admin', 'chauffeur', 'livreur', 'agentCommercial'],
+    required: true,
+  },
   statutContrat: {
     type: String,
     enum: ['CDD', 'CDI', 'En mission', null],
-    default: null
+    default: null,
   },
-  // Favoris d'articles (voitures/pieces) liés à l'utilisateur
   favoris: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Article' }],
-  // NOUVEAUX CHAMPS POUR LE STATUT EN LIGNE
-  isOnline: { type: Boolean, default: false }, // Statut en ligne/hors ligne
-  lastSeen: { type: Date, default: Date.now }, // Dernière activité
-  // CHAMP POUR LE PARRAINAGE
-  referralCode: { type: String, unique: true, sparse: true }, // Code de parrainage unique
+  isOnline: { type: Boolean, default: false },
+  lastSeen: { type: Date, default: Date.now },
+  referralCode: { type: String, unique: true, sparse: true }, // sparse pour autoriser null
   referralStats: {
     totalReferred: { type: Number, default: 0 },
-    referredUserIds: {
-      type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
-      default: []
-    }
+    referredUserIds: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }], default: [] },
   },
-  // Attribution du tarif de parrainage (pour agents commerciaux)
   assignedReferralTariff: { type: mongoose.Schema.Types.ObjectId, ref: 'ReferralTariff', default: null },
-
-  // ==========================
-  // GEOLOCALISATION (Tricycle / Tracking)
-  // ==========================
-  // Format GeoJSON Point: [longitude, latitude]
   location: {
-    type: {
-      type: String,
-      enum: ['Point'],
-      default: 'Point',
-    },
+    type: { type: String, enum: ['Point'] },
     coordinates: { type: [Number], default: undefined },
   },
   lastLocationAt: { type: Date, default: null },
-
-  // Statut de disponibilité (principalement pour role=chauffeur)
   availabilityStatus: {
     type: String,
     enum: ['available', 'busy', 'offline'],
@@ -129,9 +276,26 @@ const userSchema = new mongoose.Schema({
   },
 });
 
-// Index utile sur le téléphone pour OTP
+// Index utiles
 userSchema.index({ telephone: 1 });
-// Index géospatial (tricycle / tracking)
 userSchema.index({ location: '2dsphere' });
 
-module.exports = mongoose.model('User', userSchema); 
+// Pré-save : sécuriser location
+userSchema.pre('save', function (next) {
+  if (this.location) {
+    const coords = this.location.coordinates;
+    const isValidPoint =
+      this.location.type === 'Point' &&
+      Array.isArray(coords) &&
+      coords.length === 2 &&
+      typeof coords[0] === 'number' &&
+      typeof coords[1] === 'number';
+
+    if (!isValidPoint) {
+      this.location = undefined;
+    }
+  }
+  next();
+});
+
+module.exports = mongoose.model('User', userSchema);
