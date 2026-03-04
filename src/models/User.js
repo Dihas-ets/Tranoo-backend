@@ -168,18 +168,7 @@ const userSchema = new mongoose.Schema({
   nom: { type: String, required: true }, // Nom de famille
   prenoms: { type: String, required: true }, // Prénoms
   email: { type: String, required: true, unique: true }, // Email obligatoire
-  // Téléphone:
-  // - obligatoire pour les rôles "mobiles" (acheteur, vendeur, livreur, chauffeur, transitaire, agentCommercial)
-  // - facultatif pour les admins web (role === 'admin') afin de ne pas bloquer la création depuis le dashboard
-  telephone: {
-    type: String,
-    required: function () {
-      const r = this.role;
-      if (!r) return false;
-      return ['vendeur', 'acheteur', 'transitaire', 'chauffeur', 'livreur', 'agentCommercial'].includes(r);
-    },
-    trim: true,
-  },
+  telephone: { type: String, required: true }, // Numéro de téléphone obligatoire
   pays: { type: String },
   maison: { type: String },
   entreprise: { type: String },
