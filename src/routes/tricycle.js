@@ -19,6 +19,7 @@ router.get('/contacts/incoming', tricycleController.getIncomingContacts); // cha
 router.get('/contacts/my', tricycleController.getMyContacts); // acheteur
 router.get('/contacts/:id', tricycleController.getContactDetails);
 router.post('/contacts/:id/accept', tricycleController.acceptContact);
+router.post('/contacts/:id/read', tricycleController.markContactAsRead);
 router.post('/contacts/:id/close', tricycleController.closeContact);
 
 module.exports = router;

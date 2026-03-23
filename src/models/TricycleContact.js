@@ -30,6 +30,9 @@ const tricycleContactSchema = new mongoose.Schema(
 
     // Méta
     lastMessageAt: { type: Date, default: null },
+
+    // Lu par le chauffeur (pour ne plus afficher comme non lu dans la bannière)
+    readByChauffeurAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

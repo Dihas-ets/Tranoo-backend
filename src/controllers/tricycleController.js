@@ -2,6 +2,7 @@ const User = require('../models/User');
 const TricycleContact = require('../models/TricycleContact');
 const notificationController = require('./notificationController');
 const ChatRoom = require('../models/ChatRoom');
+const admin = require('firebase-admin');
 
 const toNumber = (v) => {
   const n = Number(v);
@@ -116,6 +117,31 @@ exports.getNearbyChauffeurs = async (req, res) => {
     const searchRadiusKm = getSearchRadiusKm(maxRangeKm);
     const avgSpeedKmH = getAvgSpeedKmH();
 
+    // DEBUG: compter les utilisateurs proches pour diagnostiquer les cas où la
+    // liste est vide côté mobile.
+    try {
+      const debugAllNear = await User.find({
+        'location.coordinates': { $exists: true, $type: 'array' },
+        location: {
+          $near: {
+            $geometry: { type: 'Point', coordinates: [lng, lat] },
+            $maxDistance: Math.round(searchRadiusKm * 1000),
+          },
+        },
+      }).select('role location');
+      const totalNear = debugAllNear.length;
+      const totalChauffeursNear = debugAllNear.filter(
+        (u) => u.role === 'chauffeur'
+      ).length;
+      console.log(
+        `[TRICYCLE][nearby] lat=${lat}, lng=${lng}, totalNear=${totalNear}, chauffeursNear=${totalChauffeursNear}`
+      );
+    } catch (e) {
+      console.warn('[TRICYCLE][nearby] debug query failed:', e.message);
+    }
+
+    // On ne considère ici que les comptes ayant le rôle explicite "chauffeur"
+    // pour le service Tricycle.
     const chauffeurs = await User.find({
       role: 'chauffeur',
       'location.coordinates': { $exists: true, $type: 'array' },
@@ -141,9 +167,14 @@ exports.getNearbyChauffeurs = async (req, res) => {
       if (!inRange) {
         statusColor = 'red';
         status = 'out_of_range';
-      } else if (c.isOnline && c.availabilityStatus === 'available') {
+      } else if (c.availabilityStatus === 'available') {
+        // On se base uniquement sur le statut Tricycle du chauffeur,
+        // indépendamment du champ isOnline qui est géré par le socket global.
         statusColor = 'green';
         status = 'available';
+      } else if (c.availabilityStatus === 'offline') {
+        statusColor = 'yellow';
+        status = 'offline';
       } else {
         statusColor = 'yellow';
         status = 'busy';
@@ -216,17 +247,6 @@ exports.createContact = async (req, res) => {
       return res.status(403).json({ message: 'Chauffeur hors de portée', distanceKm, maxRangeKm });
     }
 
-    // Éviter les doublons actifs
-    const existing = await TricycleContact.findOne({
-      user: user._id,
-      chauffeur: chauffeur._id,
-      status: { $in: ['initiated', 'accepted'] },
-    }).sort({ createdAt: -1 });
-
-    if (existing) {
-      return res.json({ success: true, contact: existing, reused: true });
-    }
-
     const contact = await TricycleContact.create({
       user: user._id,
       chauffeur: chauffeur._id,
@@ -261,7 +281,7 @@ exports.createContact = async (req, res) => {
       await room.populate('participants', 'uid nom prenoms email photo role telephone');
     } catch (_) {}
 
-    // Notifier le chauffeur
+    // Notifier le chauffeur (notification in-app + push FCM)
     try {
       await notificationController.createNotification(
         chauffeur._id,
@@ -272,6 +292,27 @@ exports.createContact = async (req, res) => {
         contact._id,
         'TricycleContact'
       );
+
+      if (chauffeur.fcmToken) {
+        try {
+          await admin.messaging().send({
+            token: chauffeur.fcmToken,
+            notification: {
+              title: 'Nouvelle demande Tricycle',
+              body: `${user.prenoms} ${user.nom} souhaite vous contacter pour un déplacement en tricycle.`,
+            },
+            data: {
+              type: 'tricycle',
+              action: 'new_request',
+              contactId: contact._id.toString(),
+              chauffeurId: chauffeur._id.toString(),
+              userId: user._id.toString(),
+            },
+          });
+        } catch (err) {
+          console.error('[TRICYCLE] FCM createContact failed:', err.message);
+        }
+      }
     } catch (e) {
       console.error('[TRICYCLE] notif createContact failed:', e.message);
     }
@@ -371,7 +412,7 @@ exports.acceptContact = async (req, res) => {
     contact.status = 'accepted';
     await contact.save();
 
-    // Notifier l'utilisateur
+    // Notifier l'utilisateur (notification in-app + push FCM)
     try {
       await notificationController.createNotification(
         contact.user,
@@ -382,6 +423,28 @@ exports.acceptContact = async (req, res) => {
         contact._id,
         'TricycleContact'
       );
+
+      const user = await User.findById(contact.user).select('fcmToken prenoms nom');
+      if (user && user.fcmToken) {
+        try {
+          await admin.messaging().send({
+            token: user.fcmToken,
+            notification: {
+              title: 'Demande Tricycle acceptée',
+              body: 'Le chauffeur a accepté votre demande. Vous pouvez maintenant échanger librement.',
+            },
+            data: {
+              type: 'tricycle',
+              action: 'accepted',
+              contactId: contact._id.toString(),
+              chauffeurId: me._id.toString(),
+              userId: user._id.toString(),
+            },
+          });
+        } catch (err) {
+          console.error('[TRICYCLE] FCM acceptContact failed:', err.message);
+        }
+      }
     } catch (e) {
       console.error('[TRICYCLE] notif acceptContact failed:', e.message);
     }
@@ -393,17 +456,88 @@ exports.acceptContact = async (req, res) => {
   }
 };
 
+// POST /api/tricycles/contacts/:id/read (chauffeur) — marque comme lu
+exports.markContactAsRead = async (req, res) => {
+  try {
+    const contact = await TricycleContact.findById(req.params.id);
+    if (!contact) return res.status(404).json({ message: 'Contact introuvable' });
+    const me = req.user?._id?.toString();
+    if (!me || String(contact.chauffeur) !== me) {
+      return res.status(403).json({ message: 'Accès non autorisé' });
+    }
+    contact.readByChauffeurAt = contact.readByChauffeurAt || new Date();
+    await contact.save();
+    res.json({ success: true, contact });
+  } catch (error) {
+    console.error('[TRICYCLE] markContactAsRead error:', error);
+    res.status(500).json({ message: 'Erreur serveur', error: error.message });
+  }
+};
+
 // POST /api/tricycles/contacts/:id/close (participant)
 exports.closeContact = async (req, res) => {
   try {
-    const contact = await TricycleContact.findById(req.params.id);
+    const contact = await TricycleContact.findById(req.params.id)
+      .populate('user', 'nom prenoms')
+      .populate('chauffeur', 'nom prenoms');
     if (!contact) return res.status(404).json({ message: 'Contact introuvable' });
     const me = req.user?._id?.toString();
     if (!me || (String(contact.user) !== me && String(contact.chauffeur) !== me)) {
       return res.status(403).json({ message: 'Accès non autorisé' });
     }
+    const closedByBuyer = String(contact.user?._id || contact.user) === me;
+
+    // Règle métier: tant que le chauffeur n'a pas accepté, les 2 peuvent fermer/rejeter.
+    // Si déjà accepté, l'acheteur ne peut plus annuler (le chauffeur a pris en charge).
+    if (closedByBuyer && contact.status === 'accepted') {
+      return res.status(403).json({
+        message: 'Demande déjà acceptée. Annulation impossible.',
+        status: contact.status,
+      });
+    }
+
     contact.status = 'closed';
     await contact.save();
+
+    if (closedByBuyer && contact.chauffeur) {
+      try {
+        await notificationController.createNotification(
+          contact.chauffeur._id,
+          contact.user?._id || contact.user,
+          'Demande Tricycle annulée',
+          `${contact.user?.prenoms ?? ''} ${contact.user?.nom ?? 'L\'acheteur'}`.trim() +
+            ' a annulé sa demande de tricycle.',
+          'tricycle',
+          contact._id,
+          'TricycleContact'
+        );
+
+        const chauffeur = await User.findById(contact.chauffeur).select('fcmToken prenoms nom');
+        if (chauffeur && chauffeur.fcmToken) {
+          try {
+            await admin.messaging().send({
+              token: chauffeur.fcmToken,
+              notification: {
+                title: 'Demande Tricycle annulée',
+                body: 'L’acheteur a annulé sa demande de tricycle.',
+              },
+              data: {
+                type: 'tricycle',
+                action: 'cancelled',
+                contactId: contact._id.toString(),
+                chauffeurId: chauffeur._id.toString(),
+                userId: (contact.user?._id || contact.user).toString(),
+              },
+            });
+          } catch (err) {
+            console.error('[TRICYCLE] FCM closeContact failed:', err.message);
+          }
+        }
+      } catch (e) {
+        console.error('[TRICYCLE] notif closeContact failed:', e.message);
+      }
+    }
+
     res.json({ success: true, contact });
   } catch (error) {
     console.error('[TRICYCLE] closeContact error:', error);
