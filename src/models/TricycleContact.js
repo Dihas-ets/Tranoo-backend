@@ -14,6 +14,9 @@ const tricycleContactSchema = new mongoose.Schema(
       default: 'initiated',
     },
 
+    // Preuve d'acceptation explicite par le chauffeur
+    acceptedAt: { type: Date, default: null },
+
     // Snapshot des positions au moment de l'initiation (optionnel)
     userLocationSnapshot: {
       latitude: { type: Number },

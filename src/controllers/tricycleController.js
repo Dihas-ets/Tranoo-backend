@@ -3,6 +3,8 @@ const TricycleContact = require('../models/TricycleContact');
 const notificationController = require('./notificationController');
 const ChatRoom = require('../models/ChatRoom');
 const admin = require('firebase-admin');
+const TRICYCLE_FCM_CHANNEL_ID = process.env.TRICYCLE_FCM_CHANNEL_ID || 'tricycle_channel';
+const TRICYCLE_FCM_SOUND = process.env.TRICYCLE_FCM_SOUND || 'driver_request_sound';
 
 const toNumber = (v) => {
   const n = Number(v);
@@ -142,8 +144,19 @@ exports.getNearbyChauffeurs = async (req, res) => {
 
     // On ne considère ici que les comptes ayant le rôle explicite "chauffeur"
     // pour le service Tricycle.
+    // IMPORTANT (UX):
+    // - Ne renvoyer que les chauffeurs "disponibles" (availabilityStatus=available)
+    // - Et actifs récemment, sinon un chauffeur qui ferme l'app resterait visible.
+    // Fenêtre "en ligne" : 30s était trop agressif et vidait la liste côté mobile.
+    const onlineWindowSec = toNumber(process.env.TRICYCLE_ONLINE_WINDOW_SEC) ?? 180;
+    const activeSince = new Date(Date.now() - onlineWindowSec * 1000);
+
     const chauffeurs = await User.find({
       role: 'chauffeur',
+      availabilityStatus: 'available',
+      lastSeen: { $gte: activeSince },
+      // lastLocationAt peut être rafraîchi moins souvent selon les devices,
+      // on ne bloque pas la liste sur ce critère.
       'location.coordinates': { $exists: true, $type: 'array' },
       location: {
         $near: {
@@ -153,7 +166,8 @@ exports.getNearbyChauffeurs = async (req, res) => {
       },
     }).select('nom prenoms telephone photo isOnline availabilityStatus lastLocationAt location');
 
-    const items = chauffeurs.map((c) => {
+    const items = chauffeurs
+      .map((c) => {
       const cLng = c.location?.coordinates?.[0];
       const cLat = c.location?.coordinates?.[1];
       const distanceKm =
@@ -162,23 +176,10 @@ exports.getNearbyChauffeurs = async (req, res) => {
           : null;
 
       const inRange = distanceKm != null ? distanceKm <= maxRangeKm : false;
-      let statusColor = 'yellow';
-      let status = 'busy';
-      if (!inRange) {
-        statusColor = 'red';
-        status = 'out_of_range';
-      } else if (c.availabilityStatus === 'available') {
-        // On se base uniquement sur le statut Tricycle du chauffeur,
-        // indépendamment du champ isOnline qui est géré par le socket global.
-        statusColor = 'green';
-        status = 'available';
-      } else if (c.availabilityStatus === 'offline') {
-        statusColor = 'yellow';
-        status = 'offline';
-      } else {
-        statusColor = 'yellow';
-        status = 'busy';
-      }
+      // Comme on ne retourne que availabilityStatus=available,
+      // on cache les chauffeurs hors de portée.
+      const statusColor = inRange ? 'green' : 'red';
+      const status = inRange ? 'available' : 'out_of_range';
 
       const etaMinutes =
         distanceKm != null ? Math.max(1, Math.round((distanceKm / avgSpeedKmH) * 60)) : null;
@@ -200,7 +201,10 @@ exports.getNearbyChauffeurs = async (req, res) => {
         availabilityStatus: c.availabilityStatus,
         lastLocationAt: c.lastLocationAt,
       };
-    });
+    })
+      // Ne pas filtrer ici: on veut garder visibles les chauffeurs en ligne,
+      // même s'ils sont "loin" (canContact=false). L'UI désactive l'action.
+      ;
 
     res.json({
       center: { lat, lng },
@@ -301,6 +305,11 @@ exports.createContact = async (req, res) => {
               title: 'Nouvelle demande Tricycle',
               body: `${user.prenoms} ${user.nom} souhaite vous contacter pour un déplacement en tricycle.`,
             },
+            android: {
+              priority: 'high',
+              notification: { channelId: TRICYCLE_FCM_CHANNEL_ID, sound: TRICYCLE_FCM_SOUND },
+            },
+            apns: { payload: { aps: { sound: `${TRICYCLE_FCM_SOUND}.wav` } } },
             data: {
               type: 'tricycle',
               action: 'new_request',
@@ -410,6 +419,7 @@ exports.acceptContact = async (req, res) => {
       return res.status(403).json({ message: 'Vous n’êtes pas concerné par ce contact' });
     }
     contact.status = 'accepted';
+    contact.acceptedAt = contact.acceptedAt || new Date();
     await contact.save();
 
     // Notifier l'utilisateur (notification in-app + push FCM)
@@ -433,6 +443,11 @@ exports.acceptContact = async (req, res) => {
               title: 'Demande Tricycle acceptée',
               body: 'Le chauffeur a accepté votre demande. Vous pouvez maintenant échanger librement.',
             },
+            android: {
+              priority: 'high',
+              notification: { channelId: TRICYCLE_FCM_CHANNEL_ID, sound: TRICYCLE_FCM_SOUND },
+            },
+            apns: { payload: { aps: { sound: `${TRICYCLE_FCM_SOUND}.wav` } } },
             data: {
               type: 'tricycle',
               action: 'accepted',
@@ -486,13 +501,25 @@ exports.closeContact = async (req, res) => {
       return res.status(403).json({ message: 'Accès non autorisé' });
     }
     const closedByBuyer = String(contact.user?._id || contact.user) === me;
+    const closedByChauffeur = String(contact.chauffeur?._id || contact.chauffeur) === me;
+
+    console.log('[TRICYCLE][closeContact]', {
+      contactId: String(contact._id),
+      status: contact.status,
+      acceptedAt: contact.acceptedAt || null,
+      closedBy: closedByBuyer ? 'buyer' : (closedByChauffeur ? 'chauffeur' : 'unknown'),
+      me,
+      buyerId: String(contact.user?._id || contact.user),
+      chauffeurId: String(contact.chauffeur?._id || contact.chauffeur),
+    });
 
     // Règle métier: tant que le chauffeur n'a pas accepté, les 2 peuvent fermer/rejeter.
     // Si déjà accepté, l'acheteur ne peut plus annuler (le chauffeur a pris en charge).
-    if (closedByBuyer && contact.status === 'accepted') {
+    if (closedByBuyer && contact.acceptedAt) {
       return res.status(403).json({
         message: 'Demande déjà acceptée. Annulation impossible.',
         status: contact.status,
+        acceptedAt: contact.acceptedAt,
       });
     }
 
@@ -521,6 +548,11 @@ exports.closeContact = async (req, res) => {
                 title: 'Demande Tricycle annulée',
                 body: 'L’acheteur a annulé sa demande de tricycle.',
               },
+              android: {
+                priority: 'high',
+                notification: { channelId: TRICYCLE_FCM_CHANNEL_ID, sound: TRICYCLE_FCM_SOUND },
+              },
+              apns: { payload: { aps: { sound: `${TRICYCLE_FCM_SOUND}.wav` } } },
               data: {
                 type: 'tricycle',
                 action: 'cancelled',
@@ -535,6 +567,49 @@ exports.closeContact = async (req, res) => {
         }
       } catch (e) {
         console.error('[TRICYCLE] notif closeContact failed:', e.message);
+      }
+    }
+
+    if (closedByChauffeur && contact.user) {
+      try {
+        await notificationController.createNotification(
+          contact.user?._id || contact.user,
+          contact.chauffeur?._id || contact.chauffeur,
+          'Demande Tricycle rejetée',
+          'Le chauffeur a rejeté votre demande de tricycle.',
+          'tricycle',
+          contact._id,
+          'TricycleContact'
+        );
+
+        const buyer = await User.findById(contact.user).select('fcmToken prenoms nom');
+        if (buyer && buyer.fcmToken) {
+          try {
+            await admin.messaging().send({
+              token: buyer.fcmToken,
+              notification: {
+                title: 'Demande Tricycle rejetée',
+                body: 'Le chauffeur a rejeté votre demande de tricycle.',
+              },
+              android: {
+                priority: 'high',
+                notification: { channelId: TRICYCLE_FCM_CHANNEL_ID, sound: TRICYCLE_FCM_SOUND },
+              },
+              apns: { payload: { aps: { sound: `${TRICYCLE_FCM_SOUND}.wav` } } },
+              data: {
+                type: 'tricycle',
+                action: 'rejected',
+                contactId: contact._id.toString(),
+                chauffeurId: (contact.chauffeur?._id || contact.chauffeur).toString(),
+                userId: (contact.user?._id || contact.user).toString(),
+              },
+            });
+          } catch (err) {
+            console.error('[TRICYCLE] FCM closeContact rejected failed:', err.message);
+          }
+        }
+      } catch (e) {
+        console.error('[TRICYCLE] notif closeContact rejected failed:', e.message);
       }
     }
 

@@ -519,6 +519,14 @@ try {
   console.warn('Settings routes non chargées:', e.message);
 }
 
+// Views routes (statistiques de vues)
+try {
+  const viewsRoutes = require('./routes/views');
+  app.use('/api/views', viewsRoutes);
+} catch (e) {
+  console.warn('Views routes non chargées:', e.message);
+}
+
 // Obsolète: Routes propositions transitaires (désactivées)
 // try {
 //   const propositionTransitRoutes = require('./routes/propositionTransit');

@@ -3,6 +3,8 @@ const Order = require('../models/Order');
 const User = require('../models/User');
 const LivreurBalance = require('../models/LivreurBalance');
 const DeliverySettings = require('../models/DeliverySettings');
+const Payment = require('../models/Payment');
+const Article = require('../models/Article');
 const notificationController = require('./notificationController');
 
 // Haversine distance (km)
@@ -64,6 +66,79 @@ const incrementLivreurBalance = async (livreurId, gain, deliveryId, statut) => {
     statut: 'valide',
   });
   await balance.save();
+};
+
+const ensureDistanceKm = (delivery) => {
+  if (delivery.distanceKm && delivery.distanceKm > 0) return delivery.distanceKm;
+  const d = delivery.lieuDepart || {};
+  const a = delivery.lieuDestination || {};
+  if (
+    typeof d.latitude === 'number' &&
+    typeof d.longitude === 'number' &&
+    typeof a.latitude === 'number' &&
+    typeof a.longitude === 'number'
+  ) {
+    const km = haversineKm(d.latitude, d.longitude, a.latitude, a.longitude);
+    delivery.distanceKm = Math.round(km * 100) / 100;
+    return delivery.distanceKm;
+  }
+  return 0;
+};
+
+const creditSellerAndCompany = async (delivery, settings) => {
+  // Reconstituer le CA vendeur depuis les pièces.
+  const pieces = Array.isArray(delivery.pieces) ? delivery.pieces : [];
+  let grossArticlesAmount = 0;
+  const articleIds = pieces
+    .map((p) => p?.articleId)
+    .filter(Boolean);
+  const articles = await Article.find({ _id: { $in: articleIds } })
+    .select('_id vendeur')
+    .lean();
+  const vendorByArticle = new Map(articles.map((a) => [String(a._id), a.vendeur ? String(a.vendeur) : null]));
+  const sellerGrossByVendor = new Map();
+  for (const p of pieces) {
+    const unitOrLine = Number(p?.prix || 0);
+    // Compatibilité: prix peut déjà être une ligne totale.
+    const lineAmount = unitOrLine > 0 ? unitOrLine : 0;
+    grossArticlesAmount += lineAmount;
+    const vendorId = vendorByArticle.get(String(p?.articleId || ''));
+    if (!vendorId) continue;
+    sellerGrossByVendor.set(vendorId, (sellerGrossByVendor.get(vendorId) || 0) + lineAmount);
+  }
+
+  const commissionPct = Number(settings.sellerCommissionPercent || 10) / 100;
+  for (const [vendorId, gross] of sellerGrossByVendor.entries()) {
+    const netSeller = Math.max(0, Math.round(gross * (1 - commissionPct)));
+    if (netSeller <= 0) continue;
+    await Payment.create({
+      user: String(vendorId),
+      amount: netSeller,
+      currency: 'XOF',
+      status: 'success',
+      type: 'vente',
+      description: `Crédit vendeur - livraison ${delivery._id}`,
+      method: 'system',
+      transactionId: `DELIVERY_SELLER_${delivery._id}_${vendorId}`,
+    });
+  }
+
+  const distanceKm = ensureDistanceKm(delivery);
+  const companyArticlesShare = Math.max(0, Math.round(grossArticlesAmount * commissionPct));
+  const companyKmShare = Math.max(0, Math.round(distanceKm * Number(settings.entreprisePerKm || 25)));
+  const companyTotal = companyArticlesShare + companyKmShare;
+  if (companyTotal > 0) {
+    await Payment.create({
+      user: 'enterprise',
+      amount: companyTotal,
+      currency: 'XOF',
+      status: 'success',
+      type: 'vente',
+      description: `Part entreprise - livraison ${delivery._id}`,
+      method: 'system',
+      transactionId: `DELIVERY_ENTERPRISE_${delivery._id}`,
+    });
+  }
 };
 
 // Créer une livraison depuis une commande
@@ -197,6 +272,23 @@ exports.getDeliveryDetails = async (req, res) => {
   }
 };
 
+// Détails d'une livraison par commande
+exports.getDeliveryByOrderId = async (req, res) => {
+  try {
+    const delivery = await Delivery.findOne({ orderId: req.params.orderId })
+      .populate('acheteur', 'nom prenoms telephone')
+      .populate('livreur', 'nom prenoms telephone')
+      .sort({ createdAt: -1 });
+    if (!delivery) {
+      return res.status(404).json({ message: 'Livraison introuvable pour cette commande' });
+    }
+    res.json({ delivery });
+  } catch (error) {
+    console.error('Erreur getDeliveryByOrderId:', error);
+    res.status(500).json({ message: 'Erreur serveur', error: error.message });
+  }
+};
+
 // Accepter une livraison
 exports.acceptDelivery = async (req, res) => {
   try {
@@ -286,12 +378,42 @@ exports.notifyPickup = async (req, res) => {
       return res.status(403).json({ message: 'Vous n’êtes pas assigné à cette livraison' });
     }
 
-    delivery.statut = 'en_cours';
-    delivery.colisRecupere = true;
-    delivery.dateRecuperation = new Date();
+    // Multi-pickups: si pickups[] existe, on valide un pickup en particulier.
+    const pickupIndexRaw = req.query?.pickupIndex ?? req.body?.pickupIndex;
+    const pickupIndex =
+      pickupIndexRaw != null ? Number(pickupIndexRaw) : null;
+
+    if (Array.isArray(delivery.pickups) && delivery.pickups.length > 0 && pickupIndex != null) {
+      if (!Number.isInteger(pickupIndex) || pickupIndex < 0 || pickupIndex >= delivery.pickups.length) {
+        return res.status(400).json({ message: 'pickupIndex invalide' });
+      }
+      const p = delivery.pickups[pickupIndex];
+      p.statut = 'picked_up';
+      p.dateRecuperation = new Date();
+
+      const allPicked = delivery.pickups.every((x) => x.statut === 'picked_up');
+      if (allPicked) {
+        delivery.statut = 'en_cours';
+        delivery.colisRecupere = true;
+        delivery.dateRecuperation = new Date();
+      } else {
+        // reste assigné/en_cours selon existant
+        if (delivery.statut === 'commandé') delivery.statut = 'assigné';
+      }
+    } else {
+      // Ancienne logique (un seul fournisseur)
+      delivery.statut = 'en_cours';
+      delivery.colisRecupere = true;
+      delivery.dateRecuperation = new Date();
+    }
     await delivery.save();
 
-    await updateOrderStatus(delivery.orderId, 'en_cours');
+    // Statut commande: passer en_cours uniquement quand TOUS les pickups sont récupérés
+    if (delivery.colisRecupere) {
+      await updateOrderStatus(delivery.orderId, 'en_cours');
+    } else {
+      await updateOrderStatus(delivery.orderId, delivery.statut === 'assigné' ? 'assigné' : 'commandé');
+    }
 
     // Notifier les admins que le colis a été récupéré
     try {
@@ -329,6 +451,11 @@ exports.notifyArrival = async (req, res) => {
     if (!delivery) return res.status(404).json({ message: 'Livraison introuvable' });
     if (String(delivery.livreur) !== String(user._id)) {
       return res.status(403).json({ message: 'Vous n’êtes pas assigné à cette livraison' });
+    }
+    if (!delivery.colisRecupere) {
+      return res.status(400).json({
+        message: 'Le colis doit être récupéré chez le fournisseur avant de notifier l’arrivée.',
+      });
     }
 
     // Marquer l'arrivée sans changer forcément le statut (garde en_cours si déjà)
@@ -380,18 +507,36 @@ exports.notifyDelivery = async (req, res) => {
     if (String(delivery.livreur) !== String(user._id)) {
       return res.status(403).json({ message: 'Vous n’êtes pas assigné à cette livraison' });
     }
+    if (!delivery.colisRecupere) {
+      return res.status(400).json({
+        message: 'Le colis doit être récupéré chez le fournisseur avant la livraison.',
+      });
+    }
+    if (!delivery.dateArrivee) {
+      return res.status(400).json({
+        message: 'Le livreur doit d’abord notifier son arrivée chez l’acheteur (Sur place).',
+      });
+    }
 
+    if (delivery.statut === 'livré' && delivery.colisLivre) {
+      return res.json({ success: true, message: 'Livraison déjà validée', delivery });
+    }
+    ensureDistanceKm(delivery);
     delivery.statut = 'livré';
     delivery.colisLivre = true;
     delivery.dateLivraison = new Date();
-    // Si gain non défini, utiliser fraisLivraison
-    if (!delivery.gainLivreur || delivery.gainLivreur <= 0) {
-      delivery.gainLivreur = delivery.fraisLivraison || 0;
-    }
+    const settings = await DeliverySettings.getSettings();
+    // Nouveau gain livreur configurable: FCFA/Km
+    const gainLivreur = Math.max(
+      0,
+      Math.round((delivery.distanceKm || 0) * Number(settings.livreurPerKm || 50))
+    );
+    delivery.gainLivreur = gainLivreur;
     await delivery.save();
 
     await updateOrderStatus(delivery.orderId, 'livré');
     await incrementLivreurBalance(delivery.livreur, delivery.gainLivreur, delivery._id, 'livré');
+    await creditSellerAndCompany(delivery, settings);
 
     // Notifications :
     // - Admins: colis livré
@@ -651,16 +796,23 @@ exports.confirmDelivery = async (req, res) => {
       return res.status(403).json({ message: 'Accès réservé à l’acheteur' });
     }
 
+    if (delivery.statut === 'livré' && delivery.colisLivre) {
+      return res.json({ success: true, message: 'Livraison déjà confirmée', delivery });
+    }
+    ensureDistanceKm(delivery);
     delivery.statut = 'livré';
     delivery.colisLivre = true;
     delivery.dateLivraison = new Date();
-    if (!delivery.gainLivreur || delivery.gainLivreur <= 0) {
-      delivery.gainLivreur = delivery.fraisLivraison || 0;
-    }
+    const settings = await DeliverySettings.getSettings();
+    delivery.gainLivreur = Math.max(
+      0,
+      Math.round((delivery.distanceKm || 0) * Number(settings.livreurPerKm || 50))
+    );
     await delivery.save();
 
     await updateOrderStatus(delivery.orderId, 'livré');
     await incrementLivreurBalance(delivery.livreur, delivery.gainLivreur, delivery._id, 'livré');
+    await creditSellerAndCompany(delivery, settings);
 
     // Notifications :
     // - Admins: acheteur a confirmé la livraison
@@ -849,6 +1001,52 @@ exports.updatePricePerKm = async (req, res) => {
     res.json({ success: true, settings });
   } catch (error) {
     console.error('Erreur updatePricePerKm:', error);
+    res.status(500).json({ message: 'Erreur serveur', error: error.message });
+  }
+};
+
+// Modifier la configuration de répartition (admin uniquement)
+exports.updateRevenueConfig = async (req, res) => {
+  try {
+    const user = await getUserFromReq(req);
+    if (!user) return res.status(401).json({ message: 'Non authentifié' });
+    const isAdmin = ['admin', 'superAdmin', 'principal'].includes(user.role);
+    if (!isAdmin) {
+      return res.status(403).json({ message: 'Accès réservé aux administrateurs' });
+    }
+    const {
+      sellerCommissionPercent,
+      livreurPerKm,
+      entreprisePerKm,
+    } = req.body || {};
+    const settings = await DeliverySettings.getSettings();
+    if (sellerCommissionPercent != null) {
+      const v = Number(sellerCommissionPercent);
+      if (Number.isNaN(v) || v < 0 || v > 100) {
+        return res.status(400).json({ message: 'sellerCommissionPercent invalide (0..100)' });
+      }
+      settings.sellerCommissionPercent = v;
+    }
+    if (livreurPerKm != null) {
+      const v = Number(livreurPerKm);
+      if (Number.isNaN(v) || v < 0) {
+        return res.status(400).json({ message: 'livreurPerKm invalide (>=0)' });
+      }
+      settings.livreurPerKm = v;
+    }
+    if (entreprisePerKm != null) {
+      const v = Number(entreprisePerKm);
+      if (Number.isNaN(v) || v < 0) {
+        return res.status(400).json({ message: 'entreprisePerKm invalide (>=0)' });
+      }
+      settings.entreprisePerKm = v;
+    }
+    settings.updatedBy = user._id;
+    settings.updatedAt = new Date();
+    await settings.save();
+    res.json({ success: true, settings });
+  } catch (error) {
+    console.error('Erreur updateRevenueConfig:', error);
     res.status(500).json({ message: 'Erreur serveur', error: error.message });
   }
 };

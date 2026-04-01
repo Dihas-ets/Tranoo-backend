@@ -17,6 +17,24 @@ const deliverySettingsSchema = new mongoose.Schema({
     required: true,
     min: 0,
   },
+
+  // Répartition financière à la livraison (configurable admin)
+  sellerCommissionPercent: {
+    type: Number,
+    default: 10, // part entreprise sur le prix article
+    min: 0,
+    max: 100,
+  },
+  livreurPerKm: {
+    type: Number,
+    default: 50, // gain livreur par km
+    min: 0,
+  },
+  entreprisePerKm: {
+    type: Number,
+    default: 25, // part entreprise par km
+    min: 0,
+  },
   
   // Rayon de recherche pour les livreurs proches (en km)
   searchRadiusKm: {

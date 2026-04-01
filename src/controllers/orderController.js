@@ -3,6 +3,21 @@ const Delivery = require('../models/Delivery');
 const User = require('../models/User');
 const Article = require('../models/Article');
 const notificationController = require('./notificationController');
+const DeliverySettings = require('../models/DeliverySettings');
+
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
 
 // Créer une nouvelle commande (pièces détachées ou autre)
 const createOrder = async (req, res) => {
@@ -64,19 +79,43 @@ const createOrder = async (req, res) => {
 
     // Si livraison requise, créer une Delivery liée
     if (order.isDeliveryRequired) {
-      const mappedPieces = (items || []).map((it) => ({
-        articleId: it.articleId,
-        titre: it.title,
-        quantite: it.quantity,
-        prix: it.totalPrice,
-      }));
-
       const info = deliveryInfo || {};
-      let fournisseur = info.fournisseur;
-      if (!fournisseur?.userId && items?.length > 0 && items[0].articleId) {
-        const firstArt = await Article.findById(items[0].articleId).select('vendeur').lean();
-        if (firstArt?.vendeur) {
-          const v = await User.findById(firstArt.vendeur).select('nom prenoms entreprise adresse telephone').lean();
+      const destination = info.lieuDestination || {
+        nom: 'Acheteur',
+        adresse: deliveryAddress,
+        latitude: info?.lieuDestination?.latitude,
+        longitude: info?.lieuDestination?.longitude,
+      };
+
+      // Multi-fournisseurs: regrouper items par vendeur
+      const articleIds = (items || [])
+        .map((it) => it.articleId)
+        .filter(Boolean);
+      const articles = await Article.find({ _id: { $in: articleIds } })
+        .select('vendeur titre fournisseur')
+        .lean();
+      const articleById = new Map(articles.map((a) => [String(a._id), a]));
+
+      const groups = new Map(); // vendeurId -> { items: [], articles: [] }
+      for (const it of items || []) {
+        const art = articleById.get(String(it.articleId));
+        const vendeurId = art?.vendeur ? String(art.vendeur) : 'unknown';
+        if (!groups.has(vendeurId)) groups.set(vendeurId, []);
+        groups.get(vendeurId).push({ it, art });
+      }
+
+      const settings = await DeliverySettings.getSettings();
+      const pickups = [];
+      let totalFee = 0;
+      let totalDistance = 0;
+
+      for (const [vendeurId, rows] of groups.entries()) {
+        // Fournisseur / vendeur info
+        let fournisseur = info.fournisseur;
+        if (vendeurId !== 'unknown') {
+          const v = await User.findById(vendeurId)
+            .select('nom prenoms entreprise adresse telephone')
+            .lean();
           if (v) {
             fournisseur = {
               userId: v._id,
@@ -87,30 +126,74 @@ const createOrder = async (req, res) => {
             };
           }
         }
+
+        // lieuDepart: prioriser article.fournisseur coords, sinon fournisseur.adresse
+        const firstArt = rows.find((r) => r.art)?.art;
+        const f = firstArt?.fournisseur || {};
+        const lieuDepart = {
+          nom: fournisseur?.nom || f?.nom || 'Fournisseur',
+          adresse: f?.adresseTexte || fournisseur?.adresse || '—',
+          latitude: f?.latitude,
+          longitude: f?.longitude,
+          telephone: f?.telephone || fournisseur?.telephone,
+        };
+
+        const pieces = rows.map(({ it }) => ({
+          articleId: it.articleId,
+          titre: it.title,
+          quantite: it.quantity,
+          prix: it.totalPrice,
+        }));
+
+        let distanceKm = null;
+        let fee = 0;
+        if (
+          typeof lieuDepart.latitude === 'number' &&
+          typeof lieuDepart.longitude === 'number' &&
+          typeof destination.latitude === 'number' &&
+          typeof destination.longitude === 'number'
+        ) {
+          distanceKm = haversineKm(
+            lieuDepart.latitude,
+            lieuDepart.longitude,
+            destination.latitude,
+            destination.longitude
+          );
+          fee = Math.round(distanceKm * (settings.pricePerKm || 75));
+        }
+
+        totalFee += fee;
+        totalDistance += distanceKm || 0;
+        pickups.push({
+          fournisseur,
+          lieuDepart,
+          pieces,
+          distanceKm: distanceKm != null ? Math.round(distanceKm * 100) / 100 : null,
+          fraisLivraison: fee,
+          statut: 'pending',
+        });
       }
 
+      // Champs hérités (compatibilité): utiliser le premier pickup
+      const firstPickup = pickups[0];
       deliveryCreated = await Delivery.create({
         orderId: order._id,
         acheteur: order.userId,
         statut: 'commandé',
-        distanceKm: info.distanceKm,
-        lieuDepart: info.lieuDepart || {
-          nom: fournisseur?.nom || 'Fournisseur',
-          adresse: fournisseur?.adresse,
-          latitude: info?.lieuDepart?.latitude,
-          longitude: info?.lieuDepart?.longitude,
-          telephone: fournisseur?.telephone,
-        },
-        lieuDestination: info.lieuDestination || {
-          nom: 'Acheteur',
-          adresse: deliveryAddress,
-        },
-        pieces: mappedPieces,
-        fournisseur: fournisseur || info.fournisseur,
-        fraisLivraison: deliveryFee ?? 0,
+        distanceKm: totalDistance > 0 ? Math.round(totalDistance * 100) / 100 : info.distanceKm,
+        lieuDepart: firstPickup?.lieuDepart || info.lieuDepart,
+        lieuDestination: destination,
+        pieces: pickups.flatMap((p) => p.pieces || []),
+        fournisseur: firstPickup?.fournisseur || info.fournisseur,
+        pickups,
+        fraisLivraison: totalFee || deliveryFee || 0,
         fraisColis: subtotal ?? 0,
         totalCommande: total ?? 0,
       });
+
+      // Refléter le total dans la commande pour affichage stable
+      order.deliveryFee = deliveryCreated.fraisLivraison;
+      order.total = (order.subtotal || subtotal || 0) + (order.deliveryFee || 0);
 
       order.deliveryId = deliveryCreated._id;
       order.status = 'commandé';

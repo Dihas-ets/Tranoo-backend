@@ -7,6 +7,52 @@ const deliveryLocationSchema = new mongoose.Schema({
   address: { type: String }, // Adresse lisible
 });
 
+const deliveryPickupSchema = new mongoose.Schema(
+  {
+    // Fournisseur (vendeur) lié à ce pickup
+    fournisseur: {
+      userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      nom: { type: String },
+      entreprise: { type: String },
+      adresse: { type: String },
+      telephone: { type: String },
+    },
+
+    // Lieu pickup (coordonnées fournisseur)
+    lieuDepart: {
+      nom: { type: String },
+      adresse: { type: String, required: true },
+      latitude: { type: Number },
+      longitude: { type: Number },
+      telephone: { type: String },
+    },
+
+    // Pièces de CE fournisseur uniquement
+    pieces: [
+      {
+        articleId: { type: mongoose.Schema.Types.ObjectId, ref: 'Article' },
+        titre: { type: String },
+        quantite: { type: Number },
+        prix: { type: Number },
+      },
+    ],
+
+    // Distance (pickup -> acheteur) et frais associés à ce pickup
+    distanceKm: { type: Number },
+    fraisLivraison: { type: Number, default: 0 },
+
+    // Progression du pickup
+    statut: {
+      type: String,
+      enum: ['pending', 'arrived', 'picked_up'],
+      default: 'pending',
+    },
+    dateArrivee: { type: Date },
+    dateRecuperation: { type: Date },
+  },
+  { _id: true }
+);
+
 const deliverySchema = new mongoose.Schema({
   // Référence à la commande
   orderId: { 
@@ -70,6 +116,10 @@ const deliverySchema = new mongoose.Schema({
     telephone: { type: String }
   },
   
+  // Multi-pickups (plusieurs fournisseurs) — nouvelle logique.
+  // Si vide, on retombe sur la logique historique (lieuDepart + pieces + fournisseur).
+  pickups: { type: [deliveryPickupSchema], default: [] },
+
   // Tracking GPS en temps réel
   currentLocation: {
     latitude: { type: Number },

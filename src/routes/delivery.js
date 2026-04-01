@@ -8,6 +8,8 @@ router.post('/', auth, deliveryController.createDelivery);
 router.get('/pending', auth, deliveryController.getPendingDeliveries);
 router.get('/active', auth, deliveryController.getActiveDeliveries);
 router.get('/history', auth, deliveryController.getDeliveryHistory);
+router.get('/order/:orderId', auth, deliveryController.getDeliveryByOrderId);
+router.get('/settings', auth, deliveryController.getDeliverySettings);
 router.get('/:id', auth, deliveryController.getDeliveryDetails);
 
 // Actions livreur
@@ -25,8 +27,8 @@ router.post('/:id/confirm', auth, deliveryController.confirmDelivery);
 router.post('/:id/request-return', auth, deliveryController.requestReturnByAcheteur);
 
 // Settings (admin uniquement)
-router.get('/settings', auth, deliveryController.getDeliverySettings);
 router.put('/settings/price-per-km', auth, deliveryController.updatePricePerKm);
+router.put('/settings/revenue-config', auth, deliveryController.updateRevenueConfig);
 
 // Calcul des frais de livraison (public)
 router.post('/calculate-delivery-fee', deliveryController.calculateDeliveryFee);
