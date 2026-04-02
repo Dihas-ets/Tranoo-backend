@@ -98,6 +98,27 @@ exports.setChauffeurAvailability = async (req, res) => {
   }
 };
 
+// GET /api/tricycles/chauffeur/status
+exports.getMyChauffeurAvailability = async (req, res) => {
+  try {
+    const user = req.user;
+    if (!isChauffeur(user)) {
+      return res.status(403).json({ message: 'Accès réservé aux chauffeurs' });
+    }
+    const availabilityStatus = String(user.availabilityStatus || 'offline').toLowerCase();
+    res.json({
+      success: true,
+      availabilityStatus,
+      isOnline: availabilityStatus === 'available',
+      lastSeen: user.lastSeen,
+      lastLocationAt: user.lastLocationAt,
+    });
+  } catch (error) {
+    console.error('[TRICYCLE] getMyChauffeurAvailability error:', error);
+    res.status(500).json({ message: 'Erreur serveur', error: error.message });
+  }
+};
+
 // GET /api/tricycles/nearby?lat=..&lng=..&maxRangeKm=..
 exports.getNearbyChauffeurs = async (req, res) => {
   try {

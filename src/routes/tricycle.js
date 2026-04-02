@@ -9,6 +9,7 @@ router.use(auth);
 // Position / statut chauffeur
 router.post('/location', tricycleController.updateMyLocation);
 router.post('/chauffeur/status', tricycleController.setChauffeurAvailability);
+router.get('/chauffeur/status', tricycleController.getMyChauffeurAvailability);
 
 // Côté utilisateur (Tranoo): liste chauffeurs proches + init contact
 router.get('/nearby', tricycleController.getNearbyChauffeurs);

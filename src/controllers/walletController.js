@@ -1,11 +1,23 @@
 const Article = require('../models/Article');
 const Payment = require('../models/Payment');
 const Delivery = require('../models/Delivery');
+const LivreurBalance = require('../models/LivreurBalance');
 
 // Retourne le solde de l'utilisateur connecté et la devise
 exports.getMyWallet = async (req, res) => {
   try {
     const userId = req.user._id;
+    const role = req.user.role;
+
+    // Source de vérité pour les livreurs: LivreurBalance (crédité à la livraison)
+    if (role === 'livreur' && LivreurBalance && LivreurBalance.findOne) {
+      const b = await LivreurBalance.findOne({ livreur: userId }).lean();
+      return res.json({
+        balance: b?.balance || 0,
+        currency: req.user.devise || 'XOF',
+      });
+    }
+
     // Exemple de calcul simple basé sur le modèle Payment si disponible
     // Sinon, retourne 0 par défaut
     let balance = 0;
@@ -46,7 +58,46 @@ exports.getMyWallet = async (req, res) => {
 exports.getMyTransactions = async (req, res) => {
   try {
     const userId = req.user._id;
+    const role = req.user.role;
     const transactions = [];
+
+    // Livreur: transactions depuis LivreurBalance
+    if (role === 'livreur' && LivreurBalance && LivreurBalance.findOne) {
+      const b = await LivreurBalance.findOne({ livreur: userId }).lean();
+      const txs = Array.isArray(b?.transactions) ? b.transactions : [];
+      // newest first
+      txs.sort((a, z) => new Date(z.createdAt || 0) - new Date(a.createdAt || 0));
+      for (const t of txs.slice(0, 50)) {
+        const isCredit = String(t.type || '').toLowerCase() === 'gain' || String(t.type || '').toLowerCase() === 'ajustement';
+        const amount = Number(t.montant || 0);
+        const currency = req.user.devise || 'XOF';
+        const prettyAmount = Math.round(amount);
+        transactions.push({
+          id: t._id,
+          type: isCredit ? 'in' : 'out',
+          amount,
+          currency,
+          label:
+            t.description ||
+            (isCredit
+              ? `Votre compte a été rechargé de ${prettyAmount} ${currency}`
+              : `Retrait de ${prettyAmount} ${currency}`),
+          date: t.createdAt || new Date(),
+        });
+      }
+      if (transactions.length === 0) {
+        transactions.push({
+          id: 'none',
+          type: 'out',
+          amount: 0,
+          currency: req.user.devise || 'XOF',
+          label: 'Aucune transaction',
+          date: new Date(),
+        });
+      }
+      return res.json({ transactions });
+    }
+
     try {
       if (Payment && Payment.find) {
         const pays = await Payment.find({ user: userId })
