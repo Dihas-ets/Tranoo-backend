@@ -512,6 +512,97 @@ exports.createAdminMessageHTTP = async (req, res) => {
   }
 };
 
+// Créer une demande de recherche véhicule (acheteur -> vendeurs)
+exports.createVehicleSearchRequestHTTP = async (req, res) => {
+  try {
+    const {
+      marque,
+      modele,
+      anneeMin,
+      anneeMax,
+      budgetMax,
+      localisation,
+      description,
+      telephone,
+    } = req.body || {};
+
+    const cleanMarque = String(marque || '').trim();
+    const cleanModele = String(modele || '').trim();
+    const cleanLocalisation = String(localisation || '').trim();
+    const cleanDescription = String(description || '').trim();
+    const cleanTelephone = String(telephone || '').trim();
+
+    if (!cleanMarque || !cleanModele) {
+      return res.status(400).json({
+        message: 'Les champs marque et modele sont requis.',
+      });
+    }
+
+    const buyer = await User.findById(req.user?._id).select('nom prenoms email telephone');
+    if (!buyer) {
+      return res.status(404).json({ message: 'Acheteur introuvable.' });
+    }
+
+    const vendeurs = await User.find({
+      role: 'vendeur',
+      isBlocked: { $ne: true },
+    }).select('_id');
+
+    if (!vendeurs.length) {
+      return res.status(200).json({
+        message: 'Aucun vendeur a notifier pour le moment.',
+        notifiedCount: 0,
+      });
+    }
+
+    const fullName = `${buyer.nom || ''} ${buyer.prenoms || ''}`.trim() || 'Un acheteur';
+    const details = [
+      `Marque: ${cleanMarque}`,
+      `Modele: ${cleanModele}`,
+      anneeMin ? `Annee min: ${anneeMin}` : null,
+      anneeMax ? `Annee max: ${anneeMax}` : null,
+      budgetMax ? `Budget max: ${budgetMax} FCFA` : null,
+      cleanLocalisation ? `Localisation: ${cleanLocalisation}` : null,
+      cleanTelephone ? `Telephone: ${cleanTelephone}` : null,
+      cleanDescription ? `Details: ${cleanDescription}` : null,
+      buyer.email ? `Email acheteur: ${buyer.email}` : null,
+    ].filter(Boolean).join(' | ');
+
+    const title = 'Nouvelle recherche vehicule acheteur';
+    const message = `${fullName} recherche: ${cleanMarque} ${cleanModele}. ${details}`;
+
+    await Promise.all(
+      vendeurs.map((vendeur) =>
+        exports.createNotification(
+          vendeur._id,
+          req.user._id,
+          title,
+          message,
+          'general',
+          null,
+          null,
+          {
+            requestType: 'vehicle_search',
+            marque: cleanMarque,
+            modele: cleanModele,
+          }
+        )
+      )
+    );
+
+    return res.status(201).json({
+      message: 'Demande envoyee aux vendeurs avec succes.',
+      notifiedCount: vendeurs.length,
+    });
+  } catch (error) {
+    console.error('[SEARCH REQUEST] Erreur creation notification:', error);
+    return res.status(500).json({
+      message: 'Erreur lors de lenvoi de la demande.',
+      details: error?.message,
+    });
+  }
+};
+
 // Obtenir le nombre de notifications non lues
 exports.getUnreadCount = async (req, res) => {
   try {

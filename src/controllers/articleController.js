@@ -1,4 +1,6 @@
 const Article = require('../models/Article');
+const User = require('../models/User');
+const Subscription = require('../models/Subscription');
 const cloudinary = require('cloudinary').v2;
 
 cloudinary.config({
@@ -27,11 +29,41 @@ function withVideoTransforms(doc) {
   return { ...data, videoOptimized, videoThumbnail };
 }
 
+async function hasSellerPieceAccess(userId) {
+  const user = await User.findById(userId).lean();
+  if (!user) return false;
+
+  const inscriptionDate = user.dateInscription || user.createdAt;
+  if (inscriptionDate) {
+    const trialEnd = new Date(inscriptionDate);
+    trialEnd.setDate(trialEnd.getDate() + 90);
+    if (new Date() <= trialEnd) return true;
+  }
+
+  const sub = await Subscription.findOne({ user: userId }).lean();
+  return Boolean(sub && sub.expiresAt && new Date(sub.expiresAt) > new Date());
+}
+
 // Créer un article (voiture ou pièce)
 exports.createArticle = async (req, res) => {
   try {
     // On suppose que req.user contient l'utilisateur authentifié (vendeur)
     const vendeurId = req.user && req.user._id ? req.user._id.toString() : req.body.vendeur;
+    // Restriction abonnement pour pièces vendeurs (trial 3 mois ou abonnement actif)
+    if (
+      req.user &&
+      req.user.role === 'vendeur' &&
+      (req.body.type || '').toString().toLowerCase() === 'piece'
+    ) {
+      const allowed = await hasSellerPieceAccess(req.user._id);
+      if (!allowed) {
+        return res.status(403).json({
+          message:
+            "Abonnement requis: votre periode gratuite est expiree. Activez un plan pour ajouter des pieces.",
+        });
+      }
+    }
+
     // Correction : Forcer le champ source à 'tranoo' si entreprise=TRANOO
     let source = req.body.source || 'app';
     if (req.body.entreprise && req.body.entreprise.trim().toUpperCase() === 'TRANOO') {
@@ -77,15 +109,49 @@ exports.getArticles = async (req, res) => {
     // Filtrage automatique selon le rôle
     if (req.user) {
       if (req.user.role === 'vendeur') {
+        if ((type || '').toString().toLowerCase() === 'piece') {
+          const allowed = await hasSellerPieceAccess(req.user._id);
+          if (allowed) {
+            await Article.updateMany(
+              { type: 'piece', vendeur: req.user._id, subscriptionLocked: true },
+              {
+                $set: {
+                  subscriptionLocked: false,
+                  subscriptionLockedAt: null,
+                  statut: 'en_ligne',
+                },
+              },
+            );
+          } else {
+            await Article.updateMany(
+              {
+                type: 'piece',
+                vendeur: req.user._id,
+                subscriptionLocked: { $ne: true },
+              },
+              {
+                $set: {
+                  subscriptionLocked: true,
+                  subscriptionLockedAt: new Date(),
+                  statut: 'en_attente',
+                },
+              },
+            );
+          }
+        }
         filter.vendeur = req.user._id;
-        filter.statut = 'en_ligne';
+        if ((type || '').toString().toLowerCase() !== 'piece') {
+          filter.statut = 'en_ligne';
+        }
       } else if (req.user.role !== 'admin') {
         filter.statut = 'en_ligne';
+        filter.subscriptionLocked = { $ne: true };
       }
       // admin : pas de filtre statut
     } else {
       // Non authentifié : ne voir que les articles en ligne
       filter.statut = 'en_ligne';
+      filter.subscriptionLocked = { $ne: true };
     }
     // Filtre vendu/non vendu via statutVente
     if (vendu === 'false') {
@@ -149,6 +215,18 @@ exports.deleteArticle = async (req, res) => {
     // Vérifier que l'utilisateur est le vendeur ou un admin
     if (req.user.role !== 'admin' && article.vendeur.toString() !== req.user._id.toString()) {
       return res.status(403).json({ message: 'Non autorisé à supprimer cet article' });
+    }
+    if (
+      req.user.role === 'vendeur' &&
+      (article.type || '').toString().toLowerCase() === 'piece'
+    ) {
+      const allowed = await hasSellerPieceAccess(req.user._id);
+      if (!allowed) {
+        return res.status(403).json({
+          message:
+            "Abonnement requis: votre periode gratuite est expiree. Activez un plan pour gerer vos pieces.",
+        });
+      }
     }
     await article.deleteOne();
     res.json({ message: 'Article supprimé' });

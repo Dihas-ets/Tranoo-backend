@@ -40,4 +40,7 @@ router.post(
   notificationController.createAdminMessageHTTP
 );
 
+// Demande de recherche véhicule par acheteur (notifie les vendeurs)
+router.post('/search-request', notificationController.createVehicleSearchRequestHTTP);
+
 module.exports = router;

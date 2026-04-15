@@ -4,6 +4,7 @@ const Achat = require('../models/Achat');
 const Article = require('../models/Article');
 const Publicite = require('../models/Publicite');
 const User = require('../models/User');
+const Subscription = require('../models/Subscription');
 const Referral = require('../models/Referral');
 const AgentEarning = require('../models/AgentEarning');
 const ReferralSettings = require('../models/ReferralSettings');
@@ -456,6 +457,43 @@ async function handleSuccessfulPayment(payment) {
       }
     }
 
+    if (payment.type === 'subscription' && payment.user) {
+      const monthsFromDuree = (() => {
+        const raw = (payment.duree || '').toString();
+        const match = raw.match(/(\d+)/);
+        return match ? Number(match[1]) : 1;
+      })();
+      const months = Math.max(1, Math.min(monthsFromDuree, 24));
+      const now = new Date();
+      const existing = await Subscription.findOne({ user: payment.user });
+      if (existing) {
+        const base =
+          existing.expiresAt && existing.expiresAt > now
+            ? existing.expiresAt
+            : now;
+        const newExpiry = new Date(base);
+        newExpiry.setDate(newExpiry.getDate() + 30 * months);
+        existing.plan = 'monthly';
+        existing.months = months;
+        existing.activatedAt = base;
+        existing.expiresAt = newExpiry;
+        existing.status = 'active';
+        await existing.save();
+      } else {
+        const expiresAt = new Date(now);
+        expiresAt.setDate(expiresAt.getDate() + 30 * months);
+        await Subscription.create({
+          user: payment.user,
+          plan: 'monthly',
+          months,
+          activatedAt: now,
+          expiresAt,
+          status: 'active',
+        });
+      }
+      console.log('Abonnement vendeur active/renouvele pour user:', payment.user);
+    }
+
     // Commissions (paramétrables) pour l'agent commercial si l'utilisateur payeur a été parrainé par un agent
     if (payment.user) {
       try {
@@ -749,16 +787,41 @@ function getTransactionType(payment) {
     return 'Abonnement';
   } else {
     // Fallback basé sur la description
-    if (payment.description && payment.description.includes('pub')) {
+    const desc = (payment.description || '').toLowerCase();
+    if (desc.includes('pub')) {
       return 'Demande de pub';
-    } else if (payment.description && payment.description.includes('vente')) {
+    } else if (desc.includes('vente')) {
       return 'Vente';
-    } else if (payment.description && payment.description.includes('vérification')) {
+    } else if (desc.includes('vérification') || desc.includes('verification')) {
       return 'Vérification';
-    } else if (payment.description && payment.description.includes('abonnement')) {
+    } else if (desc.includes('abonnement') || desc.includes('subscription')) {
       return 'Abonnement';
     }
     return 'Achats'; // Par défaut
+  }
+}
+
+function normalizeTypeFilter(typeValue) {
+  if (!typeValue) return null;
+  const raw = String(typeValue).trim().toLowerCase();
+  switch (raw) {
+    case 'abonnement':
+    case 'subscription':
+      return 'Abonnement';
+    case 'achat':
+    case 'achats':
+      return 'Achats';
+    case 'demande de pub':
+    case 'publicite':
+    case 'publicité':
+      return 'Demande de pub';
+    case 'vente':
+      return 'Vente';
+    case 'verification':
+    case 'vérification':
+      return 'Vérification';
+    default:
+      return typeValue;
   }
 }
 
@@ -818,6 +881,7 @@ exports.list = async (req, res) => {
         updatedAt: payment.updatedAt,
         client: payment.user ? `${payment.user.nom || ''} ${payment.user.prenoms || ''}`.trim() : 'Client inconnu',
         type: 'Achats',
+        rawType: payment.type || null,
         duree: null,
       };
 
@@ -834,15 +898,16 @@ exports.list = async (req, res) => {
       } else if (payment.type === 'subscription') {
         transaction.type = 'Abonnement';
       } else {
-        if (payment.description && payment.description.includes('pub')) {
+        const desc = (payment.description || '').toLowerCase();
+        if (desc.includes('pub')) {
           transaction.type = 'Demande de pub';
           transaction.duree = payment.duree || extractDurationFromDescription(payment.description);
-        } else if (payment.description && payment.description.includes('vente')) {
+        } else if (desc.includes('vente')) {
           transaction.type = 'Vente';
           transaction.duree = payment.duree || extractDurationFromDescription(payment.description);
-        } else if (payment.description && payment.description.includes('vérification')) {
+        } else if (desc.includes('vérification') || desc.includes('verification')) {
           transaction.type = 'Vérification';
-        } else if (payment.description && payment.description.includes('abonnement')) {
+        } else if (desc.includes('abonnement') || desc.includes('subscription')) {
           transaction.type = 'Abonnement';
         }
       }
@@ -852,7 +917,13 @@ exports.list = async (req, res) => {
 
     let filteredTransactions = transactions;
     if (type && type !== 'all') {
-      filteredTransactions = transactions.filter(t => t.type === type);
+      const normalizedType = normalizeTypeFilter(type);
+      filteredTransactions = transactions.filter(
+        t =>
+          t.type === normalizedType ||
+          String(t.type || '').toLowerCase() === String(type).toLowerCase() ||
+          String(t.rawType || '').toLowerCase() === String(type).toLowerCase()
+      );
     }
 
     if (search) {
@@ -865,11 +936,13 @@ exports.list = async (req, res) => {
       );
     }
 
+    const availableTypes = [...new Set(transactions.map(t => t.type).filter(Boolean))];
     return res.json({
       transactions: filteredTransactions,
       total: filteredTransactions.length,
       page: 1,
-      limit: Number(limit) || 100
+      limit: Number(limit) || 100,
+      availableTypes
     });
   } catch (error) {
     console.error('[list] error:', error);

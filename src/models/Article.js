@@ -70,6 +70,9 @@ const articleSchema = new mongoose.Schema({
   dateAchat: { type: Date, default: null }, // Date à laquelle l'acheteur est lié à l'article
   // Source de l'article : 'tranoo' (Landing Page) ou 'app' (application principale)
   source: { type: String, enum: ['tranoo', 'app'], default: 'app' },
+  // Verrouillage automatique des pièces si abonnement vendeur inactif
+  subscriptionLocked: { type: Boolean, default: false },
+  subscriptionLockedAt: { type: Date, default: null },
   // Statistiques de vues
   views: { type: Number, default: 0 }, // Nombre total de vues de tous les utilisateurs
   lastViewed: { type: Date, default: null }, // Date de la dernière vue
