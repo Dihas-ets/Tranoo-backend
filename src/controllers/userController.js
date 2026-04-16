@@ -150,6 +150,89 @@ exports.deleteUser = async (req, res) => {
   }
 };
 
+/**
+ * Suppression du compte de l'utilisateur connecté.
+ * Objectif: permettre la demande de suppression conforme (Apple 5.1.1(v)).
+ */
+exports.deleteMyAccount = async (req, res) => {
+  try {
+    console.log('[DELETE_MY_ACCOUNT] ===== DEBUT =====');
+    const mongoUser = req.user;
+    if (!mongoUser) {
+      console.error('[DELETE_MY_ACCOUNT] req.user manquant');
+      return res.status(401).json({ message: 'Utilisateur non authentifié' });
+    }
+
+    const userId = mongoUser._id;
+    const firebaseUid = mongoUser.uid;
+    console.log('[DELETE_MY_ACCOUNT] userId:', String(userId));
+    console.log('[DELETE_MY_ACCOUNT] firebaseUid:', firebaseUid);
+    console.log('[DELETE_MY_ACCOUNT] role:', mongoUser.role);
+    console.log('[DELETE_MY_ACCOUNT] email:', mongoUser.email);
+
+    if (!userId || !firebaseUid) {
+      console.error('[DELETE_MY_ACCOUNT] _id ou firebaseUid manquant');
+      return res.status(400).json({
+        message: 'Informations utilisateur incomplètes (uid/firebase ou _id manquant)',
+      });
+    }
+
+    // Best-effort: supprimer les données liées à l'utilisateur
+    const [Message, ChatRoom, Notification, Order, Delivery, PropositionTransit, Article, UserDevice] =
+      await Promise.all([
+        Promise.resolve(require('../models/Message')),
+        Promise.resolve(require('../models/ChatRoom')),
+        Promise.resolve(require('../models/Notification')),
+        Promise.resolve(require('../models/Order')),
+        Promise.resolve(require('../models/Delivery')),
+        Promise.resolve(require('../models/PropositionTransit')),
+        Promise.resolve(require('../models/Article')),
+        Promise.resolve(require('../models/UserDevice')),
+      ]);
+
+    // Discussions / notifications
+    console.log('[DELETE_MY_ACCOUNT] Suppression des donnees liees...');
+    await Promise.all([
+      Message.deleteMany({ sender: userId }),
+      ChatRoom.deleteMany({ participants: userId }),
+      Notification.deleteMany({ recipient: userId }),
+      Order.deleteMany({ userId }),
+      Delivery.deleteMany({
+        $or: [
+          { acheteur: userId },
+          { livreur: userId },
+          { 'fournisseur.userId': userId },
+          { 'pickups.fournisseur.userId': userId },
+        ],
+      }),
+      PropositionTransit.deleteMany({ transitaire: userId }),
+      Article.deleteMany({ vendeur: userId }),
+      UserDevice.deleteMany({ userUid: firebaseUid }),
+    ]);
+    console.log('[DELETE_MY_ACCOUNT] Donnees liees supprimees');
+
+    // Supprimer l'utilisateur MongoDB
+    console.log('[DELETE_MY_ACCOUNT] Suppression MongoDB...');
+    await User.findByIdAndDelete(userId);
+    console.log('[DELETE_MY_ACCOUNT] Utilisateur MongoDB supprime');
+
+    // Supprimer l'utilisateur Firebase Auth (empêche toute reconnexion)
+    console.log('[DELETE_MY_ACCOUNT] Suppression Firebase Auth...');
+    await admin.auth().deleteUser(firebaseUid);
+    console.log('[DELETE_MY_ACCOUNT] Utilisateur Firebase supprime');
+    console.log('[DELETE_MY_ACCOUNT] ===== SUCCES =====');
+
+    return res.json({ message: 'Compte supprimé' });
+  } catch (error) {
+    console.error('[DELETE_MY_ACCOUNT] Erreur:', error);
+    console.error('[DELETE_MY_ACCOUNT] Message:', error?.message);
+    console.error('[DELETE_MY_ACCOUNT] Stack:', error?.stack);
+    return res
+      .status(500)
+      .json({ message: 'Erreur lors de la suppression du compte', error: error.message || error });
+  }
+};
+
 exports.getProfile = async (req, res) => {
   console.log('[GET_PROFILE] ===== DÉBUT RÉCUPÉRATION PROFIL =====');
   try {
