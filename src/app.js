@@ -423,6 +423,17 @@ try {
   console.warn('Order routes non chargées:', e.message);
 }
 
+// Invoice routes
+try {
+  const invoiceRoutes = require('./routes/invoice');
+  app.use('/api/invoices', invoiceRoutes);
+  // Alias de compatibilité (anciens chemins possibles côté clients)
+  app.use('/api/invoice', invoiceRoutes);
+  app.use('/api/factures', invoiceRoutes);
+} catch (e) {
+  console.warn('Invoice routes non chargées:', e.message);
+}
+
 // Delivery settings routes
 try {
   const deliverySettingsRoutes = require('./routes/deliverySettings');

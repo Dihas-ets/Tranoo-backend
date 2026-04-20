@@ -54,6 +54,8 @@ const invoiceSchema = new mongoose.Schema({
   companyAddress: { type: String },
   companyPhone: { type: String },
   companyEmail: { type: String },
+  sellerName: { type: String, default: null },
+  shopName: { type: String, default: null },
   
   // Références
   reference: { type: String, required: true },
@@ -69,6 +71,8 @@ const invoiceSchema = new mongoose.Schema({
   // Dates
   issueDate: { type: Date, required: true, default: Date.now },
   dueDate: { type: Date },
+  isRead: { type: Boolean, default: false },
+  readAt: { type: Date, default: null },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
 });

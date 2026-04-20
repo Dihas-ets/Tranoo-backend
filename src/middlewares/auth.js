@@ -47,46 +47,32 @@ module.exports = async function (req, res, next) {
     const uid = decodedToken.uid;
     const email = decodedToken.email;
 
-    // On récupère l'utilisateur MongoDB correspondant au uid Firebase
+    // On récupère d'abord l'utilisateur MongoDB correspondant au uid Firebase
     console.log('[AUTH] Recherche utilisateur MongoDB avec UID:', uid);
     let user = await User.findOne({ uid });
 
-    // Fallback: si l'utilisateur n'existe pas encore, on le crée automatiquement.
-    if (!user) {
-      console.warn(
-        '[AUTH] Utilisateur non trouvé dans MongoDB, création automatique...',
-      );
-      try {
-        const defaultNom = email ? email.split('@')[0] : 'Utilisateur';
-        const defaultPrenoms = '';
-        const defaultTelephone = '';
-
-        user = new User({
-          uid,
-          nom: defaultNom,
-          prenoms: defaultPrenoms,
-          email,
-          telephone: defaultTelephone,
-          role: 'acheteur', // rôle par défaut pour inscription mobile simple
-          statut: 'actif',
-          dateInscription: new Date(),
-        });
-
-        await user.save();
-        console.log(
-          '[AUTH] ✅ Utilisateur créé automatiquement dans MongoDB:',
-          user._id,
-        );
-      } catch (createError) {
-        console.error(
-          '[AUTH] ❌ Erreur lors de la création automatique de l\'utilisateur:',
-          createError,
-        );
-        return res.status(500).json({
-          message: "Erreur lors de la création automatique de l'utilisateur",
-          error: createError.message,
-        });
+    // Fallback SANS création auto: si uid introuvable, essayer par email
+    if (!user && email) {
+      console.warn('[AUTH] UID introuvable, tentative de récupération par email:', email);
+      const userByEmail = await User.findOne({ email });
+      if (userByEmail) {
+        console.warn('[AUTH] ✅ Utilisateur retrouvé par email. Synchronisation du UID...');
+        userByEmail.uid = uid;
+        await userByEmail.save();
+        user = userByEmail;
+        console.log('[AUTH] ✅ UID synchronisé pour user _id:', user._id);
+      } else {
+        console.warn('[AUTH] Aucun utilisateur trouvé par email non plus');
       }
+    }
+
+    // Si l'utilisateur n'existe toujours pas en base, on refuse l'accès.
+    if (!user) {
+      console.error('[AUTH] ❌ Utilisateur introuvable dans MongoDB pour uid:', uid);
+      return res.status(401).json({
+        message: 'Utilisateur non trouvé. Veuillez vous reconnecter.',
+        code: 'USER_NOT_FOUND',
+      });
     } else {
       console.log('[AUTH] ✅ Utilisateur trouvé dans MongoDB');
       console.log('[AUTH] MongoDB _id:', user._id);

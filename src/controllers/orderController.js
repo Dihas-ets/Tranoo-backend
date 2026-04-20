@@ -2,8 +2,10 @@ const Order = require('../models/Order');
 const Delivery = require('../models/Delivery');
 const User = require('../models/User');
 const Article = require('../models/Article');
+const Invoice = require('../models/Invoice');
 const notificationController = require('./notificationController');
 const DeliverySettings = require('../models/DeliverySettings');
+const { nextInvoiceNumber } = require('../utils/invoiceNumberService');
 
 function haversineKm(lat1, lon1, lat2, lon2) {
   const R = 6371;
@@ -224,6 +226,68 @@ const createOrder = async (req, res) => {
       } catch (e) {
         console.error('Erreur notif createOrder+delivery:', e.message);
       }
+    }
+
+    // Générer une facture dès création de commande (paiement déjà effectué côté app)
+    try {
+      const firstItem = Array.isArray(items) && items.length > 0 ? items[0] : null;
+      let sellerName = null;
+      let shopName = null;
+      if (firstItem?.articleId) {
+        const article = await Article.findById(firstItem.articleId)
+          .select('vendeur entreprise')
+          .lean();
+        if (article?.vendeur) {
+          const seller = await User.findById(article.vendeur)
+            .select('nom prenoms entreprise')
+            .lean();
+          if (seller) {
+            sellerName = [seller.nom, seller.prenoms].filter(Boolean).join(' ').trim() || null;
+            shopName = seller.entreprise || article.entreprise || null;
+          }
+        }
+      }
+
+      const invoiceNumber = await nextInvoiceNumber();
+      const reference = `INV-${String(order._id).slice(-8).toUpperCase()}`;
+      const dueDate = new Date();
+      dueDate.setDate(dueDate.getDate() + 7);
+
+      const invoiceItems = (items || []).map((it) => ({
+        articleId: String(it.articleId || ''),
+        title: String(it.title || 'Article'),
+        quantity: Number(it.quantity || 1),
+        unitPrice: Number(it.unitPrice || 0),
+        totalPrice: Number(it.totalPrice || 0),
+        imageUrl: it.imageUrl || '',
+      }));
+
+      await Invoice.create({
+        orderId: order._id,
+        userId: userId,
+        invoiceNumber,
+        items: invoiceItems,
+        subtotal: Number(subtotal || 0),
+        deliveryFee: Number(order.deliveryFee || deliveryFee || 0),
+        discount: Number(discount || 0),
+        tax: 0,
+        total: Number(order.total || total || 0),
+        paymentMethod: paymentMethod || 'online',
+        paymentStatus: 'paid',
+        paymentDate: new Date(),
+        deliveryAddress: deliveryAddress || '—',
+        deliveryStatus: 'processing',
+        company: shopName || 'Tranoo',
+        sellerName,
+        shopName: shopName || 'Tranoo',
+        reference,
+        status: 'paid',
+        issueDate: new Date(),
+        dueDate,
+      });
+    } catch (invoiceError) {
+      console.error('Erreur génération facture:', invoiceError);
+      // Ne pas bloquer la création de commande si la facture échoue
     }
 
     res.status(201).json({
