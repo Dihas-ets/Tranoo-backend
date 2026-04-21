@@ -2,15 +2,19 @@ const SubscriptionPricing = require('../models/SubscriptionPricing');
 
 exports.getSubscriptionPricing = async (_req, res) => {
   try {
+    console.log('[SUBSCRIPTION_PRICING][GET] ===== DÉBUT =====');
     // Toujours cibler le document singleton
     let pricing = await SubscriptionPricing.findOne({ key: 'SUBSCRIPTION_PRICING_SINGLETON' });
     if (!pricing) {
+      console.warn('[SUBSCRIPTION_PRICING][GET] Aucun document trouvé, création défaut 5000');
       pricing = new SubscriptionPricing({
         key: 'SUBSCRIPTION_PRICING_SINGLETON',
         prixMensuel: 5000,
       });
       await pricing.save();
     }
+    console.log('[SUBSCRIPTION_PRICING][GET] Prix renvoyé:', pricing.prixMensuel);
+    console.log('[SUBSCRIPTION_PRICING][GET] ===== FIN =====');
     res.status(200).json(pricing);
   } catch (error) {
     console.error('Error fetching subscription pricing:', error);
