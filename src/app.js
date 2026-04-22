@@ -450,7 +450,7 @@ try {
   console.warn('Pub pricing routes non chargées:', e.message);
 }
 
-// Subscription pricing routes
+// Subscription pricing routes 
 try {
   const subscriptionPricingRoutes = require('./routes/subscriptionPricing');
   app.use('/api/admin/subscription-pricing', subscriptionPricingRoutes);
