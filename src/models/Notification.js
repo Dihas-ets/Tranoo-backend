@@ -82,6 +82,10 @@ const notificationSchema = new mongoose.Schema({
     stampUrl: { type: String },
     signatureUrl: { type: String },
   },
+  data: {
+    type: mongoose.Schema.Types.Mixed,
+    default: {},
+  },
   createdAt: {
     type: Date,
     default: Date.now

@@ -73,6 +73,12 @@ const articleSchema = new mongoose.Schema({
   // Verrouillage automatique des pièces si abonnement vendeur inactif
   subscriptionLocked: { type: Boolean, default: false },
   subscriptionLockedAt: { type: Date, default: null },
+  // Contexte d'une proposition suite à une alerte acheteur
+  alertContext: {
+    sourceNotificationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Notification', default: null },
+    buyerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    requestType: { type: String, default: null },
+  },
   // Statistiques de vues
   views: { type: Number, default: 0 }, // Nombre total de vues de tous les utilisateurs
   lastViewed: { type: Date, default: null }, // Date de la dernière vue

@@ -277,6 +277,43 @@ exports.updateStatut = async (req, res) => {
       article.vendeur = original?.vendeur || null;
     }
     await article.save();
+    if (
+      req.body.statut === 'en_ligne' &&
+      article.alertContext &&
+      article.alertContext.buyerId
+    ) {
+      try {
+        const notificationController = require('./notificationController');
+        const isPiece = (article.type || '').toString().toLowerCase() === 'piece';
+        const detailPath = isPiece ? 'mastervac' : 'cars_info';
+        await notificationController.createNotification(
+          article.alertContext.buyerId,
+          req.user._id,
+          'Une proposition correspond a votre alerte',
+          `Votre alerte a recu une nouvelle proposition: "${article.titre}".`,
+          'general',
+          article._id,
+          'Article',
+          {
+            action: 'view_proposal',
+            ctaLabel: 'Voir la proposition',
+            targetArticleId: article._id.toString(),
+            targetType: article.type,
+            targetPath: detailPath,
+            articleTitle: article.titre || '',
+            thumbnailUrl:
+              Array.isArray(article.photos) && article.photos.length > 0
+                ? article.photos[0]
+                : '',
+            sourceNotificationId: article.alertContext.sourceNotificationId
+              ? article.alertContext.sourceNotificationId.toString()
+              : null,
+          }
+        );
+      } catch (buyerNotifError) {
+        console.error('[ARTICLE] Erreur notification acheteur apres validation:', buyerNotifError);
+      }
+    }
     // Envoi de notification push au vendeur si fcmToken présent
     const User = require('../models/User');
     const adminSdk = require('firebase-admin');

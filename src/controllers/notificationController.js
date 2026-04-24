@@ -23,7 +23,8 @@ exports.createNotification = async (
       message,
       type,
       relatedId,
-      relatedModel
+      relatedModel,
+      data: extraData && typeof extraData === 'object' ? extraData : {}
     });
 
     await notification.save();
@@ -32,6 +33,14 @@ exports.createNotification = async (
     const recipient = await User.findById(recipientId);
     if (recipient && recipient.fcmToken) {
       try {
+        const fcmSafeData = {};
+        if (extraData && typeof extraData === 'object') {
+          Object.entries(extraData).forEach(([k, v]) => {
+            if (v !== undefined && v !== null) {
+              fcmSafeData[k] = String(v);
+            }
+          });
+        }
         await admin.messaging().send({
           token: recipient.fcmToken,
           notification: {
@@ -43,7 +52,7 @@ exports.createNotification = async (
             notificationId: notification._id.toString(),
             relatedId: relatedId ? relatedId.toString() : '',
             relatedModel: relatedModel || '',
-            ...(extraData && typeof extraData === 'object' ? extraData : {})
+            ...fcmSafeData
           }
         });
         console.log(`[NOTIFICATION] Push envoyée à ${recipient.email}`);
@@ -583,8 +592,15 @@ exports.createVehicleSearchRequestHTTP = async (req, res) => {
           null,
           {
             requestType: 'vehicle_search',
+            buyerId: buyer._id.toString(),
             marque: cleanMarque,
             modele: cleanModele,
+            anneeMin: anneeMin ? String(anneeMin).trim() : '',
+            anneeMax: anneeMax ? String(anneeMax).trim() : '',
+            budgetMax: budgetMax ? String(budgetMax).trim() : '',
+            localisation: cleanLocalisation,
+            description: cleanDescription,
+            telephone: cleanTelephone || String(buyer.telephone || '').trim(),
           }
         )
       )
@@ -598,6 +614,109 @@ exports.createVehicleSearchRequestHTTP = async (req, res) => {
     console.error('[SEARCH REQUEST] Erreur creation notification:', error);
     return res.status(500).json({
       message: 'Erreur lors de lenvoi de la demande.',
+      details: error?.message,
+    });
+  }
+};
+
+// Créer une demande de recherche pièce (acheteur -> vendeurs)
+exports.createPieceSearchRequestHTTP = async (req, res) => {
+  try {
+    const {
+      marque,
+      modele,
+      pieceName,
+      annee,
+      urgence,
+      localisation,
+      description,
+      telephone,
+    } = req.body || {};
+
+    const cleanMarque = String(marque || '').trim();
+    const cleanModele = String(modele || '').trim();
+    const cleanPieceName = String(pieceName || '').trim();
+    const cleanAnnee = String(annee || '').trim();
+    const cleanUrgence = String(urgence || '').trim();
+    const cleanLocalisation = String(localisation || '').trim();
+    const cleanDescription = String(description || '').trim();
+    const cleanTelephone = String(telephone || '').trim();
+
+    if (!cleanMarque || !cleanModele || !cleanPieceName) {
+      return res.status(400).json({
+        message: 'Les champs marque, modele et pieceName sont requis.',
+      });
+    }
+
+    const buyer = await User.findById(req.user?._id).select('nom prenoms email telephone');
+    if (!buyer) {
+      return res.status(404).json({ message: 'Acheteur introuvable.' });
+    }
+
+    const vendeurs = await User.find({
+      role: 'vendeur',
+      isBlocked: { $ne: true },
+    }).select('_id');
+
+    if (!vendeurs.length) {
+      return res.status(200).json({
+        message: 'Aucun vendeur a notifier pour le moment.',
+        notifiedCount: 0,
+      });
+    }
+
+    const fullName = `${buyer.nom || ''} ${buyer.prenoms || ''}`.trim() || 'Un acheteur';
+    const details = [
+      `Marque: ${cleanMarque}`,
+      `Modele: ${cleanModele}`,
+      `Piece recherchee: ${cleanPieceName}`,
+      cleanAnnee ? `Annee: ${cleanAnnee}` : null,
+      cleanUrgence ? `Urgence: ${cleanUrgence}` : null,
+      cleanLocalisation ? `Localisation: ${cleanLocalisation}` : null,
+      cleanTelephone ? `Telephone: ${cleanTelephone}` : null,
+      cleanDescription ? `Details: ${cleanDescription}` : null,
+      buyer.email ? `Email acheteur: ${buyer.email}` : null,
+    ]
+      .filter(Boolean)
+      .join(' | ');
+
+    const title = 'Nouvelle recherche piece acheteur';
+    const message = `${fullName} recherche une piece: ${cleanPieceName} pour ${cleanMarque} ${cleanModele}. ${details}`;
+
+    await Promise.all(
+      vendeurs.map((vendeur) =>
+        exports.createNotification(
+          vendeur._id,
+          req.user._id,
+          title,
+          message,
+          'alerte',
+          null,
+          null,
+          {
+            requestType: 'piece_search',
+            buyerId: buyer._id.toString(),
+            marque: cleanMarque,
+            modele: cleanModele,
+            pieceName: cleanPieceName,
+            annee: cleanAnnee,
+            urgence: cleanUrgence,
+            localisation: cleanLocalisation,
+            description: cleanDescription,
+            telephone: cleanTelephone || String(buyer.telephone || '').trim(),
+          }
+        )
+      )
+    );
+
+    return res.status(201).json({
+      message: 'Demande de piece envoyee aux vendeurs avec succes.',
+      notifiedCount: vendeurs.length,
+    });
+  } catch (error) {
+    console.error('[PIECE SEARCH REQUEST] Erreur creation notification:', error);
+    return res.status(500).json({
+      message: 'Erreur lors de lenvoi de la demande de piece.',
       details: error?.message,
     });
   }
