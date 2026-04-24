@@ -4,7 +4,7 @@ const notificationController = require('./notificationController');
 const User = require('../models/User');
 const Article = require('../models/Article');
 
-// Créer ou récupérer une room entre deux utilisateurs pour un article
+// Créer ou récupérer une room entre deux utilisateurs pour un artc
 exports.createOrGetRoom = async (req, res) => {
   try {
     const { user1, user2, article } = req.body;
