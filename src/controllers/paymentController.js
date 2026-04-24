@@ -1,4 +1,5 @@
 const axios = require('axios');
+const mongoose = require('mongoose');
 const Payment = require('../models/Payment');
 const Achat = require('../models/Achat');
 const Article = require('../models/Article');
@@ -8,6 +9,34 @@ const Subscription = require('../models/Subscription');
 const Referral = require('../models/Referral');
 const AgentEarning = require('../models/AgentEarning');
 const ReferralSettings = require('../models/ReferralSettings');
+
+function isObjectIdLike(value) {
+  return typeof value === 'string' && mongoose.Types.ObjectId.isValid(value);
+}
+
+async function resolveClientLabel(payment) {
+  const rawUser = payment?.user;
+  const userId =
+    typeof rawUser === 'string'
+      ? rawUser
+      : rawUser?._id
+      ? String(rawUser._id)
+      : null;
+
+  if (!userId) return 'Client inconnu';
+  if (!isObjectIdLike(userId)) {
+    if (userId === 'enterprise') return 'Entreprise Tranoo';
+    return userId;
+  }
+
+  try {
+    const u = await User.findById(userId).select('nom prenoms email').lean();
+    if (!u) return 'Client inconnu';
+    return `${u.nom || ''} ${u.prenoms || ''}`.trim() || 'Client inconnu';
+  } catch (_) {
+    return 'Client inconnu';
+  }
+}
 
 const FEEXPAY_BASE_URL = process.env.FEEXPAY_BASE_URL || 'https://api.feexpay.me';
 const FEEXPAY_SHOP_ID = process.env.FEEXPAY_SHOP_ID || '';
@@ -738,10 +767,16 @@ exports.getTransaction = async (req, res) => {
     const payment = await Payment.findById(id)
       .populate('achat')
       .populate('publicite')
-      .populate('user', 'nom prenoms email');
+      .lean();
     
     if (!payment) {
       return res.status(404).json({ message: 'Transaction non trouvée' });
+    }
+
+    let userDoc = null;
+    const userId = typeof payment.user === 'string' ? payment.user : null;
+    if (userId && isObjectIdLike(userId)) {
+      userDoc = await User.findById(userId).select('nom prenoms email').lean();
     }
 
     // Formater la transaction avec toutes les informations
@@ -758,8 +793,8 @@ exports.getTransaction = async (req, res) => {
       description: payment.description,
       createdAt: payment.createdAt,
       updatedAt: payment.updatedAt,
-      client: payment.user ? `${payment.user.nom || ''} ${payment.user.prenoms || ''}`.trim() : 'Client inconnu',
-      email: payment.user?.email || null,
+      client: await resolveClientLabel(payment),
+      email: userDoc?.email || null,
       provider: payment.provider || 'feexpay',
       feexpayTransactionId: payment.transactionId,
       type: getTransactionType(payment),
@@ -840,7 +875,6 @@ exports.list = async (req, res) => {
     let payments = await Payment.find(filter)
       .populate('achat')
       .populate('publicite')
-      .populate('user', 'nom prenoms email')
       .sort({ createdAt: -1 })
       .limit(Math.min(Number(limit) || 100, 500));
 
@@ -861,7 +895,6 @@ exports.list = async (req, res) => {
       payments = await Payment.find(filter)
         .populate('achat')
         .populate('publicite')
-        .populate('user', 'nom prenoms email')
         .sort({ createdAt: -1 })
         .limit(Math.min(Number(limit) || 100, 500));
     }
@@ -879,7 +912,7 @@ exports.list = async (req, res) => {
         description: payment.description,
         createdAt: payment.createdAt,
         updatedAt: payment.updatedAt,
-        client: payment.user ? `${payment.user.nom || ''} ${payment.user.prenoms || ''}`.trim() : 'Client inconnu',
+        client: await resolveClientLabel(payment),
         type: 'Achats',
         rawType: payment.type || null,
         duree: null,
@@ -937,12 +970,14 @@ exports.list = async (req, res) => {
     }
 
     const availableTypes = [...new Set(transactions.map(t => t.type).filter(Boolean))];
+    const availableStatuses = [...new Set(transactions.map(t => t.status).filter(Boolean))];
     return res.json({
       transactions: filteredTransactions,
       total: filteredTransactions.length,
       page: 1,
       limit: Number(limit) || 100,
-      availableTypes
+      availableTypes,
+      availableStatuses
     });
   } catch (error) {
     console.error('[list] error:', error);
@@ -1152,27 +1187,70 @@ exports.recordFeexPayFlutter = async (req, res) => {
       return res.status(400).json({ message: 'transKey et amount requis' });
     }
 
-    const customId = `${type.toUpperCase()}_${req.user?._id}_${Date.now()}`;
-
-    const payment = await Payment.create({
-      provider: 'feexpay',
+    const mappedStatus = mapStatus(status);
+    const nowIso = new Date().toISOString();
+    const existing = await Payment.findOne({
       transactionId: transKey,
-      customId,
       user: req.user?._id,
-      amount: Number(amount),
-      currency: 'XOF',
-      status: mapStatus(status),
-      method: 'FEEXPAY_FLUTTER',
-      description,
       type,
-      rawInitResponse: {
+      method: 'FEEXPAY_FLUTTER',
+    }).sort({ createdAt: -1 });
+
+    let payment;
+    if (existing) {
+      // Priorité au succès: ne jamais rétrograder success -> failed/cancelled.
+      const shouldUpgradeToSuccess =
+        existing.status !== 'success' && mappedStatus === 'success';
+      const shouldSetNonSuccess =
+        existing.status !== 'success' && mappedStatus !== 'success';
+
+      if (shouldUpgradeToSuccess || shouldSetNonSuccess) {
+        existing.status = mappedStatus;
+      }
+      existing.amount = Number(amount) || existing.amount;
+      existing.description = description || existing.description;
+      existing.rawInitResponse = {
+        ...(existing.rawInitResponse || {}),
         source: 'feexpay_flutter',
         transKey,
-        recordedAt: new Date().toISOString()
-      },
-    });
-
-    console.log('Paiement FeexPay Flutter enregistré:', payment._id);
+        recordedAt: nowIso,
+        incomingStatus: mappedStatus,
+      };
+      await existing.save();
+      payment = existing;
+      console.log(
+        'Paiement FeexPay Flutter mis à jour:',
+        payment._id,
+        'status=',
+        payment.status,
+      );
+    } else {
+      const customId = `${type.toUpperCase()}_${req.user?._id}_${Date.now()}`;
+      payment = await Payment.create({
+        provider: 'feexpay',
+        transactionId: transKey,
+        customId,
+        user: req.user?._id,
+        amount: Number(amount),
+        currency: 'XOF',
+        status: mappedStatus,
+        method: 'FEEXPAY_FLUTTER',
+        description,
+        type,
+        rawInitResponse: {
+          source: 'feexpay_flutter',
+          transKey,
+          recordedAt: nowIso,
+          incomingStatus: mappedStatus,
+        },
+      });
+      console.log(
+        'Paiement FeexPay Flutter enregistré:',
+        payment._id,
+        'status=',
+        payment.status,
+      );
+    }
 
     return res.json({
       ok: true,

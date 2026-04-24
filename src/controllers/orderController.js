@@ -21,6 +21,11 @@ function haversineKm(lat1, lon1, lat2, lon2) {
   return R * c;
 }
 
+function toNum(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
 // Créer une nouvelle commande (pièces détachées ou autre)
 const createOrder = async (req, res) => {
   try {
@@ -107,6 +112,12 @@ const createOrder = async (req, res) => {
       }
 
       const settings = await DeliverySettings.getSettings();
+      console.log(
+        '[ORDER_DELIVERY] order=%s pricePerKm=%s items=%s',
+        order._id?.toString?.() || order._id,
+        settings?.pricePerKm,
+        (items || []).length
+      );
       const pickups = [];
       let totalFee = 0;
       let totalDistance = 0;
@@ -129,15 +140,40 @@ const createOrder = async (req, res) => {
           }
         }
 
-        // lieuDepart: prioriser article.fournisseur coords, sinon fournisseur.adresse
+        // lieuDepart: prioriser article.fournisseur coords,
+        // puis deliveryInfo.lieuDepart, puis deliveryInfo.fournisseur.
         const firstArt = rows.find((r) => r.art)?.art;
         const f = firstArt?.fournisseur || {};
+        const infoDepart = info?.lieuDepart || {};
+        const infoFournisseur = info?.fournisseur || {};
+        const departLat =
+          toNum(f?.latitude) ??
+          toNum(infoDepart?.latitude) ??
+          toNum(infoFournisseur?.latitude);
+        const departLng =
+          toNum(f?.longitude) ??
+          toNum(infoDepart?.longitude) ??
+          toNum(infoFournisseur?.longitude);
         const lieuDepart = {
-          nom: fournisseur?.nom || f?.nom || 'Fournisseur',
-          adresse: f?.adresseTexte || fournisseur?.adresse || '—',
-          latitude: f?.latitude,
-          longitude: f?.longitude,
-          telephone: f?.telephone || fournisseur?.telephone,
+          nom:
+            fournisseur?.nom ||
+            f?.nom ||
+            infoDepart?.nom ||
+            infoFournisseur?.nom ||
+            'Fournisseur',
+          adresse:
+            f?.adresseTexte ||
+            infoDepart?.adresse ||
+            infoFournisseur?.adresse ||
+            fournisseur?.adresse ||
+            '—',
+          latitude: departLat,
+          longitude: departLng,
+          telephone:
+            f?.telephone ||
+            infoDepart?.telephone ||
+            infoFournisseur?.telephone ||
+            fournisseur?.telephone,
         };
 
         const pieces = rows.map(({ it }) => ({
@@ -149,20 +185,33 @@ const createOrder = async (req, res) => {
 
         let distanceKm = null;
         let fee = 0;
+        const destinationLat = toNum(destination.latitude);
+        const destinationLng = toNum(destination.longitude);
         if (
           typeof lieuDepart.latitude === 'number' &&
           typeof lieuDepart.longitude === 'number' &&
-          typeof destination.latitude === 'number' &&
-          typeof destination.longitude === 'number'
+          typeof destinationLat === 'number' &&
+          typeof destinationLng === 'number'
         ) {
           distanceKm = haversineKm(
             lieuDepart.latitude,
             lieuDepart.longitude,
-            destination.latitude,
-            destination.longitude
+            destinationLat,
+            destinationLng
           );
-          fee = Math.round(distanceKm * (settings.pricePerKm || 75));
+          const billedKm = distanceKm > 0 && distanceKm < 1 ? 1 : distanceKm;
+          fee = Math.round(billedKm * Number(settings.pricePerKm ?? 75));
         }
+        console.log(
+          '[ORDER_DELIVERY_PICKUP] vendeur=%s depart=(%s,%s) dest=(%s,%s) km=%s fee=%s',
+          vendeurId,
+          lieuDepart.latitude,
+          lieuDepart.longitude,
+          destinationLat,
+          destinationLng,
+          distanceKm,
+          fee
+        );
 
         totalFee += fee;
         totalDistance += distanceKm || 0;
@@ -192,6 +241,13 @@ const createOrder = async (req, res) => {
         fraisColis: subtotal ?? 0,
         totalCommande: total ?? 0,
       });
+      console.log(
+        '[ORDER_DELIVERY_TOTAL] order=%s totalDistance=%s totalFee=%s incomingDeliveryFee=%s',
+        order._id?.toString?.() || order._id,
+        totalDistance,
+        totalFee,
+        deliveryFee
+      );
 
       // Refléter le total dans la commande pour affichage stable
       order.deliveryFee = deliveryCreated.fraisLivraison;

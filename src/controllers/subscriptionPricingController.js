@@ -8,6 +8,7 @@ exports.getSubscriptionPricing = async (_req, res) => {
       pricing = new SubscriptionPricing({
         key: 'SUBSCRIPTION_PRICING_SINGLETON',
         prixMensuel: 5000,
+        freeTrialDays: 45,
       });
       await pricing.save();
     }
@@ -22,25 +23,40 @@ exports.updateSubscriptionPricing = async (req, res) => {
   console.log('[SUBSCRIPTION_PRICING] ===== DÉBUT MISE À JOUR =====');
   console.log('[SUBSCRIPTION_PRICING] Body reçu:', req.body);
   try {
-    const { prixMensuel } = req.body;
+    const { prixMensuel, freeTrialDays } = req.body;
 
-    if (prixMensuel === undefined || prixMensuel === null) {
-      console.error('[SUBSCRIPTION_PRICING] ❌ Prix mensuel manquant');
-      return res.status(400).json({ message: 'Prix mensuel requis' });
+    if (
+      (prixMensuel === undefined || prixMensuel === null) &&
+      (freeTrialDays === undefined || freeTrialDays === null)
+    ) {
+      console.error('[SUBSCRIPTION_PRICING] ❌ Aucune valeur de mise à jour');
+      return res.status(400).json({ message: 'Prix mensuel ou jours gratuits requis' });
     }
 
-    if (prixMensuel < 0) {
+    if (prixMensuel !== undefined && prixMensuel !== null && prixMensuel < 0) {
       console.error('[SUBSCRIPTION_PRICING] ❌ Prix mensuel invalide:', prixMensuel);
       return res.status(400).json({ message: 'Prix mensuel invalide' });
     }
+    if (freeTrialDays !== undefined && freeTrialDays !== null) {
+      if (!Number.isFinite(Number(freeTrialDays)) || Number(freeTrialDays) < 0) {
+        console.error('[SUBSCRIPTION_PRICING] ❌ freeTrialDays invalide:', freeTrialDays);
+        return res.status(400).json({ message: 'Nombre de jours gratuits invalide' });
+      }
+    }
 
     console.log('[SUBSCRIPTION_PRICING] Prix mensuel:', prixMensuel);
+    console.log('[SUBSCRIPTION_PRICING] freeTrialDays:', freeTrialDays);
 
     // Upsert sur le document singleton
     const updates = {
       $set: {
         key: 'SUBSCRIPTION_PRICING_SINGLETON',
-        prixMensuel: Number(prixMensuel),
+        ...(prixMensuel !== undefined && prixMensuel !== null
+          ? { prixMensuel: Math.round(Number(prixMensuel)) }
+          : {}),
+        ...(freeTrialDays !== undefined && freeTrialDays !== null
+          ? { freeTrialDays: Number(freeTrialDays) }
+          : {}),
         updatedAt: new Date(),
       },
       $setOnInsert: { createdAt: new Date() },

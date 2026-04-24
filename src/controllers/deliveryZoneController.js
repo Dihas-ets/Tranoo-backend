@@ -146,6 +146,13 @@ exports.getZoneForPoint = async (req, res) => {
 exports.calculateDeliveryFeeWithZones = async (req, res) => {
   try {
     const { supplier_lat, supplier_lng, delivery_lat, delivery_lng } = req.body;
+    console.log(
+      '[DELIVERY_ZONE_CALC] input supplier=(%s,%s) delivery=(%s,%s)',
+      supplier_lat,
+      supplier_lng,
+      delivery_lat,
+      delivery_lng
+    );
     
     if (!supplier_lat || !supplier_lng || !delivery_lat || !delivery_lng) {
       return res.status(400).json({ 
@@ -197,7 +204,15 @@ exports.calculateDeliveryFeeWithZones = async (req, res) => {
     } else {
       // Utiliser les settings par défaut
       const settings = await DeliverySettings.getSettings();
-      deliveryFee = Math.round(distanceKm * settings.pricePerKm);
+      const billedKm = distanceKm > 0 && distanceKm < 1 ? 1 : distanceKm;
+      deliveryFee = Math.round(billedKm * settings.pricePerKm);
+      console.log(
+        '[DELIVERY_ZONE_CALC] no zone, using settings pricePerKm=%s distanceKm=%s billedKm=%s fee=%s',
+        settings.pricePerKm,
+        distanceKm,
+        billedKm,
+        deliveryFee
+      );
       zoneInfo = {
         name: 'Zone standard',
         pricePerKm: settings.pricePerKm,

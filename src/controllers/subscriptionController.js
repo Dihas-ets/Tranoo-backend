@@ -8,8 +8,13 @@ async function hasSellerPieceAccess(userId) {
   if (!user) return false;
   const inscriptionDate = user.dateInscription || user.createdAt;
   if (inscriptionDate) {
+    const pricing =
+      (await SubscriptionPricing.findOne({
+        key: 'SUBSCRIPTION_PRICING_SINGLETON',
+      }).lean()) || {};
+    const freeTrialDays = Number(pricing.freeTrialDays ?? 45);
     const trialEnd = new Date(inscriptionDate);
-    trialEnd.setDate(trialEnd.getDate() + 90);
+    trialEnd.setDate(trialEnd.getDate() + (Number.isFinite(freeTrialDays) ? freeTrialDays : 45));
     if (new Date() <= trialEnd) return true;
   }
   const sub = await Subscription.findOne({ user: userId }).lean();
@@ -47,21 +52,39 @@ exports.getMySubscription = async (req, res) => {
     const pricing =
       (await SubscriptionPricing.findOne({
         key: 'SUBSCRIPTION_PRICING_SINGLETON',
-      }).lean()) || { prixMensuel: 5000 };
+      }).lean()) || { prixMensuel: 0, freeTrialDays: 45 };
+    console.log(
+      '[SUBSCRIPTION_ME] user=%s pricingDoc=%j',
+      userId?.toString?.() || userId,
+      pricing
+    );
     const accessAllowed = await hasSellerPieceAccess(userId);
     await syncSellerPieceVisibility(userId, accessAllowed);
 
     if (!sub) {
-      return res.json({ hasSubscription: false, monthlyPrice: pricing.prixMensuel || 5000 });
+      const resolvedMonthlyPrice = Number(pricing.prixMensuel ?? 0);
+      console.log(
+        '[SUBSCRIPTION_ME] no sub => resolvedMonthlyPrice=%s',
+        resolvedMonthlyPrice
+      );
+      return res.json({ hasSubscription: false, monthlyPrice: resolvedMonthlyPrice });
     }
     const hasSubscription = sub.expiresAt && new Date(sub.expiresAt) > new Date();
+    const resolvedMonthlyPrice = Number(pricing.prixMensuel ?? 0);
+    console.log(
+      '[SUBSCRIPTION_ME] activeOrExpired=%s resolvedMonthlyPrice=%s months=%s expiresAt=%s',
+      hasSubscription,
+      resolvedMonthlyPrice,
+      sub.months || 1,
+      sub.expiresAt
+    );
     return res.json({
       hasSubscription,
       activatedAt: sub.activatedAt,
       expiresAt: sub.expiresAt,
       plan: sub.plan,
       months: sub.months || 1,
-      monthlyPrice: pricing.prixMensuel || 5000,
+      monthlyPrice: resolvedMonthlyPrice,
       status: hasSubscription ? 'active' : 'expired',
     });
   } catch (e) {

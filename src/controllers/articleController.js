@@ -1,6 +1,7 @@
 const Article = require('../models/Article');
 const User = require('../models/User');
 const Subscription = require('../models/Subscription');
+const SubscriptionPricing = require('../models/SubscriptionPricing');
 const cloudinary = require('cloudinary').v2;
 
 cloudinary.config({
@@ -35,8 +36,13 @@ async function hasSellerPieceAccess(userId) {
 
   const inscriptionDate = user.dateInscription || user.createdAt;
   if (inscriptionDate) {
+    const pricing =
+      (await SubscriptionPricing.findOne({
+        key: 'SUBSCRIPTION_PRICING_SINGLETON',
+      }).lean()) || {};
+    const freeTrialDays = Number(pricing.freeTrialDays ?? 45);
     const trialEnd = new Date(inscriptionDate);
-    trialEnd.setDate(trialEnd.getDate() + 90);
+    trialEnd.setDate(trialEnd.getDate() + (Number.isFinite(freeTrialDays) ? freeTrialDays : 45));
     if (new Date() <= trialEnd) return true;
   }
 
@@ -49,7 +55,7 @@ exports.createArticle = async (req, res) => {
   try {
     // On suppose que req.user contient l'utilisateur authentifié (vendeur)
     const vendeurId = req.user && req.user._id ? req.user._id.toString() : req.body.vendeur;
-    // Restriction abonnement pour pièces vendeurs (trial 3 mois ou abonnement actif)
+    // Restriction abonnement pour pièces vendeurs (trial configurable ou abonnement actif)
     if (
       req.user &&
       req.user.role === 'vendeur' &&
@@ -70,8 +76,30 @@ exports.createArticle = async (req, res) => {
       source = 'tranoo';
     }
     // Forcer le statut à 'en_attente' à la création
-    const article = new Article({ ...req.body, vendeur: vendeurId, statut: 'en_attente', source });
+    const normalizedLieu = (req.body.lieu || req.body.localisation || '').toString();
+    if ((req.body.type || '').toString().toLowerCase() === 'piece') {
+      console.log(
+        '[ARTICLE_CREATE][PIECE] fournisseur payload=%j',
+        req.body.fournisseur || null
+      );
+    }
+    const article = new Article({
+      ...req.body,
+      lieu: req.body.lieu ?? normalizedLieu,
+      localisation: req.body.localisation ?? normalizedLieu,
+      vendeur: vendeurId,
+      statut: 'en_attente',
+      source,
+    });
     await article.save();
+    if ((article.type || '').toString().toLowerCase() === 'piece') {
+      console.log(
+        '[ARTICLE_CREATE][PIECE] saved fournisseur=%j lieu=%s localisation=%s',
+        article.fournisseur || null,
+        article.lieu,
+        article.localisation
+      );
+    }
     res.status(201).json({ message: 'Article créé', article });
   } catch (error) {
     console.error('Erreur détaillée lors de la création de l\'article :', error);
@@ -178,6 +206,15 @@ exports.getArticleById = async (req, res) => {
   try {
     const article = await Article.findById(req.params.id).populate('vendeur', 'nom prenoms email entreprise');
     if (!article) return res.status(404).json({ message: 'Article non trouvé' });
+    const f = article.fournisseur || {};
+    console.log(
+      '[ARTICLE_BY_ID] id=%s type=%s fournisseur.lat=%s fournisseur.lng=%s fournisseur.adresse=%s',
+      req.params.id,
+      article.type,
+      f.latitude,
+      f.longitude,
+      f.adresseTexte
+    );
     res.json(withVideoTransforms(article));
   } catch (error) {
     res.status(500).json({ message: 'Erreur lors de la récupération de l\'article', error });
@@ -193,7 +230,22 @@ exports.updateArticle = async (req, res) => {
     if (req.user.role !== 'admin' && article.vendeur.toString() !== req.user._id.toString()) {
       return res.status(403).json({ message: 'Non autorisé à modifier cet article' });
     }
-    Object.assign(article, req.body);
+    const normalizedLieu = (req.body.lieu || req.body.localisation || '').toString();
+    if ((article.type || '').toString().toLowerCase() === 'piece') {
+      console.log(
+        '[ARTICLE_UPDATE][PIECE] incoming fournisseur payload=%j',
+        req.body.fournisseur || null
+      );
+    }
+    Object.assign(article, {
+      ...req.body,
+      ...(normalizedLieu
+        ? {
+            lieu: req.body.lieu ?? normalizedLieu,
+            localisation: req.body.localisation ?? normalizedLieu,
+          }
+        : {}),
+    });
     // Correction : Forcer le champ source à 'tranoo' si entreprise=TRANOO
     if (req.body.entreprise && req.body.entreprise.trim().toUpperCase() === 'TRANOO') {
       article.source = 'tranoo';
@@ -201,6 +253,14 @@ exports.updateArticle = async (req, res) => {
       article.source = req.body.source;
     }
     await article.save();
+    if ((article.type || '').toString().toLowerCase() === 'piece') {
+      console.log(
+        '[ARTICLE_UPDATE][PIECE] saved fournisseur=%j lieu=%s localisation=%s',
+        article.fournisseur || null,
+        article.lieu,
+        article.localisation
+      );
+    }
     res.json({ message: 'Article mis à jour', article });
   } catch (error) {
     res.status(500).json({ message: 'Erreur lors de la mise à jour de l\'article', error });

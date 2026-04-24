@@ -969,6 +969,7 @@ exports.getDeliveryHistory = async (req, res) => {
 exports.getDeliverySettings = async (req, res) => {
   try {
     const settings = await DeliverySettings.getSettings();
+    console.log('[DELIVERY_SETTINGS] pricePerKm=%s', settings?.pricePerKm);
     res.json({ settings });
   } catch (error) {
     console.error('Erreur getDeliverySettings:', error);
@@ -1055,6 +1056,13 @@ exports.updateRevenueConfig = async (req, res) => {
 exports.calculateDeliveryFee = async (req, res) => {
   try {
     const { supplier_lat, supplier_lng, delivery_lat, delivery_lng } = req.body;
+    console.log(
+      '[DELIVERY_CALC] input supplier=(%s,%s) delivery=(%s,%s)',
+      supplier_lat,
+      supplier_lng,
+      delivery_lat,
+      delivery_lng
+    );
     
     if (!supplier_lat || !supplier_lng || !delivery_lat || !delivery_lng) {
       return res.status(400).json({ 
@@ -1074,7 +1082,15 @@ exports.calculateDeliveryFee = async (req, res) => {
     const settings = await DeliverySettings.getSettings();
     
     // Calculer les frais de livraison
-    const deliveryFee = Math.round(distanceKm * settings.pricePerKm);
+    const billedKm = distanceKm > 0 && distanceKm < 1 ? 1 : distanceKm;
+    const deliveryFee = Math.round(billedKm * settings.pricePerKm);
+    console.log(
+      '[DELIVERY_CALC] pricePerKm=%s distanceKm=%s billedKm=%s fee=%s',
+      settings.pricePerKm,
+      distanceKm,
+      billedKm,
+      deliveryFee
+    );
     
     res.json({ 
       success: true,
