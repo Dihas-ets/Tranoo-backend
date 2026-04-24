@@ -42,9 +42,11 @@ const createOrder = async (req, res) => {
       isDeliveryRequired,
       deliveryInfo, // { distanceKm, lieuDepart, lieuDestination, fournisseur }
       conditionsAffichee, // bool: conditions de remboursement affichées
+      paymentConfirmed,
     } = req.body;
 
     const userId = req.user.id;
+    console.log('[ORDER] createOrder userId=', userId?.toString?.() || userId);
 
     // Validation des données
     if (!items || items.length === 0) {
@@ -53,6 +55,13 @@ const createOrder = async (req, res) => {
 
     if (!deliveryAddress) {
       return res.status(400).json({ message: 'Adresse de livraison requise' });
+    }
+
+    if (paymentConfirmed !== true) {
+      console.warn('[ORDER] paiement non confirme, commande refusee');
+      return res.status(400).json({
+        message: 'Paiement requis avant creation de commande',
+      });
     }
 
     // Créer la commande
@@ -75,6 +84,7 @@ const createOrder = async (req, res) => {
     });
 
     await order.save();
+    console.log('[ORDER] commande enregistree id=', order._id?.toString());
 
     // Calculer la date de livraison estimée (3-7 jours ouvrables)
     const estimatedDelivery = new Date();
@@ -341,6 +351,7 @@ const createOrder = async (req, res) => {
         issueDate: new Date(),
         dueDate,
       });
+      console.log('[ORDER] facture generee pour commande=', order._id?.toString());
     } catch (invoiceError) {
       console.error('Erreur génération facture:', invoiceError);
       // Ne pas bloquer la création de commande si la facture échoue

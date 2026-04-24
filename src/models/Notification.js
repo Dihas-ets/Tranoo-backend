@@ -46,6 +46,11 @@ const notificationSchema = new mongoose.Schema({
     type: String,
     enum: ['ChatRoom', 'Publicite', 'Article', 'User', 'Achat', 'Delivery', 'TricycleContact']
   },
+  // Données métier optionnelles (ex: alerte recherche acheteur -> vendeurs)
+  data: {
+    type: mongoose.Schema.Types.Mixed,
+    default: null,
+  },
   // Nouveaux champs pour les notifications de vérification
   actions: [{
     label: {
