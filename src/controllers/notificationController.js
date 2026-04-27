@@ -37,27 +37,48 @@ exports.createNotification = async (
         if (extraData && typeof extraData === 'object') {
           Object.entries(extraData).forEach(([k, v]) => {
             if (v !== undefined && v !== null) {
-              fcmSafeData[k] = String(v);
+              // FCM exige des strings dans "data"
+              // On stringify les objets/arrays pour éviter "messaging/invalid-payload"
+              if (typeof v === 'object') {
+                try {
+                  fcmSafeData[k] = JSON.stringify(v);
+                } catch (_) {
+                  fcmSafeData[k] = String(v);
+                }
+              } else {
+                fcmSafeData[k] = String(v);
+              }
             }
           });
         }
-        await admin.messaging().send({
+        const fcmData = {
+          type: String(type ?? 'general'),
+          notificationId: String(notification._id),
+          relatedId: relatedId ? String(relatedId) : '',
+          relatedModel:
+            relatedModel !== undefined && relatedModel !== null
+              ? String(relatedModel)
+              : '',
+          ...fcmSafeData,
+        };
+        const resp = await admin.messaging().send({
           token: recipient.fcmToken,
           notification: {
             title: title,
             body: message
           },
-          data: {
-            type: type,
-            notificationId: notification._id.toString(),
-            relatedId: relatedId ? relatedId.toString() : '',
-            relatedModel: relatedModel || '',
-            ...fcmSafeData
-          }
+          data: fcmData,
         });
-        console.log(`[NOTIFICATION] Push envoyée à ${recipient.email}`);
+        console.log(`[NOTIFICATION] Push envoyée à ${recipient.email} messageId=${resp}`);
       } catch (error) {
-        console.error('[NOTIFICATION] Erreur envoi push:', error);
+        console.error(
+          '[NOTIFICATION] Erreur envoi push:',
+          {
+            message: error?.message,
+            code: error?.code,
+            stack: error?.stack,
+          },
+        );
       }
     }
 

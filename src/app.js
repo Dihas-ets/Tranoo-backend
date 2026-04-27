@@ -14,6 +14,8 @@ const cors = require('cors');
 const dotenv = require('dotenv');
 
 const admin = require('firebase-admin');
+const fs = require('fs');
+const path = require('path');
 
 const authMiddleware = require('./middlewares/auth');
 
@@ -30,14 +32,50 @@ dotenv.config();
 
 
 // Initialiser Firebase Admin
+//
+// IMPORTANT (prod): ne pas dépendre uniquement d'un fichier local qui peut manquer sur le serveur.
+// On supporte 2 modes:
+// - FIREBASE_SERVICE_ACCOUNT_JSON: JSON complet (string) du service account
+// - ./firebaseServiceAccountKey.json: fichier à côté de ce module
+function loadServiceAccount() {
+  // 1) via variable d'env (recommandé en prod)
+  const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+  if (raw && String(raw).trim()) {
+    try {
+      return JSON.parse(String(raw));
+    } catch (e) {
+      console.error('[FCM] FIREBASE_SERVICE_ACCOUNT_JSON invalide (JSON.parse a échoué):', e?.message || e);
+    }
+  }
 
-const serviceAccount = require('./firebaseServiceAccountKey.json');
+  // 2) via fichier local (dev)
+  const localPath = path.join(__dirname, 'firebaseServiceAccountKey.json');
+  try {
+    if (!fs.existsSync(localPath)) {
+      throw new Error(`Fichier service account introuvable: ${localPath}`);
+    }
+    // require garde un cache; fs + JSON.parse évite les surprises lors des déploiements
+    const txt = fs.readFileSync(localPath, 'utf8');
+    return JSON.parse(txt);
+  } catch (e) {
+    console.error('[FCM] Impossible de charger la clé firebase admin:', e?.message || e);
+    return null;
+  }
+}
 
-admin.initializeApp({
-
-  credential: admin.credential.cert(serviceAccount),
-
-});
+const serviceAccount = loadServiceAccount();
+if (!serviceAccount) {
+  console.error('[FCM] Firebase Admin NON initialisé (service account manquant). Les notifications push échoueront.');
+} else {
+  try {
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+    });
+    console.log('[FCM] Firebase Admin initialisé. project_id=', serviceAccount.project_id);
+  } catch (e) {
+    console.error('[FCM] Erreur initializeApp firebase-admin:', e?.message || e, e?.stack);
+  }
+}
 
 
 
