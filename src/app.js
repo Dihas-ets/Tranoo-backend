@@ -344,11 +344,8 @@ app.use('/api/chauffeurs/demandes', demandeChauffeurRoutes);
 
 
 // Importer le routeur de chat pour la messagerie (vendeur <-> transitaire)
-
 const chatRoutes = require('./routes/chat');
-
 // Utiliser les routes de chat sous le préfixe /api/chat
-
 app.use('/api/chat', chatRoutes);
 
 

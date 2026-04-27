@@ -45,7 +45,4 @@ router.post('/search-request', notificationController.createVehicleSearchRequest
 // Demande de recherche piece par acheteur (notifie les vendeurs)
 router.post('/piece-search-request', notificationController.createPieceSearchRequestHTTP);
 
-// Demande de recherche pièce par acheteur (notifie les vendeurs)
-router.post('/piece-search-request', notificationController.createPieceSearchRequestHTTP);
-
 module.exports = router;
