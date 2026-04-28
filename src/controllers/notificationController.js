@@ -549,9 +549,11 @@ exports.createVehicleSearchRequestHTTP = async (req, res) => {
       marque,
       modele,
       etat,
+      urgence,
       anneeMin,
       anneeMax,
       budgetMax,
+      quantity,
       localisation,
       description,
       telephone,
@@ -560,9 +562,15 @@ exports.createVehicleSearchRequestHTTP = async (req, res) => {
     const cleanMarque = String(marque || '').trim();
     const cleanModele = String(modele || '').trim();
     const cleanEtat = String(etat || '').trim().toLowerCase();
+    const cleanUrgence = String(urgence || '').trim();
     const cleanLocalisation = String(localisation || '').trim();
     const cleanDescription = String(description || '').trim();
     const cleanTelephone = String(telephone || '').trim();
+    const cleanQuantityRaw = quantity;
+    const cleanQuantity = Math.max(
+      1,
+      Number.isFinite(Number(cleanQuantityRaw)) ? Number(cleanQuantityRaw) : 1
+    );
 
     if (!cleanMarque || !cleanModele) {
       return res.status(400).json({
@@ -570,7 +578,9 @@ exports.createVehicleSearchRequestHTTP = async (req, res) => {
       });
     }
 
-    const buyer = await User.findById(req.user?._id).select('nom prenoms email telephone');
+    const buyer = await User.findById(req.user?._id).select(
+      'nom prenoms email telephone'
+    );
     if (!buyer) {
       return res.status(404).json({ message: 'Acheteur introuvable.' });
     }
@@ -578,6 +588,8 @@ exports.createVehicleSearchRequestHTTP = async (req, res) => {
     const vendeurs = await User.find({
       role: 'vendeur',
       isBlocked: { $ne: true },
+      // Ciblage selon type vendeur (compat: null => mixte)
+      vendeurType: { $in: [null, 'mixte', 'vehicules'] },
     }).select('_id');
 
     if (!vendeurs.length) {
@@ -595,17 +607,18 @@ exports.createVehicleSearchRequestHTTP = async (req, res) => {
       anneeMax ? `Annee max: ${anneeMax}` : null,
       budgetMax ? `Budget max: ${budgetMax} FCFA` : null,
       cleanLocalisation ? `Localisation: ${cleanLocalisation}` : null,
+      cleanUrgence ? `Urgence: ${cleanUrgence}` : null,
       cleanDescription ? `Details: ${cleanDescription}` : null,
     ].filter(Boolean).join(' | ');
 
     const title = 'Nouvelle alerte véhicule';
-    const message = `Un acheteur est a la recherche d'un vehicule. Caracteristiques: ${details}`;
+    const message = `Un acheteur recherche ${cleanQuantity} vehicule(s). Caracteristiques: ${details}`;
 
     await Promise.all(
       vendeurs.map((vendeur) =>
         exports.createNotification(
           vendeur._id,
-          req.user._id,
+          'system',
           title,
           message,
           'alerte',
@@ -614,14 +627,21 @@ exports.createVehicleSearchRequestHTTP = async (req, res) => {
           {
             requestType: 'vehicle_search',
             buyerId: buyer._id.toString(),
+            buyerNom: String(buyer.nom || '').trim(),
+            buyerPrenoms: String(buyer.prenoms || '').trim(),
+            buyerEmail: String(buyer.email || '').trim(),
+            telephone: cleanTelephone || String(buyer.telephone || '').trim(),
             marque: cleanMarque,
             modele: cleanModele,
             anneeMin: anneeMin ? String(anneeMin).trim() : '',
             anneeMax: anneeMax ? String(anneeMax).trim() : '',
             budgetMax: budgetMax ? String(budgetMax).trim() : '',
+            quantity: String(cleanQuantity),
+            urgence: cleanUrgence,
             localisation: cleanLocalisation,
             description: cleanDescription,
-            telephone: cleanTelephone || String(buyer.telephone || '').trim(),
+            // Important: données acheteur conservées pour le workflow interne,
+            // mais le message/sender vendeur restent anonymisés.
           }
         )
       )
@@ -649,6 +669,7 @@ exports.createPieceSearchRequestHTTP = async (req, res) => {
       pieceName,
       annee,
       urgence,
+      quantity,
       localisation,
       description,
       telephone,
@@ -662,6 +683,11 @@ exports.createPieceSearchRequestHTTP = async (req, res) => {
     const cleanLocalisation = String(localisation || '').trim();
     const cleanDescription = String(description || '').trim();
     const cleanTelephone = String(telephone || '').trim();
+    const cleanQuantityRaw = quantity;
+    const cleanQuantity = Math.max(
+      1,
+      Number.isFinite(Number(cleanQuantityRaw)) ? Number(cleanQuantityRaw) : 1
+    );
 
     if (!cleanMarque || !cleanModele || !cleanPieceName) {
       return res.status(400).json({
@@ -669,7 +695,9 @@ exports.createPieceSearchRequestHTTP = async (req, res) => {
       });
     }
 
-    const buyer = await User.findById(req.user?._id).select('nom prenoms email telephone');
+    const buyer = await User.findById(req.user?._id).select(
+      'nom prenoms email telephone'
+    );
     if (!buyer) {
       return res.status(404).json({ message: 'Acheteur introuvable.' });
     }
@@ -677,6 +705,8 @@ exports.createPieceSearchRequestHTTP = async (req, res) => {
     const vendeurs = await User.find({
       role: 'vendeur',
       isBlocked: { $ne: true },
+      // Ciblage selon type vendeur (compat: null => mixte)
+      vendeurType: { $in: [null, 'mixte', 'pieces'] },
     }).select('_id');
 
     if (!vendeurs.length) {
@@ -686,7 +716,6 @@ exports.createPieceSearchRequestHTTP = async (req, res) => {
       });
     }
 
-    const fullName = `${buyer.nom || ''} ${buyer.prenoms || ''}`.trim() || 'Un acheteur';
     const details = [
       `Marque: ${cleanMarque}`,
       `Modele: ${cleanModele}`,
@@ -694,21 +723,20 @@ exports.createPieceSearchRequestHTTP = async (req, res) => {
       cleanAnnee ? `Annee: ${cleanAnnee}` : null,
       cleanUrgence ? `Urgence: ${cleanUrgence}` : null,
       cleanLocalisation ? `Localisation: ${cleanLocalisation}` : null,
-      cleanTelephone ? `Telephone: ${cleanTelephone}` : null,
       cleanDescription ? `Details: ${cleanDescription}` : null,
-      buyer.email ? `Email acheteur: ${buyer.email}` : null,
     ]
       .filter(Boolean)
       .join(' | ');
 
-    const title = 'Nouvelle recherche piece acheteur';
-    const message = `${fullName} recherche une piece: ${cleanPieceName} pour ${cleanMarque} ${cleanModele}. ${details}`;
+    const title = 'Nouvelle alerte pièce';
+    const message =
+      `Un acheteur recherche ${cleanQuantity} piece(s): ${cleanPieceName} pour ${cleanMarque} ${cleanModele}. ${details}`;
 
     await Promise.all(
       vendeurs.map((vendeur) =>
         exports.createNotification(
           vendeur._id,
-          req.user._id,
+          'system',
           title,
           message,
           'alerte',
@@ -717,14 +745,20 @@ exports.createPieceSearchRequestHTTP = async (req, res) => {
           {
             requestType: 'piece_search',
             buyerId: buyer._id.toString(),
+            buyerNom: String(buyer.nom || '').trim(),
+            buyerPrenoms: String(buyer.prenoms || '').trim(),
+            buyerEmail: String(buyer.email || '').trim(),
+            telephone: cleanTelephone || String(buyer.telephone || '').trim(),
             marque: cleanMarque,
             modele: cleanModele,
             pieceName: cleanPieceName,
             annee: cleanAnnee,
             urgence: cleanUrgence,
+            quantity: String(cleanQuantity),
             localisation: cleanLocalisation,
             description: cleanDescription,
-            telephone: cleanTelephone || String(buyer.telephone || '').trim(),
+            // Important: données acheteur conservées pour le workflow interne,
+            // mais le message/sender vendeur restent anonymisés.
           }
         )
       )

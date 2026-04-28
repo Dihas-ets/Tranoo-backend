@@ -601,7 +601,7 @@ exports.getMyFavorites = async (req, res) => {
 // Met à jour les informations du profil de l'utilisateur connecté
 exports.updateMe = async (req, res) => {
   try {
-    const allowedFields = ['nom', 'prenoms', 'entreprise', 'email', 'telephone', 'photo'];
+    const allowedFields = ['nom', 'prenoms', 'entreprise', 'email', 'telephone', 'photo', 'vendeurType'];
     const updates = {};
     allowedFields.forEach((field) => {
       if (req.body[field] !== undefined) updates[field] = req.body[field];
@@ -612,6 +612,17 @@ exports.updateMe = async (req, res) => {
     }
 
     const user = req.user;
+    // Validation vendeurType
+    if (Object.prototype.hasOwnProperty.call(updates, 'vendeurType')) {
+      if (user.role !== 'vendeur') {
+        return res.status(400).json({ message: 'vendeurType réservé aux vendeurs' });
+      }
+      const v = updates.vendeurType;
+      const allowed = [null, 'mixte', 'vehicules', 'pieces'];
+      if (!allowed.includes(v)) {
+        return res.status(400).json({ message: 'vendeurType invalide' });
+      }
+    }
     const emailChanged = updates.email && updates.email !== user.email;
     Object.assign(user, updates);
     await user.save();

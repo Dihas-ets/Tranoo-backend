@@ -261,6 +261,13 @@ const userSchema = new mongoose.Schema({
     enum: ['vendeur', 'acheteur', 'transitaire', 'admin', 'chauffeur', 'livreur', 'agentCommercial'],
     required: true,
   },
+  // Type de vendeur (Tranoo Pro) — ne remplace pas "role"
+  // null => compatibilité anciens vendeurs (considérés comme mixte)
+  vendeurType: {
+    type: String,
+    enum: ['mixte', 'vehicules', 'pieces', null],
+    default: null,
+  },
   statutContrat: {
     type: String,
     enum: ['CDD', 'CDI', 'En mission', null],
