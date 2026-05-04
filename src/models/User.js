@@ -273,6 +273,35 @@ const userSchema = new mongoose.Schema({
     enum: ['CDD', 'CDI', 'En mission', null],
     default: null,
   },
+  typeAgent: {
+    type: String,
+    enum: ['Tranoo', 'Tranoo_pro', null],
+    default: null,
+  },
+  dureeContratMois: {
+    type: Number,
+    min: 1,
+    default: null,
+  },
+  mobileCredentials: {
+    login: { type: String, default: null },
+    password: { type: String, default: null },
+  },
+  proVendorAccount: {
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    uid: { type: String, default: null },
+    email: { type: String, default: null },
+  },
+  webSession: {
+    sessionId: { type: String, default: null },
+    lastActivityAt: { type: Date, default: null },
+    expiresAt: { type: Date, default: null },
+    clientInfo: { type: String, default: null },
+  },
+  authMeta: {
+    lastAuthTime: { type: Number, default: null }, // dernier auth_time Firebase (seconds)
+    lastAuthEventAt: { type: Date, default: null },
+  },
   favoris: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Article' }],
   isOnline: { type: Boolean, default: false },
   lastSeen: { type: Date, default: Date.now },

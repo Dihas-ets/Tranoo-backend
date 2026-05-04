@@ -5,6 +5,198 @@ const admin = require('firebase-admin');
 const bcrypt = require('bcryptjs');
 const AgentEarning = require('../models/AgentEarning');
 const crypto = require('crypto');
+const AgentDailyLog = require('../models/AgentDailyLog');
+const Payment = require('../models/Payment');
+const Publicite = require('../models/Publicite');
+const AuthEvent = require('../models/AuthEvent');
+const DemoEvent = require('../models/DemoEvent');
+const mongoose = require('mongoose');
+
+const toDateKey = (value) => {
+  const d = value ? new Date(value) : new Date();
+  if (Number.isNaN(d.getTime())) {
+    const now = new Date();
+    return now.toISOString().slice(0, 10);
+  }
+  return d.toISOString().slice(0, 10);
+};
+
+const buildDayRange = (dateKey) => {
+  const start = new Date(`${dateKey}T00:00:00.000Z`);
+  const end = new Date(`${dateKey}T23:59:59.999Z`);
+  return { start, end };
+};
+
+const getReferredSellerIds = async (agentId) => {
+  const refs = await Referral.find({ referrerId: agentId }).select('referredId').lean();
+  const ids = refs.map((r) => String(r.referredId));
+  const sellers = await User.find({ _id: { $in: ids }, role: 'vendeur' }).select('_id vendeurType').lean();
+  return sellers;
+};
+
+const DEMO_WINDOW_MINUTES = Number(process.env.DEMO_WINDOW_MINUTES || 30);
+const DEMO_COOLDOWN_MINUTES = Number(process.env.DEMO_COOLDOWN_MINUTES || 15);
+
+/**
+ * Compte les "démos validées" sur une période.
+ * Règle:
+ * - une démo commence par seller_create_started
+ * - dans la fenêtre DEMO_WINDOW_MINUTES, il faut au moins 1 action commerciale:
+ *   campaign_initiated ou subscription_initiated
+ * - seller_create_completed est optionnel (renforce la qualité, mais n'est pas bloquant)
+ * - cooldown entre deux démos comptées: DEMO_COOLDOWN_MINUTES
+ */
+const computeValidatedDemosForRange = async ({ agentId, sellerObjectIds, start, end }) => {
+  const relevantEvents = [
+    'seller_create_started',
+    'seller_create_completed',
+    'campaign_initiated',
+    'subscription_initiated',
+  ];
+
+  const rows = await DemoEvent.find({
+    createdAt: { $gte: start, $lte: end },
+    eventType: { $in: relevantEvents },
+    $or: [
+      { agent: agentId },
+      { user: { $in: sellerObjectIds } }, // fallback si agent non renseigné dans l'event
+    ],
+  })
+    .sort({ createdAt: 1 })
+    .select('eventType createdAt sessionKey user')
+    .lean();
+
+  const windowMs = DEMO_WINDOW_MINUTES * 60 * 1000;
+  const cooldownMs = DEMO_COOLDOWN_MINUTES * 60 * 1000;
+
+  let lastCountedAt = null;
+  let demosCount = 0;
+  const candidates = [];
+
+  for (const row of rows) {
+    const t = new Date(row.createdAt).getTime();
+    const eventType = row.eventType;
+
+    // purge des candidats expirés
+    for (let i = candidates.length - 1; i >= 0; i -= 1) {
+      if (t - candidates[i].startedAt > windowMs) {
+        candidates.splice(i, 1);
+      }
+    }
+
+    if (eventType === 'seller_create_started') {
+      candidates.push({
+        startedAt: t,
+        hasCommercial: false,
+        hasCompleted: false,
+        counted: false,
+      });
+      continue;
+    }
+
+    // enrichir les candidats actifs
+    for (const c of candidates) {
+      if (t >= c.startedAt && t - c.startedAt <= windowMs) {
+        if (eventType === 'seller_create_completed') c.hasCompleted = true;
+        if (eventType === 'campaign_initiated' || eventType === 'subscription_initiated') {
+          c.hasCommercial = true;
+        }
+      }
+    }
+
+    // tenter de compter les candidats validés
+    for (const c of candidates) {
+      if (c.counted) continue;
+      const valid = c.hasCommercial; // started implicite car candidat créé sur started
+      if (!valid) continue;
+
+      if (lastCountedAt && c.startedAt - lastCountedAt < cooldownMs) {
+        c.counted = true; // consommé mais non compté (cooldown)
+        continue;
+      }
+
+      demosCount += 1;
+      c.counted = true;
+      lastCountedAt = c.startedAt;
+    }
+  }
+
+  return demosCount;
+};
+
+const computeKpisForRange = async ({ agentId, start, end }) => {
+  const sellers = await getReferredSellerIds(agentId);
+  const sellerIds = sellers.map((s) => String(s._id));
+  const piecesSellerIds = sellers
+    .filter((s) => s.vendeurType === 'pieces' || s.vendeurType === 'mixte')
+    .map((s) => String(s._id));
+
+  const boutiquesCreees = await User.countDocuments({
+    _id: { $in: sellerIds },
+    role: 'vendeur',
+    dateInscription: { $gte: start, $lte: end },
+  });
+
+  const sellerObjectIds = sellerIds.map((id) => new mongoose.Types.ObjectId(String(id)));
+  const demonstrations = await computeValidatedDemosForRange({
+    agentId,
+    sellerObjectIds,
+    start,
+    end,
+  });
+
+  const abonnementsVendus = await Payment.countDocuments({
+    user: { $in: piecesSellerIds },
+    type: 'subscription',
+    status: 'success',
+    createdAt: { $gte: start, $lte: end },
+  });
+
+  const campagnesLancees = await Publicite.countDocuments({
+    vendeur: { $in: sellerIds },
+    typePub: { $in: ['Sponsorisée', 'À la une'] },
+    dateDemande: { $gte: start, $lte: end },
+  });
+
+  const commissionSubAgg = await AgentEarning.aggregate([
+    { $match: { agent: agentId, type: 'commission_subscription', createdAt: { $gte: start, $lte: end } } },
+    { $group: { _id: null, total: { $sum: '$amount' } } },
+  ]);
+  const revenueAbonnement = commissionSubAgg[0]?.total || 0;
+
+  const commissionPubAgg = await AgentEarning.aggregate([
+    { $match: { agent: agentId, type: 'commission_publicite', createdAt: { $gte: start, $lte: end } } },
+    { $group: { _id: null, total: { $sum: '$amount' } } },
+  ]);
+  const revenueCampagne = commissionPubAgg[0]?.total || 0;
+
+  const objectifs = {
+    prospects: { target: 20 },
+    abonnements: { minimumBeforeWithdrawal: 4 },
+    campagnes: { minimumBeforeWithdrawal: 4 },
+  };
+
+  return {
+    demonstrations,
+    boutiquesCreees,
+    abonnementsVendus,
+    campagnesLancees,
+    revenueAbonnement,
+    revenueCampagne,
+    objectifs,
+    totalGenerer: revenueAbonnement + revenueCampagne,
+  };
+};
+
+const assertAgentType = (user, expectedType) => {
+  if (user.role !== 'agentCommercial') {
+    return { ok: false, status: 403, message: 'Accès réservé aux agents commerciaux' };
+  }
+  if ((user.typeAgent || 'Tranoo') !== expectedType) {
+    return { ok: false, status: 403, message: `Accès réservé aux agents ${expectedType}` };
+  }
+  return { ok: true };
+};
 
 exports.getMyDashboard = async (req, res) => {
   try {
@@ -14,6 +206,8 @@ exports.getMyDashboard = async (req, res) => {
     }
 
     const referrerId = user._id;
+    const dateKey = toDateKey(req.query.date);
+    const { start, end } = buildDayRange(dateKey);
 
     const totalReferrals = await Referral.countDocuments({ referrerId });
     const completed = await Referral.find({ referrerId, status: 'completed' }).select('rewardAmount');
@@ -35,6 +229,13 @@ exports.getMyDashboard = async (req, res) => {
     const currentBalance = totalEarnings - totalWithdrawn;
 
     const tariffs = await ReferralTariff.find({}).sort({ createdAt: -1 });
+    const daily = await AgentDailyLog.findOne({ agent: user._id, dateKey }).lean();
+    const kpis = await computeKpisForRange({ agentId: user._id, start, end });
+    const history = await AgentDailyLog.find({ agent: user._id })
+      .sort({ dateKey: -1 })
+      .limit(60)
+      .select('dateKey zoneText prospectsApproached adminObservation updatedAt')
+      .lean();
 
     res.json({
       agent: {
@@ -45,8 +246,13 @@ exports.getMyDashboard = async (req, res) => {
         email: user.email,
         photo: user.photo || null,
         role: user.role,
+        typeAgent: user.typeAgent || 'Tranoo',
         assignedReferralTariff: user.assignedReferralTariff || null,
         referralCode: user.referralCode || null,
+        mobileCredentials:
+          (user.typeAgent || 'Tranoo') === 'Tranoo_pro'
+            ? (user.mobileCredentials || { login: null, password: null })
+            : null,
       },
       stats: {
         totalReferrals,
@@ -56,10 +262,160 @@ exports.getMyDashboard = async (req, res) => {
         totalWithdrawn,
         currentBalance,
       },
+      daily: {
+        dateKey,
+        zoneText: daily?.zoneText || '',
+        zoneLocation: daily?.zoneLocation || null,
+        prospectsApproached: daily?.prospectsApproached || 0,
+        adminObservation: daily?.adminObservation || '',
+        ...kpis,
+      },
+      history,
       tariffs,
     });
   } catch (err) {
     res.status(500).json({ message: 'Erreur chargement tableau de bord agent', error: err.message });
+  }
+};
+
+exports.getMyDashboardPro = async (req, res) => {
+  try {
+    const user = req.user;
+    const check = assertAgentType(user, 'Tranoo_pro');
+    if (!check.ok) return res.status(check.status).json({ message: check.message });
+    return exports.getMyDashboard(req, res);
+  } catch (err) {
+    return res.status(500).json({ message: 'Erreur chargement tableau de bord agent pro', error: err.message });
+  }
+};
+
+exports.getMyDashboardTranoo = async (req, res) => {
+  try {
+    const user = req.user;
+    const check = assertAgentType(user, 'Tranoo');
+    if (!check.ok) return res.status(check.status).json({ message: check.message });
+    return exports.getMyDashboard(req, res);
+  } catch (err) {
+    return res.status(500).json({ message: 'Erreur chargement tableau de bord agent', error: err.message });
+  }
+};
+
+exports.upsertMyDailyLog = async (req, res) => {
+  try {
+    const user = req.user;
+    if (user.role !== 'agentCommercial') {
+      return res.status(403).json({ message: 'Accès réservé aux agents commerciaux' });
+    }
+
+    const dateKey = toDateKey(req.body?.date || req.query?.date);
+    const updates = {};
+
+    if (typeof req.body?.zoneText === 'string') {
+      updates.zoneText = req.body.zoneText.trim();
+    }
+    if (req.body?.zoneLocation && typeof req.body.zoneLocation === 'object') {
+      const { lat, lng, label } = req.body.zoneLocation;
+      updates.zoneLocation = {
+        lat: Number.isFinite(Number(lat)) ? Number(lat) : null,
+        lng: Number.isFinite(Number(lng)) ? Number(lng) : null,
+        label: typeof label === 'string' ? label.trim() : '',
+        capturedAt: new Date(),
+      };
+    }
+    if (Number.isFinite(Number(req.body?.prospectsApproached))) {
+      updates.prospectsApproached = Math.max(0, Number(req.body.prospectsApproached));
+    }
+
+    const doc = await AgentDailyLog.findOneAndUpdate(
+      { agent: user._id, dateKey },
+      { $set: updates },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    ).lean();
+
+    return res.json({ message: 'Données journalières sauvegardées', daily: doc });
+  } catch (err) {
+    return res.status(500).json({ message: 'Erreur sauvegarde journalière', error: err.message });
+  }
+};
+
+exports.upsertMyDailyLogPro = async (req, res) => {
+  const check = assertAgentType(req.user, 'Tranoo_pro');
+  if (!check.ok) return res.status(check.status).json({ message: check.message });
+  return exports.upsertMyDailyLog(req, res);
+};
+
+exports.upsertMyDailyLogTranoo = async (req, res) => {
+  const check = assertAgentType(req.user, 'Tranoo');
+  if (!check.ok) return res.status(check.status).json({ message: check.message });
+  return exports.upsertMyDailyLog(req, res);
+};
+
+exports.incrementMyProspects = async (req, res) => {
+  try {
+    const user = req.user;
+    if (user.role !== 'agentCommercial') {
+      return res.status(403).json({ message: 'Accès réservé aux agents commerciaux' });
+    }
+
+    const dateKey = toDateKey(req.body?.date || req.query?.date);
+    const step = Number.isFinite(Number(req.body?.step)) ? Number(req.body.step) : 1;
+    const safeStep = Math.max(1, Math.floor(step));
+
+    const doc = await AgentDailyLog.findOneAndUpdate(
+      { agent: user._id, dateKey },
+      { $inc: { prospectsApproached: safeStep } },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    ).lean();
+
+    return res.json({
+      message: 'Prospects approchés mis à jour',
+      prospectsApproached: doc.prospectsApproached || 0,
+      daily: doc,
+    });
+  } catch (err) {
+    return res.status(500).json({ message: 'Erreur mise à jour prospects', error: err.message });
+  }
+};
+
+exports.incrementMyProspectsPro = async (req, res) => {
+  const check = assertAgentType(req.user, 'Tranoo_pro');
+  if (!check.ok) return res.status(check.status).json({ message: check.message });
+  return exports.incrementMyProspects(req, res);
+};
+
+exports.incrementMyProspectsTranoo = async (req, res) => {
+  const check = assertAgentType(req.user, 'Tranoo');
+  if (!check.ok) return res.status(check.status).json({ message: check.message });
+  return exports.incrementMyProspects(req, res);
+};
+
+exports.updateDailyObservationByAdmin = async (req, res) => {
+  try {
+    const adminUser = req.user;
+    const { id } = req.params;
+    const dateKey = toDateKey(req.body?.date || req.query?.date);
+    const observation = typeof req.body?.observation === 'string' ? req.body.observation.trim() : '';
+
+    const agent = await User.findById(id).lean();
+    if (!agent || agent.role !== 'agentCommercial') {
+      return res.status(404).json({ message: 'Agent commercial non trouvé' });
+    }
+
+    const doc = await AgentDailyLog.findOneAndUpdate(
+      { agent: id, dateKey },
+      {
+        $set: {
+          adminObservation: observation,
+          adminObservationUpdatedBy: adminUser._id,
+          adminObservationUpdatedAt: new Date(),
+        },
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    ).lean();
+
+    return res.json({ message: 'Observation enregistrée', daily: doc });
+  } catch (err) {
+    return res.status(500).json({ message: "Erreur enregistrement observation", error: err.message });
   }
 };
 
@@ -300,6 +656,165 @@ exports.getLeaderboard = async (req, res) => {
     return res.json({ top, myRank, myCount });
   } catch (err) {
     return res.status(500).json({ message: 'Erreur leaderboard', error: err.message });
+  }
+};
+
+exports.getLeaderboardPro = async (req, res) => {
+  const check = assertAgentType(req.user, 'Tranoo_pro');
+  if (!check.ok) return res.status(check.status).json({ message: check.message });
+  return exports.getLeaderboard(req, res);
+};
+
+exports.getLeaderboardTranoo = async (req, res) => {
+  const check = assertAgentType(req.user, 'Tranoo');
+  if (!check.ok) return res.status(check.status).json({ message: check.message });
+  return exports.getLeaderboard(req, res);
+};
+
+exports.getConsolidatedAdminStats = async (req, res) => {
+  try {
+    const { from, to, typeAgent = 'all' } = req.query;
+    const fromDate = from ? new Date(`${from}T00:00:00.000Z`) : new Date('1970-01-01T00:00:00.000Z');
+    const toDate = to ? new Date(`${to}T23:59:59.999Z`) : new Date();
+    const agentFilter = { role: 'agentCommercial' };
+    if (typeAgent !== 'all') agentFilter.typeAgent = typeAgent;
+
+    const agents = await User.find(agentFilter).select('_id nom prenoms typeAgent').lean();
+    const agentIds = agents.map((a) => a._id);
+
+    const earningsAgg = await AgentEarning.aggregate([
+      { $match: { agent: { $in: agentIds }, type: { $in: ['commission_publicite', 'commission_subscription'] }, createdAt: { $gte: fromDate, $lte: toDate } } },
+      { $group: { _id: '$type', total: { $sum: '$amount' } } },
+    ]);
+    const totalRevenueSubscription = earningsAgg.find((e) => e._id === 'commission_subscription')?.total || 0;
+    const totalRevenueCampagne = earningsAgg.find((e) => e._id === 'commission_publicite')?.total || 0;
+
+    const withdrawalsAgg = await AgentEarning.aggregate([
+      { $match: { agent: { $in: agentIds }, type: 'withdrawal', createdAt: { $gte: fromDate, $lte: toDate } } },
+      { $group: { _id: null, total: { $sum: '$amount' } } },
+    ]);
+    const totalWithdrawn = withdrawalsAgg[0]?.total || 0;
+
+    const totalByAgent = await AgentEarning.aggregate([
+      { $match: { agent: { $in: agentIds }, type: { $in: ['commission_publicite', 'commission_subscription'] }, createdAt: { $gte: fromDate, $lte: toDate } } },
+      { $group: { _id: '$agent', total: { $sum: '$amount' } } },
+      { $sort: { total: -1 } },
+    ]);
+
+    const mapById = new Map(agents.map((a) => [String(a._id), a]));
+    const topAgents = totalByAgent.slice(0, 5).map((row) => {
+      const a = mapById.get(String(row._id));
+      return {
+        agentId: row._id,
+        nom: a?.nom || '',
+        prenoms: a?.prenoms || '',
+        typeAgent: a?.typeAgent || 'Tranoo',
+        totalGenerer: row.total || 0,
+      };
+    });
+
+    return res.json({
+      filters: { from: from || null, to: to || null, typeAgent },
+      totals: {
+        agents: agents.length,
+        totalGenerer: totalRevenueSubscription + totalRevenueCampagne,
+        totalRevenueSubscription,
+        totalRevenueCampagne,
+        totalWithdrawn,
+      },
+      topAgents,
+    });
+  } catch (err) {
+    return res.status(500).json({ message: 'Erreur chargement consolidé admin', error: err.message });
+  }
+};
+
+exports.getAgentProDailyMonitorForAdmin = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { date, from, to } = req.query;
+
+    const agent = await User.findById(id).lean();
+    if (!agent || agent.role !== 'agentCommercial') {
+      return res.status(404).json({ message: 'Agent commercial non trouvé' });
+    }
+    if ((agent.typeAgent || 'Tranoo') !== 'Tranoo_pro') {
+      return res.status(400).json({ message: 'Cette vue est réservée aux agents Tranoo_pro' });
+    }
+
+    const selectedDate = toDateKey(date);
+    const { start: dayStart, end: dayEnd } = buildDayRange(selectedDate);
+    const fromDate = from ? new Date(`${from}T00:00:00.000Z`) : new Date(`${selectedDate}T00:00:00.000Z`);
+    const toDate = to ? new Date(`${to}T23:59:59.999Z`) : new Date(`${selectedDate}T23:59:59.999Z`);
+
+    const dailyLog = await AgentDailyLog.findOne({ agent: id, dateKey: selectedDate }).lean();
+    const kpis = await computeKpisForRange({ agentId: agent._id, start: dayStart, end: dayEnd });
+
+    const history = await AgentDailyLog.find({
+      agent: id,
+      dateKey: {
+        $gte: fromDate.toISOString().slice(0, 10),
+        $lte: toDate.toISOString().slice(0, 10),
+      },
+    })
+      .sort({ dateKey: -1 })
+      .limit(120)
+      .select('dateKey zoneText prospectsApproached adminObservation updatedAt')
+      .lean();
+
+    const stats = await AgentEarning.aggregate([
+      { $match: { agent: agent._id } },
+      {
+        $group: {
+          _id: null,
+          totalEarnings: {
+            $sum: {
+              $cond: [{ $ne: ['$type', 'withdrawal'] }, '$amount', 0],
+            },
+          },
+          totalWithdrawn: {
+            $sum: {
+              $cond: [{ $eq: ['$type', 'withdrawal'] }, '$amount', 0],
+            },
+          },
+        },
+      },
+    ]);
+    const totalEarnings = stats[0]?.totalEarnings || 0;
+    const totalWithdrawn = stats[0]?.totalWithdrawn || 0;
+
+    return res.status(200).json({
+      agent: {
+        _id: agent._id,
+        nom: agent.nom,
+        prenoms: agent.prenoms,
+        email: agent.email,
+        photo: agent.photo || null,
+        typeAgent: agent.typeAgent || 'Tranoo',
+        referralCode: agent.referralCode || null,
+        mobileCredentials: agent.mobileCredentials || { login: null, password: null },
+      },
+      selectedDate,
+      filters: {
+        from: fromDate.toISOString().slice(0, 10),
+        to: toDate.toISOString().slice(0, 10),
+      },
+      daily: {
+        dateKey: selectedDate,
+        zoneText: dailyLog?.zoneText || '',
+        prospectsApproached: dailyLog?.prospectsApproached || 0,
+        adminObservation: dailyLog?.adminObservation || '',
+        ...kpis,
+      },
+      history,
+      balance: {
+        totalEarnings,
+        totalWithdrawn,
+        currentBalance: totalEarnings - totalWithdrawn,
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ message: 'Erreur chargement détails Tranoo_pro', error: err.message });
   }
 };
 

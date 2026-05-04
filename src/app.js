@@ -292,7 +292,7 @@ app.use(cors({
 
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
 
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Client-Platform', 'X-Web-Session-Id'],
 
 }));
 
@@ -331,6 +331,22 @@ app.use('/api/protected', authMiddleware, protectedRoutes);
 const authRoutes = require('./routes/auth');
 
 app.use('/api/auth', authRoutes); 
+
+// Auth events (mobile login/logout tracking)
+try {
+  const authEventRoutes = require('./routes/authEvent');
+  app.use('/api/auth-events', authEventRoutes);
+} catch (e) {
+  console.warn('Auth events routes non chargées:', e.message);
+}
+
+// Demo proof events (clicks/actions tracking)
+try {
+  const demoEventRoutes = require('./routes/demoEvent');
+  app.use('/api/demo-events', demoEventRoutes);
+} catch (e) {
+  console.warn('Demo events routes non chargées:', e.message);
+}
 
 
 

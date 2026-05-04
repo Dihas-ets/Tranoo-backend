@@ -26,6 +26,8 @@ exports.register = async (req, res) => {
       photo,
       typeAdmin,
       statutContrat,
+      typeAgent,
+      dureeContratMois,
       password,
       referralCode, // Code de parrainage optionnel
       vehicule // Objet véhicule (livreur/chauffeur)
@@ -38,6 +40,13 @@ exports.register = async (req, res) => {
       console.log('[REGISTER] Role:', role);
       console.log('[REGISTER] Nom:', nom, 'Prénoms:', prenoms);
       
+      if (role === 'agentCommercial' && !typeAgent) {
+        return res.status(400).json({ message: "Le type d'agent est requis" });
+      }
+      if (role === 'agentCommercial' && statutContrat === 'CDD' && (!Number.isFinite(Number(dureeContratMois)) || Number(dureeContratMois) < 1)) {
+        return res.status(400).json({ message: "La durée du contrat (en mois) est requise pour un CDD" });
+      }
+
       // Vérifier si l'email existe déjà dans MongoDB
       console.log('[REGISTER] Vérification existence dans MongoDB...');
       const existingUser = await User.findOne({ email });
@@ -111,6 +120,8 @@ exports.register = async (req, res) => {
           urlPhoto: vehicule.urlPhoto || null,
         } : undefined,
         statutContrat,
+        typeAgent: role === 'agentCommercial' ? (typeAgent || null) : null,
+        dureeContratMois: role === 'agentCommercial' && statutContrat === 'CDD' ? (Number(dureeContratMois) || null) : null,
         password: hashedPassword,
         statut: 'actif',
         dateInscription: new Date(),
@@ -130,12 +141,78 @@ exports.register = async (req, res) => {
         }
         user.referralCode = code;
         console.log('[REGISTER] ✅ Code de parrainage généré:', code);
+
+        // Pour Tranoo_pro: générer des identifiants mobile aléatoires à communiquer à l'agent
+        if (typeAgent === 'Tranoo_pro') {
+          const randomSuffix = crypto.randomBytes(3).toString('hex');
+          const normalized = `${(prenoms || '').replace(/\s+/g, '').toLowerCase()}.${(nom || '').replace(/\s+/g, '').toLowerCase()}`.replace(/[^a-z0-9.]/g, '');
+          const generatedLogin = `${normalized || 'agent'}.${randomSuffix}@pro.tranoo.app`;
+          const generatedPassword = crypto.randomBytes(6).toString('base64').replace(/[^a-zA-Z0-9]/g, '').slice(0, 12);
+          user.mobileCredentials = {
+            login: generatedLogin,
+            password: generatedPassword,
+          };
+        }
       }
 
       // Sauvegarder dans MongoDB
       console.log('[REGISTER] Sauvegarde dans MongoDB...');
       try {
       await user.save();
+        // Pour Tranoo_pro: créer automatiquement le compte vendeur mobile lié (Firebase + Mongo)
+        if (role === 'agentCommercial' && typeAgent === 'Tranoo_pro' && user.mobileCredentials?.login && user.mobileCredentials?.password) {
+          const vendorEmail = user.mobileCredentials.login;
+          const vendorPassword = user.mobileCredentials.password;
+          const vendorDisplayName = `${prenoms || ''} ${nom || ''}`.trim() || 'Vendeur Tranoo_pro';
+
+          const existingVendorMongo = await User.findOne({ email: vendorEmail });
+          if (existingVendorMongo) {
+            throw new Error('Compte vendeur mobile déjà existant en base pour cet identifiant');
+          }
+
+          let vendorFirebaseUser = null;
+          try {
+            vendorFirebaseUser = await admin.auth().createUser({
+              email: vendorEmail,
+              password: vendorPassword,
+              displayName: vendorDisplayName,
+            });
+          } catch (firebaseError) {
+            throw new Error(`Création Firebase du vendeur échouée: ${firebaseError.message}`);
+          }
+
+          try {
+            const vendorHashedPassword = await bcrypt.hash(vendorPassword, 10);
+            const vendorUser = new User({
+              uid: vendorFirebaseUser.uid,
+              nom,
+              prenoms,
+              email: vendorEmail,
+              telephone: telephone || '0000000000',
+              role: 'vendeur',
+              vendeurType: 'mixte',
+              password: vendorHashedPassword,
+              statut: 'actif',
+              dateInscription: new Date(),
+              entreprise: entreprise || `Boutique ${vendorDisplayName}`,
+              adresse: adresse || null,
+              ville: ville || null,
+            });
+            await vendorUser.save();
+
+            user.proVendorAccount = {
+              userId: vendorUser._id,
+              uid: vendorUser.uid,
+              email: vendorUser.email,
+            };
+            await user.save();
+          } catch (mongoVendorError) {
+            try {
+              await admin.auth().deleteUser(vendorFirebaseUser.uid);
+            } catch (_) {}
+            throw new Error(`Création Mongo du vendeur échouée: ${mongoVendorError.message}`);
+          }
+        }
         console.log('[REGISTER] ✅ Utilisateur MongoDB sauvegardé avec succès');
         console.log('[REGISTER] MongoDB _id:', user._id);
         console.log('[REGISTER] ===== INSCRIPTION RÉUSSIE =====');
@@ -155,6 +232,9 @@ exports.register = async (req, res) => {
         } catch (deleteError) {
           console.error('[REGISTER] ❌ Erreur lors de la suppression Firebase:', deleteError.message);
         }
+        try {
+          if (user?._id) await User.findByIdAndDelete(user._id);
+        } catch (_) {}
         throw saveError; // Re-lancer l'erreur pour qu'elle soit gérée par le catch global
       }
     }
@@ -215,6 +295,8 @@ exports.register = async (req, res) => {
       photo,
       typeAdmin,
       statutContrat,
+      typeAgent: role === 'agentCommercial' ? (typeAgent || null) : null,
+      dureeContratMois: role === 'agentCommercial' && statutContrat === 'CDD' ? (Number(dureeContratMois) || null) : null,
       statut: 'actif',
       dateInscription: new Date(),
       // Ajouter les données véhicule si présentes (livreur/chauffeur)
@@ -308,5 +390,49 @@ exports.register = async (req, res) => {
     return res.status(500).json({ message: 'Erreur lors de l\'inscription', error: error.message });
   }
 }; 
+
+exports.startWebSession = async (req, res) => {
+  try {
+    const user = req.user;
+    const now = Date.now();
+    const idleMs = Number(process.env.WEB_SESSION_IDLE_MS || 10 * 60 * 1000);
+    const sessionId =
+      typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : crypto.randomBytes(24).toString('hex');
+
+    user.webSession = {
+      sessionId,
+      lastActivityAt: new Date(now),
+      expiresAt: new Date(now + idleMs),
+      clientInfo: req.headers['user-agent'] || null,
+    };
+    await user.save();
+
+    return res.status(200).json({
+      message: 'Session web démarrée',
+      sessionId,
+      expiresAt: user.webSession.expiresAt,
+    });
+  } catch (error) {
+    return res.status(500).json({ message: 'Erreur démarrage session web', error: error.message });
+  }
+};
+
+exports.endWebSession = async (req, res) => {
+  try {
+    const user = req.user;
+    user.webSession = {
+      sessionId: null,
+      lastActivityAt: null,
+      expiresAt: null,
+      clientInfo: null,
+    };
+    await user.save();
+    return res.status(200).json({ message: 'Session web fermée' });
+  } catch (error) {
+    return res.status(500).json({ message: 'Erreur fermeture session web', error: error.message });
+  }
+};
 
 // Ancien système WhatsApp OTP supprimé - Remplacé par Push Notifications

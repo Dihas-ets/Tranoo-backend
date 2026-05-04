@@ -142,9 +142,65 @@ exports.updateUser = async (req, res) => {
 // Supprimer un utilisateur (par son id)
 exports.deleteUser = async (req, res) => {
   try {
-    const user = await User.findByIdAndDelete(req.params.id);
+    const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ message: 'Utilisateur non trouvé' });
-    res.json({ message: 'Utilisateur supprimé' });
+
+    let firebaseDeleted = false;
+    let firebaseError = null;
+
+    if (user.uid) {
+      try {
+        await admin.auth().deleteUser(user.uid);
+        firebaseDeleted = true;
+      } catch (err) {
+        const code = err?.errorInfo?.code || err?.code || '';
+        // Si l'utilisateur n'existe déjà plus dans Firebase, on considère la suppression comme OK.
+        if (code === 'auth/user-not-found') {
+          firebaseDeleted = true;
+        } else {
+          firebaseError = err?.message || 'Erreur suppression Firebase';
+        }
+      }
+    }
+
+    // Si agent Tranoo_pro avec compte vendeur lié, supprimer aussi ce compte vendeur.
+    if (user.role === 'agentCommercial' && (user.typeAgent || 'Tranoo') === 'Tranoo_pro') {
+      const linkedVendor =
+        (user.proVendorAccount?.userId && (await User.findById(user.proVendorAccount.userId))) ||
+        (user.proVendorAccount?.email && (await User.findOne({ email: user.proVendorAccount.email, role: 'vendeur' }))) ||
+        (user.mobileCredentials?.login && (await User.findOne({ email: user.mobileCredentials.login, role: 'vendeur' })));
+
+      if (linkedVendor) {
+        try {
+          if (linkedVendor.uid) await admin.auth().deleteUser(linkedVendor.uid);
+        } catch (vendorFirebaseErr) {
+          const code = vendorFirebaseErr?.errorInfo?.code || vendorFirebaseErr?.code || '';
+          if (code !== 'auth/user-not-found') {
+            console.warn('[DELETE_USER] Suppression Firebase vendeur liée échouée:', vendorFirebaseErr?.message);
+          }
+        }
+        await UserDevice.deleteMany({ userUid: linkedVendor.uid });
+        await User.findByIdAndDelete(linkedVendor._id);
+      }
+    }
+
+    await UserDevice.deleteMany({ userUid: user.uid });
+    await User.findByIdAndDelete(req.params.id);
+
+    if (firebaseError) {
+      return res.status(500).json({
+        message: 'Suppression Mongo effectuée, mais échec suppression Firebase',
+        mongoDeleted: true,
+        firebaseDeleted: false,
+        firebaseError,
+      });
+    }
+
+    return res.status(200).json({
+      message: 'Utilisateur supprimé',
+      mongoDeleted: true,
+      firebaseDeleted: firebaseDeleted || !user.uid,
+    });
   } catch (error) {
     res.status(500).json({ message: 'Erreur lors de la suppression', error });
   }
