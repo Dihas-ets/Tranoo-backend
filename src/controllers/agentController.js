@@ -34,6 +34,17 @@ const getReferredSellerIds = async (agentId) => {
   return sellers;
 };
 
+const sumPayments = async (match) => {
+  const rows = await Payment.aggregate([
+    { $match: match },
+    { $group: { _id: null, count: { $sum: 1 }, totalAmount: { $sum: '$amount' } } },
+  ]);
+  return {
+    count: rows[0]?.count || 0,
+    totalAmount: rows[0]?.totalAmount || 0,
+  };
+};
+
 const DEMO_WINDOW_MINUTES = Number(process.env.DEMO_WINDOW_MINUTES || 30);
 const DEMO_COOLDOWN_MINUTES = Number(process.env.DEMO_COOLDOWN_MINUTES || 15);
 
@@ -145,12 +156,13 @@ const computeKpisForRange = async ({ agentId, start, end }) => {
     end,
   });
 
-  const abonnementsVendus = await Payment.countDocuments({
+  const subscriptionPayments = await sumPayments({
     user: { $in: piecesSellerIds },
     type: 'subscription',
     status: 'success',
     createdAt: { $gte: start, $lte: end },
   });
+  const abonnementsVendus = subscriptionPayments.count;
 
   const campagnesLancees = await Publicite.countDocuments({
     vendeur: { $in: sellerIds },
@@ -185,6 +197,111 @@ const computeKpisForRange = async ({ agentId, start, end }) => {
     revenueCampagne,
     objectifs,
     totalGenerer: revenueAbonnement + revenueCampagne,
+  };
+};
+
+const computeKpisForRangeV2 = async ({ agentId, start, end }) => {
+  const sellers = await getReferredSellerIds(agentId);
+  const sellerIds = sellers.map((s) => String(s._id));
+  const piecesSellerIds = sellers
+    .filter((s) => s.vendeurType === 'pieces' || s.vendeurType === 'mixte')
+    .map((s) => String(s._id));
+
+  const boutiquesCreees = await User.countDocuments({
+    _id: { $in: sellerIds },
+    role: 'vendeur',
+    dateInscription: { $gte: start, $lte: end },
+  });
+
+  const sellerObjectIds = sellerIds.map((id) => new mongoose.Types.ObjectId(String(id)));
+  const demonstrations = await computeValidatedDemosForRange({
+    agentId,
+    sellerObjectIds,
+    start,
+    end,
+  });
+
+  const subscriptionPayments = await sumPayments({
+    user: { $in: piecesSellerIds },
+    type: 'subscription',
+    status: 'success',
+    createdAt: { $gte: start, $lte: end },
+  });
+
+  const campaignPayments = await sumPayments({
+    user: { $in: sellerIds },
+    type: 'publicite',
+    status: 'success',
+    createdAt: { $gte: start, $lte: end },
+  });
+
+  const revenueAbonnement = Math.round((subscriptionPayments.totalAmount || 0) * 0.10);
+  const revenueCampagne = Math.round((campaignPayments.totalAmount || 0) * 0.10);
+
+  const objectifs = {
+    prospects: { target: 20 },
+    abonnements: { minimumBeforeWithdrawal: 4 },
+    campagnes: { minimumBeforeWithdrawal: 4 },
+  };
+
+  return {
+    demonstrations,
+    boutiquesCreees,
+    abonnementsVendus: subscriptionPayments.count,
+    campagnesLancees: campaignPayments.count,
+    revenueAbonnement,
+    revenueCampagne,
+    objectifs,
+    totalGenerer: revenueAbonnement + revenueCampagne,
+  };
+};
+
+const buildAgentActivitySummary = async ({ agent, start, end }) => {
+  const kpis = await computeKpisForRangeV2({ agentId: agent._id, start, end });
+  const dailyActivity = await AgentDailyLog.findOne({
+    agent: agent._id,
+    dateKey: {
+      $gte: start.toISOString().slice(0, 10),
+      $lte: end.toISOString().slice(0, 10),
+    },
+    $or: [
+      { prospectsApproached: { $gt: 0 } },
+      { zoneText: { $nin: [null, ''] } },
+      { 'zoneLocation.lat': { $ne: null } },
+    ],
+  })
+    .sort({ updatedAt: -1 })
+    .select('dateKey updatedAt')
+    .lean();
+
+  const referralCount = await Referral.countDocuments({
+    referrerId: agent._id,
+    createdAt: { $gte: start, $lte: end },
+  });
+
+  const score =
+    (dailyActivity ? 1 : 0) +
+    referralCount +
+    (kpis.boutiquesCreees || 0) +
+    (kpis.demonstrations || 0) +
+    (kpis.abonnementsVendus || 0) +
+    (kpis.campagnesLancees || 0);
+
+  const reasons = [];
+  if (dailyActivity) reasons.push('journal');
+  if (referralCount > 0) reasons.push('filleuls');
+  if (kpis.boutiquesCreees > 0) reasons.push('boutiques');
+  if (kpis.demonstrations > 0) reasons.push('demos');
+  if (kpis.abonnementsVendus > 0) reasons.push('abonnements');
+  if (kpis.campagnesLancees > 0) reasons.push('campagnes');
+
+  return {
+    agentId: String(agent._id),
+    status: score > 0 ? 'actif' : 'inactif',
+    score,
+    reasons,
+    kpis,
+    lastDailyLogAt: dailyActivity?.updatedAt || null,
   };
 };
 
@@ -230,7 +347,7 @@ exports.getMyDashboard = async (req, res) => {
 
     const tariffs = await ReferralTariff.find({}).sort({ createdAt: -1 });
     const daily = await AgentDailyLog.findOne({ agent: user._id, dateKey }).lean();
-    const kpis = await computeKpisForRange({ agentId: user._id, start, end });
+    const kpis = await computeKpisForRangeV2({ agentId: user._id, start, end });
     const history = await AgentDailyLog.find({ agent: user._id })
       .sort({ dateKey: -1 })
       .limit(60)
@@ -252,6 +369,10 @@ exports.getMyDashboard = async (req, res) => {
         mobileCredentials:
           (user.typeAgent || 'Tranoo') === 'Tranoo_pro'
             ? (user.mobileCredentials || { login: null, password: null })
+            : null,
+        tranooBuyerCredentials:
+          (user.typeAgent || 'Tranoo') === 'Tranoo_pro'
+            ? (user.tranooBuyerCredentials || { login: null, password: null })
             : null,
       },
       stats: {
@@ -701,15 +822,91 @@ exports.getConsolidatedAdminStats = async (req, res) => {
       { $sort: { total: -1 } },
     ]);
 
+    const activitySummaries = await Promise.all(
+      agents.map((agent) => buildAgentActivitySummary({ agent, start: fromDate, end: toDate }))
+    );
+    const activityByAgent = activitySummaries.reduce((acc, item) => {
+      acc[item.agentId] = item;
+      return acc;
+    }, {});
+    const activeAgents = activitySummaries.filter((item) => item.status === 'actif').length;
+    const inactiveAgents = activitySummaries.length - activeAgents;
+    const kpiTotals = activitySummaries.reduce(
+      (acc, item) => {
+        acc.totalRevenueSubscription += item.kpis.revenueAbonnement || 0;
+        acc.totalRevenueCampagne += item.kpis.revenueCampagne || 0;
+        acc.abonnementsVendus += item.kpis.abonnementsVendus || 0;
+        acc.campagnesLancees += item.kpis.campagnesLancees || 0;
+        return acc;
+      },
+      {
+        totalRevenueSubscription: 0,
+        totalRevenueCampagne: 0,
+        abonnementsVendus: 0,
+        campagnesLancees: 0,
+      }
+    );
     const mapById = new Map(agents.map((a) => [String(a._id), a]));
-    const topAgents = totalByAgent.slice(0, 5).map((row) => {
-      const a = mapById.get(String(row._id));
+    const topAgents = [...activitySummaries]
+      .sort((a, b) => (b.kpis.totalGenerer || 0) - (a.kpis.totalGenerer || 0))
+      .slice(0, 5)
+      .map((row) => {
+        const a = mapById.get(String(row.agentId));
+        return {
+          agentId: row.agentId,
+          nom: a?.nom || '',
+          prenoms: a?.prenoms || '',
+          typeAgent: a?.typeAgent || 'Tranoo',
+          totalGenerer: row.kpis.totalGenerer || 0,
+        };
+      });
+
+    const fromKey = fromDate.toISOString().slice(0, 10);
+    const toKey = toDate.toISOString().slice(0, 10);
+    const dailyLogs = await AgentDailyLog.find({
+      agent: { $in: agentIds },
+      dateKey: { $gte: fromKey, $lte: toKey },
+    })
+      .select('agent dateKey zoneText prospectsApproached adminObservation updatedAt')
+      .lean();
+
+    const logByAgent = {};
+    for (const l of dailyLogs) {
+      const sid = String(l.agent);
+      if (!logByAgent[sid]) {
+        logByAgent[sid] = { prospectsSum: 0, last: null };
+      }
+      logByAgent[sid].prospectsSum += Number(l.prospectsApproached || 0);
+      const lu = new Date(l.updatedAt || 0).getTime();
+      const prev = logByAgent[sid].last;
+      if (!prev || lu > new Date(prev.updatedAt || 0).getTime()) {
+        logByAgent[sid].last = l;
+      }
+    }
+
+    const tracking = agents.map((a) => {
+      const id = String(a._id);
+      const act = activityByAgent[id];
+      const kpis = act?.kpis || {};
+      const lg = logByAgent[id];
+      const zoneText = lg?.last?.zoneText != null ? String(lg.last.zoneText).trim() : '';
+      const adminObservation =
+        lg?.last?.adminObservation != null ? String(lg.last.adminObservation).trim() : '';
       return {
-        agentId: row._id,
-        nom: a?.nom || '',
-        prenoms: a?.prenoms || '',
-        typeAgent: a?.typeAgent || 'Tranoo',
-        totalGenerer: row.total || 0,
+        agentId: id,
+        prenoms: a.prenoms || '',
+        nom: a.nom || '',
+        typeAgent: a.typeAgent || 'Tranoo',
+        periodLabel: fromKey === toKey ? fromKey : `${fromKey} → ${toKey}`,
+        refDateKey: lg?.last?.dateKey || null,
+        zoneText: zoneText || '-',
+        prospectsApproached: lg?.prospectsSum ?? 0,
+        demonstrations: kpis.demonstrations ?? 0,
+        boutiquesCreees: kpis.boutiquesCreees ?? 0,
+        abonnementsVendus: kpis.abonnementsVendus ?? 0,
+        campagnesLancees: kpis.campagnesLancees ?? 0,
+        totalGenerer: kpis.totalGenerer ?? 0,
+        adminObservation: adminObservation || '-',
       };
     });
 
@@ -717,12 +914,18 @@ exports.getConsolidatedAdminStats = async (req, res) => {
       filters: { from: from || null, to: to || null, typeAgent },
       totals: {
         agents: agents.length,
-        totalGenerer: totalRevenueSubscription + totalRevenueCampagne,
-        totalRevenueSubscription,
-        totalRevenueCampagne,
+        activeAgents,
+        inactiveAgents,
+        totalGenerer: kpiTotals.totalRevenueSubscription + kpiTotals.totalRevenueCampagne,
+        totalRevenueSubscription: kpiTotals.totalRevenueSubscription,
+        totalRevenueCampagne: kpiTotals.totalRevenueCampagne,
+        abonnementsVendus: kpiTotals.abonnementsVendus,
+        campagnesLancees: kpiTotals.campagnesLancees,
         totalWithdrawn,
       },
       topAgents,
+      activityByAgent,
+      tracking,
     });
   } catch (err) {
     return res.status(500).json({ message: 'Erreur chargement consolidé admin', error: err.message });
@@ -748,7 +951,7 @@ exports.getAgentProDailyMonitorForAdmin = async (req, res) => {
     const toDate = to ? new Date(`${to}T23:59:59.999Z`) : new Date(`${selectedDate}T23:59:59.999Z`);
 
     const dailyLog = await AgentDailyLog.findOne({ agent: id, dateKey: selectedDate }).lean();
-    const kpis = await computeKpisForRange({ agentId: agent._id, start: dayStart, end: dayEnd });
+    const kpis = await computeKpisForRangeV2({ agentId: agent._id, start: dayStart, end: dayEnd });
 
     const history = await AgentDailyLog.find({
       agent: id,
@@ -793,6 +996,7 @@ exports.getAgentProDailyMonitorForAdmin = async (req, res) => {
         typeAgent: agent.typeAgent || 'Tranoo',
         referralCode: agent.referralCode || null,
         mobileCredentials: agent.mobileCredentials || { login: null, password: null },
+        tranooBuyerCredentials: agent.tranooBuyerCredentials || { login: null, password: null },
       },
       selectedDate,
       filters: {
@@ -817,5 +1021,3 @@ exports.getAgentProDailyMonitorForAdmin = async (req, res) => {
     return res.status(500).json({ message: 'Erreur chargement détails Tranoo_pro', error: err.message });
   }
 };
-
-

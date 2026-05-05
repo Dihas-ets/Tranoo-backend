@@ -152,65 +152,150 @@ exports.register = async (req, res) => {
             login: generatedLogin,
             password: generatedPassword,
           };
+
+          // Compte acheteur Tranoo (login dédié) — évite de réutiliser le même email/UID Firebase
+          const buyerSuffix = crypto.randomBytes(3).toString('hex');
+          const buyerLogin = `${normalized || 'agent'}.${buyerSuffix}@buyer.tranoo.app`;
+          const buyerPassword = crypto.randomBytes(6).toString('base64').replace(/[^a-zA-Z0-9]/g, '').slice(0, 12);
+          user.tranooBuyerCredentials = {
+            login: buyerLogin,
+            password: buyerPassword,
+          };
         }
       }
 
       // Sauvegarder dans MongoDB
       console.log('[REGISTER] Sauvegarde dans MongoDB...');
       try {
-      await user.save();
+        await user.save();
         // Pour Tranoo_pro: créer automatiquement le compte vendeur mobile lié (Firebase + Mongo)
-        if (role === 'agentCommercial' && typeAgent === 'Tranoo_pro' && user.mobileCredentials?.login && user.mobileCredentials?.password) {
-          const vendorEmail = user.mobileCredentials.login;
-          const vendorPassword = user.mobileCredentials.password;
-          const vendorDisplayName = `${prenoms || ''} ${nom || ''}`.trim() || 'Vendeur Tranoo_pro';
+        if (role === 'agentCommercial' && typeAgent === 'Tranoo_pro') {
+          let vendorFirebaseUid = null;
+          let vendorMongoId = null;
+          let buyerFirebaseUid = null;
+          let buyerMongoId = null;
 
-          const existingVendorMongo = await User.findOne({ email: vendorEmail });
-          if (existingVendorMongo) {
-            throw new Error('Compte vendeur mobile déjà existant en base pour cet identifiant');
-          }
-
-          let vendorFirebaseUser = null;
-          try {
-            vendorFirebaseUser = await admin.auth().createUser({
-              email: vendorEmail,
-              password: vendorPassword,
-              displayName: vendorDisplayName,
-            });
-          } catch (firebaseError) {
-            throw new Error(`Création Firebase du vendeur échouée: ${firebaseError.message}`);
-          }
-
-          try {
-            const vendorHashedPassword = await bcrypt.hash(vendorPassword, 10);
-            const vendorUser = new User({
-              uid: vendorFirebaseUser.uid,
-              nom,
-              prenoms,
-              email: vendorEmail,
-              telephone: telephone || '0000000000',
-              role: 'vendeur',
-              vendeurType: 'mixte',
-              password: vendorHashedPassword,
-              statut: 'actif',
-              dateInscription: new Date(),
-              entreprise: entreprise || `Boutique ${vendorDisplayName}`,
-              adresse: adresse || null,
-              ville: ville || null,
-            });
-            await vendorUser.save();
-
-            user.proVendorAccount = {
-              userId: vendorUser._id,
-              uid: vendorUser.uid,
-              email: vendorUser.email,
-            };
-            await user.save();
-          } catch (mongoVendorError) {
+          const cleanupLinked = async () => {
             try {
-              await admin.auth().deleteUser(vendorFirebaseUser.uid);
+              if (vendorMongoId) await User.findByIdAndDelete(vendorMongoId);
             } catch (_) {}
-            throw new Error(`Création Mongo du vendeur échouée: ${mongoVendorError.message}`);
+            try {
+              if (buyerMongoId) await User.findByIdAndDelete(buyerMongoId);
+            } catch (_) {}
+            try {
+              if (vendorFirebaseUid) await admin.auth().deleteUser(vendorFirebaseUid);
+            } catch (_) {}
+            try {
+              if (buyerFirebaseUid) await admin.auth().deleteUser(buyerFirebaseUid);
+            } catch (_) {}
+          };
+
+          // 1) Compte vendeur Tranoo_pro
+          if (user.mobileCredentials?.login && user.mobileCredentials?.password) {
+            const vendorEmail = user.mobileCredentials.login;
+            const vendorPassword = user.mobileCredentials.password;
+            const vendorDisplayName = `${prenoms || ''} ${nom || ''}`.trim() || 'Vendeur Tranoo_pro';
+
+            const existingVendorMongo = await User.findOne({ email: vendorEmail });
+            if (existingVendorMongo) {
+              throw new Error('Compte vendeur mobile déjà existant en base pour cet identifiant');
+            }
+
+            let vendorFirebaseUser = null;
+            try {
+              vendorFirebaseUser = await admin.auth().createUser({
+                email: vendorEmail,
+                password: vendorPassword,
+                displayName: vendorDisplayName,
+              });
+              vendorFirebaseUid = vendorFirebaseUser.uid;
+            } catch (firebaseError) {
+              throw new Error(`Création Firebase du vendeur échouée: ${firebaseError.message}`);
+            }
+
+            try {
+              const vendorHashedPassword = await bcrypt.hash(vendorPassword, 10);
+              const vendorUser = new User({
+                uid: vendorFirebaseUid,
+                nom,
+                prenoms,
+                email: vendorEmail,
+                telephone: telephone || '0000000000',
+                role: 'vendeur',
+                vendeurType: 'mixte',
+                password: vendorHashedPassword,
+                statut: 'actif',
+                dateInscription: new Date(),
+                entreprise: entreprise || `Boutique ${vendorDisplayName}`,
+                adresse: adresse || null,
+                ville: ville || null,
+              });
+              await vendorUser.save();
+              vendorMongoId = vendorUser._id;
+
+              user.proVendorAccount = {
+                userId: vendorUser._id,
+                uid: vendorUser.uid,
+                email: vendorUser.email,
+              };
+              await user.save();
+            } catch (mongoVendorError) {
+              await cleanupLinked();
+              throw new Error(`Création Mongo du vendeur échouée: ${mongoVendorError.message}`);
+            }
+          }
+
+          // 2) Compte acheteur Tranoo (pour usage démo) — séparé (email/uid unique)
+          if (user.tranooBuyerCredentials?.login && user.tranooBuyerCredentials?.password) {
+            const buyerEmail = user.tranooBuyerCredentials.login;
+            const buyerPassword = user.tranooBuyerCredentials.password;
+            const buyerDisplayName = `${prenoms || ''} ${nom || ''}`.trim() || 'Acheteur Tranoo';
+
+            const existingBuyerMongo = await User.findOne({ email: buyerEmail });
+            if (existingBuyerMongo) {
+              throw new Error('Compte acheteur Tranoo déjà existant en base pour cet identifiant');
+            }
+
+            try {
+              const buyerFirebaseUser = await admin.auth().createUser({
+                email: buyerEmail,
+                password: buyerPassword,
+                displayName: buyerDisplayName,
+              });
+              buyerFirebaseUid = buyerFirebaseUser.uid;
+            } catch (firebaseError) {
+              await cleanupLinked();
+              throw new Error(`Création Firebase de l'acheteur échouée: ${firebaseError.message}`);
+            }
+
+            try {
+              const buyerHashedPassword = await bcrypt.hash(buyerPassword, 10);
+              const buyerUser = new User({
+                uid: buyerFirebaseUid,
+                nom,
+                prenoms,
+                email: buyerEmail,
+                telephone: telephone || '0000000000',
+                role: 'acheteur',
+                password: buyerHashedPassword,
+                statut: 'actif',
+                dateInscription: new Date(),
+                adresse: adresse || null,
+                ville: ville || null,
+              });
+              await buyerUser.save();
+              buyerMongoId = buyerUser._id;
+
+              user.tranooBuyerAccount = {
+                userId: buyerUser._id,
+                uid: buyerUser.uid,
+                email: buyerUser.email,
+              };
+              await user.save();
+            } catch (mongoBuyerError) {
+              await cleanupLinked();
+              throw new Error(`Création Mongo de l'acheteur échouée: ${mongoBuyerError.message}`);
+            }
           }
         }
         console.log('[REGISTER] ✅ Utilisateur MongoDB sauvegardé avec succès');

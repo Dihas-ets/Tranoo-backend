@@ -287,7 +287,17 @@ const userSchema = new mongoose.Schema({
     login: { type: String, default: null },
     password: { type: String, default: null },
   },
+  // Pour les agents Tranoo_pro: compte "acheteur" lié sur l'app Tranoo (identifiants dédiés)
+  tranooBuyerCredentials: {
+    login: { type: String, default: null },
+    password: { type: String, default: null },
+  },
   proVendorAccount: {
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    uid: { type: String, default: null },
+    email: { type: String, default: null },
+  },
+  tranooBuyerAccount: {
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     uid: { type: String, default: null },
     email: { type: String, default: null },

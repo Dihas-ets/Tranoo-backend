@@ -152,6 +152,10 @@ exports.initRequestToPay = async (req, res) => {
       rawInitResponse: data,
     });
 
+    if (payment.status === 'success') {
+      await handleSuccessfulPayment(payment);
+    }
+
     return res.json({
       ok: true,
       paymentId: payment._id,
@@ -524,7 +528,7 @@ async function handleSuccessfulPayment(payment) {
     }
 
     // Commissions (paramétrables) pour l'agent commercial si l'utilisateur payeur a été parrainé par un agent
-    if (payment.user) {
+    if (payment.user && ['subscription', 'publicite'].includes(payment.type)) {
       try {
         const settings = await getReferralSettings();
         const commissionRatePercent = Number.isFinite(settings.agentCommissionRate)
@@ -536,9 +540,14 @@ async function handleSuccessfulPayment(payment) {
           if (referral && referral.referrerId && referral.referrerId.role === 'agentCommercial') {
             const commission = Math.round((Number(payment.amount) || 0) * (commissionRatePercent / 100));
             if (commission > 0) {
-              await AgentEarning.create({
+              const earningType = payment.type === 'subscription' ? 'commission_subscription' : 'commission_publicite';
+              const existingEarning = await AgentEarning.findOne({
+                sourcePayment: payment._id,
+                type: earningType,
+              }).select('_id');
+              if (!existingEarning) await AgentEarning.create({
                 agent: referral.referrerId._id,
-                type: payment.type === 'subscription' ? 'commission_subscription' : 'commission_publicite',
+                type: earningType,
                 amount: commission,
                 sourcePayment: payment._id,
                 referredUser: payer._id,
@@ -1197,6 +1206,7 @@ exports.recordFeexPayFlutter = async (req, res) => {
     }).sort({ createdAt: -1 });
 
     let payment;
+    let shouldReconcile = false;
     if (existing) {
       // Priorité au succès: ne jamais rétrograder success -> failed/cancelled.
       const shouldUpgradeToSuccess =
@@ -1207,6 +1217,7 @@ exports.recordFeexPayFlutter = async (req, res) => {
       if (shouldUpgradeToSuccess || shouldSetNonSuccess) {
         existing.status = mappedStatus;
       }
+      shouldReconcile = shouldUpgradeToSuccess;
       existing.amount = Number(amount) || existing.amount;
       existing.description = description || existing.description;
       existing.rawInitResponse = {
@@ -1244,12 +1255,17 @@ exports.recordFeexPayFlutter = async (req, res) => {
           incomingStatus: mappedStatus,
         },
       });
+      shouldReconcile = mappedStatus === 'success';
       console.log(
         'Paiement FeexPay Flutter enregistré:',
         payment._id,
         'status=',
         payment.status,
       );
+    }
+
+    if (shouldReconcile && payment.status === 'success') {
+      await handleSuccessfulPayment(payment);
     }
 
     return res.json({

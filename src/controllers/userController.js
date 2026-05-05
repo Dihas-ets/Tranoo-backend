@@ -182,6 +182,25 @@ exports.deleteUser = async (req, res) => {
         await UserDevice.deleteMany({ userUid: linkedVendor.uid });
         await User.findByIdAndDelete(linkedVendor._id);
       }
+
+      // Compte acheteur Tranoo lié (optionnel)
+      const linkedBuyer =
+        (user.tranooBuyerAccount?.userId && (await User.findById(user.tranooBuyerAccount.userId))) ||
+        (user.tranooBuyerAccount?.email && (await User.findOne({ email: user.tranooBuyerAccount.email, role: 'acheteur' }))) ||
+        (user.tranooBuyerCredentials?.login && (await User.findOne({ email: user.tranooBuyerCredentials.login, role: 'acheteur' })));
+
+      if (linkedBuyer) {
+        try {
+          if (linkedBuyer.uid) await admin.auth().deleteUser(linkedBuyer.uid);
+        } catch (buyerFirebaseErr) {
+          const code = buyerFirebaseErr?.errorInfo?.code || buyerFirebaseErr?.code || '';
+          if (code !== 'auth/user-not-found') {
+            console.warn('[DELETE_USER] Suppression Firebase acheteur liée échouée:', buyerFirebaseErr?.message);
+          }
+        }
+        await UserDevice.deleteMany({ userUid: linkedBuyer.uid });
+        await User.findByIdAndDelete(linkedBuyer._id);
+      }
     }
 
     await UserDevice.deleteMany({ userUid: user.uid });
