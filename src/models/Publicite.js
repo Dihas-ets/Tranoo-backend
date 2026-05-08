@@ -9,6 +9,8 @@ const publiciteSchema = new mongoose.Schema({
   media: [String], // URLs des images/vidéos
   lien: { type: String }, // Lien cliquable optionnel vers une page externe
   statut: { type: String, enum: ['en_attente', 'payee', 'valide', 'rejete', 'expire'], default: 'en_attente' }, // Statut de la demande
+  statutPaiement: { type: String, enum: ['pending', 'success', 'failed', 'cancelled'], default: 'pending' },
+  datePaiement: { type: Date },
   vendeur: { type: String, ref: 'User', required: true }, // Référence au vendeur
   articleId: { type: mongoose.Schema.Types.ObjectId, ref: 'Article' }, // Référence à l'article créé (optionnel)
   // Source de la demande : mobile (app) ou landing/admin (tranoo)

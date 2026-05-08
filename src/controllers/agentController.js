@@ -45,6 +45,26 @@ const sumPayments = async (match) => {
   };
 };
 
+const COMMISSION_TYPES = ['commission_publicite', 'commission_subscription'];
+
+const sumCampaignPayments = async ({ sellerIds, start, end }) => {
+  const rows = await Payment.aggregate([
+    {
+      $match: {
+        user: { $in: sellerIds },
+        status: 'success',
+        createdAt: { $gte: start, $lte: end },
+        $or: [{ type: 'publicite' }, { publicite: { $exists: true, $ne: null } }],
+      },
+    },
+    { $group: { _id: null, count: { $sum: 1 }, totalAmount: { $sum: '$amount' } } },
+  ]);
+  return {
+    count: rows[0]?.count || 0,
+    totalAmount: rows[0]?.totalAmount || 0,
+  };
+};
+
 const DEMO_WINDOW_MINUTES = Number(process.env.DEMO_WINDOW_MINUTES || 30);
 const DEMO_COOLDOWN_MINUTES = Number(process.env.DEMO_COOLDOWN_MINUTES || 15);
 
@@ -228,12 +248,7 @@ const computeKpisForRangeV2 = async ({ agentId, start, end }) => {
     createdAt: { $gte: start, $lte: end },
   });
 
-  const campaignPayments = await sumPayments({
-    user: { $in: sellerIds },
-    type: 'publicite',
-    status: 'success',
-    createdAt: { $gte: start, $lte: end },
-  });
+  const campaignPayments = await sumCampaignPayments({ sellerIds, start, end });
 
   const revenueAbonnement = Math.round((subscriptionPayments.totalAmount || 0) * 0.10);
   const revenueCampagne = Math.round((campaignPayments.totalAmount || 0) * 0.10);
@@ -243,6 +258,25 @@ const computeKpisForRangeV2 = async ({ agentId, start, end }) => {
     abonnements: { minimumBeforeWithdrawal: 4 },
     campagnes: { minimumBeforeWithdrawal: 4 },
   };
+
+  console.log(
+    '[AGENT_KPI_V2]',
+    JSON.stringify({
+      agentId: String(agentId),
+      range: {
+        start: start?.toISOString?.() || String(start),
+        end: end?.toISOString?.() || String(end),
+      },
+      referredSellersCount: sellerIds.length,
+      referredSellersSample: sellerIds.slice(0, 5),
+      abonnementsVendus: subscriptionPayments.count,
+      campagnesLancees: campaignPayments.count,
+      subscriptionAmount: subscriptionPayments.totalAmount || 0,
+      campaignAmount: campaignPayments.totalAmount || 0,
+      revenueAbonnement,
+      revenueCampagne,
+    })
+  );
 
   return {
     demonstrations,
@@ -332,7 +366,7 @@ exports.getMyDashboard = async (req, res) => {
 
     // Somme des gains enregistrés (sans compter les retraits)
     const earnings = await AgentEarning.aggregate([
-      { $match: { agent: user._id, type: { $ne: 'withdrawal' } } },
+      { $match: { agent: user._id, type: { $in: COMMISSION_TYPES } } },
       { $group: { _id: null, total: { $sum: '$amount' } } }
     ]);
     const totalEarnings = (earnings[0]?.total || 0);
@@ -558,7 +592,7 @@ exports.getAgentReferralStatsForAdmin = async (req, res) => {
 
     // Somme de tous les gains (hors retraits)
     const earningsAgg = await AgentEarning.aggregate([
-      { $match: { agent: referrerId, type: { $ne: 'withdrawal' } } },
+      { $match: { agent: referrerId, type: { $in: COMMISSION_TYPES } } },
       { $group: { _id: null, total: { $sum: '$amount' } } }
     ]);
     const totalEarnings = earningsAgg[0]?.total || 0;
@@ -642,7 +676,7 @@ exports.registerAgentWithdrawal = async (req, res) => {
 
     // Calculer le solde actuel (gains - retraits déjà enregistrés)
     const earningsAgg = await AgentEarning.aggregate([
-      { $match: { agent: agent._id, type: { $ne: 'withdrawal' } } },
+      { $match: { agent: agent._id, type: { $in: COMMISSION_TYPES } } },
       { $group: { _id: null, total: { $sum: '$amount' } } }
     ]);
     const totalEarnings = earningsAgg[0]?.total || 0;
@@ -972,7 +1006,7 @@ exports.getAgentProDailyMonitorForAdmin = async (req, res) => {
           _id: null,
           totalEarnings: {
             $sum: {
-              $cond: [{ $ne: ['$type', 'withdrawal'] }, '$amount', 0],
+              $cond: [{ $in: ['$type', COMMISSION_TYPES] }, '$amount', 0],
             },
           },
           totalWithdrawn: {

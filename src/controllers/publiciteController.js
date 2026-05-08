@@ -69,6 +69,15 @@ exports.getPubliciteById = async (req, res) => {
 // Changer le statut d'une demande (admin uniquement)
 exports.updateStatut = async (req, res) => {
   try {
+    console.log(
+      '[PUB_STATUS][UPDATE][IN]',
+      JSON.stringify({
+        pubId: req.params.id,
+        askedStatus: req.body?.statut || null,
+        byUserId: req.user?._id ? String(req.user._id) : null,
+        byRole: req.user?.role || null,
+      })
+    );
     const publicite = await Publicite.findById(req.params.id);
     if (!publicite) return res.status(404).json({ message: 'Demande non trouvée' });
     // Autoriser le vendeur à passer à 'payee', mais admin pour les autres statuts

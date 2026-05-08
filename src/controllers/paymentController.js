@@ -483,8 +483,11 @@ async function handleSuccessfulPayment(payment) {
     if (payment.publicite) {
       const publicite = await Publicite.findById(payment.publicite);
       if (publicite) {
-        publicite.statutPaiement = 'payé';
+        publicite.statutPaiement = 'success';
         publicite.datePaiement = new Date();
+        if (publicite.statut === 'en_attente') {
+          publicite.statut = 'payee';
+        }
         await publicite.save();
         console.log('Publicité marquée comme payée:', publicite._id);
       }
@@ -528,19 +531,48 @@ async function handleSuccessfulPayment(payment) {
     }
 
     // Commissions (paramétrables) pour l'agent commercial si l'utilisateur payeur a été parrainé par un agent
-    if (payment.user && ['subscription', 'publicite'].includes(payment.type)) {
+    const isSubscriptionPayment = payment.type === 'subscription';
+    const isPublicitePayment = payment.type === 'publicite' || !!payment.publicite;
+    if (payment.user && (isSubscriptionPayment || isPublicitePayment)) {
       try {
+        console.log(
+          '[AGENT_COMMISSION][START]',
+          JSON.stringify({
+            paymentId: String(payment._id),
+            paymentType: payment.type,
+            hasPubliciteRef: Boolean(payment.publicite),
+            amount: Number(payment.amount) || 0,
+            user: String(payment.user),
+          })
+        );
         const settings = await getReferralSettings();
         const commissionRatePercent = Number.isFinite(settings.agentCommissionRate)
           ? settings.agentCommissionRate
           : 10;
         const payer = await User.findById(payment.user);
+        if (!payer) {
+          console.log(
+            '[AGENT_COMMISSION][SKIP] payer introuvable',
+            JSON.stringify({ paymentId: String(payment._id), user: String(payment.user) })
+          );
+        }
         if (payer && (payer.role === 'vendeur' || payer.role === 'transitaire')) {
           const referral = await Referral.findOne({ referredId: payer._id, status: 'completed' }).populate('referrerId');
+          const referralSource = 'completed';
+          if (!referral) {
+            console.log(
+              '[AGENT_COMMISSION][SKIP] referral completed introuvable',
+              JSON.stringify({
+                paymentId: String(payment._id),
+                payerId: String(payer._id),
+                payerRole: payer.role,
+              })
+            );
+          }
           if (referral && referral.referrerId && referral.referrerId.role === 'agentCommercial') {
             const commission = Math.round((Number(payment.amount) || 0) * (commissionRatePercent / 100));
             if (commission > 0) {
-              const earningType = payment.type === 'subscription' ? 'commission_subscription' : 'commission_publicite';
+              const earningType = isSubscriptionPayment ? 'commission_subscription' : 'commission_publicite';
               const existingEarning = await AgentEarning.findOne({
                 sourcePayment: payment._id,
                 type: earningType,
@@ -552,9 +584,43 @@ async function handleSuccessfulPayment(payment) {
                 sourcePayment: payment._id,
                 referredUser: payer._id,
               });
-              console.log('Commission agent créée:', commission, 'XOF');
+              console.log(
+                '[AGENT_COMMISSION][CREATED]',
+                JSON.stringify({
+                  paymentId: String(payment._id),
+                  agentId: String(referral.referrerId._id),
+                  payerId: String(payer._id),
+                  referralId: String(referral._id),
+                  referralStatus: referral.status || null,
+                  referralSource,
+                  earningType,
+                  commission,
+                  alreadyExisting: Boolean(existingEarning),
+                })
+              );
             }
+          } else if (referral && referral.referrerId) {
+            console.log(
+              '[AGENT_COMMISSION][SKIP] referrer non-agent',
+              JSON.stringify({
+                paymentId: String(payment._id),
+                payerId: String(payer._id),
+                referrerId: String(referral.referrerId?._id || ''),
+                referrerRole: referral.referrerId?.role || null,
+                referralStatus: referral.status || null,
+                referralSource,
+              })
+            );
           }
+        } else if (payer) {
+          console.log(
+            '[AGENT_COMMISSION][SKIP] role non éligible',
+            JSON.stringify({
+              paymentId: String(payment._id),
+              payerId: String(payer._id),
+              payerRole: payer.role,
+            })
+          );
         }
       } catch (e) {
         console.error('Erreur commission agent:', e.message);
@@ -1189,8 +1255,22 @@ exports.recordFeexPayFlutter = async (req, res) => {
       amount,
       description,
       type = 'verification',
-      status = 'success'
+      status = 'success',
+      publiciteId,
     } = req.body || {};
+
+    console.log(
+      '[PUB_PAYMENT][FLUTTER_RECORD][IN]',
+      JSON.stringify({
+        userId: req.user?._id ? String(req.user._id) : null,
+        role: req.user?.role || null,
+        transKey: transKey || null,
+        amount: Number(amount) || 0,
+        type: type || null,
+        status: status || null,
+        publiciteId: publiciteId || null,
+      })
+    );
 
     if (!transKey || !amount) {
       return res.status(400).json({ message: 'transKey et amount requis' });
@@ -1241,6 +1321,7 @@ exports.recordFeexPayFlutter = async (req, res) => {
         provider: 'feexpay',
         transactionId: transKey,
         customId,
+        publicite: publiciteId || undefined,
         user: req.user?._id,
         amount: Number(amount),
         currency: 'XOF',
@@ -1265,6 +1346,15 @@ exports.recordFeexPayFlutter = async (req, res) => {
     }
 
     if (shouldReconcile && payment.status === 'success') {
+      console.log(
+        '[PUB_PAYMENT][FLUTTER_RECORD][RECONCILE_SUCCESS]',
+        JSON.stringify({
+          paymentId: String(payment._id),
+          type: payment.type,
+          publicite: payment.publicite ? String(payment.publicite) : null,
+          user: payment.user ? String(payment.user) : null,
+        })
+      );
       await handleSuccessfulPayment(payment);
     }
 
