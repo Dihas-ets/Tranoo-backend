@@ -15,6 +15,14 @@ const AgentEarningSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now },
 });
 
+AgentEarningSchema.index(
+  { sourcePayment: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { sourcePayment: { $type: 'objectId' } },
+  }
+);
+
 module.exports = mongoose.model('AgentEarning', AgentEarningSchema);
 
 

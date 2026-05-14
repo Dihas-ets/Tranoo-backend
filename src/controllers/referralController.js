@@ -91,7 +91,8 @@ async function createReferralRecord({ referralCode, referredUser }) {
     referrerId: referrer._id,
     referredId: referredUser._id,
     referralCode,
-    status: isAgent ? 'completed' : 'pending',
+    // Dès qu'un filleul est enregistré, le lien est considéré comme actif pour stats / commissions.
+    status: 'completed',
     rewardAmount,
   });
 

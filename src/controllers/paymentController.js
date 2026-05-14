@@ -38,7 +38,11 @@ async function resolveClientLabel(payment) {
   }
 }
 
-const FEEXPAY_BASE_URL = process.env.FEEXPAY_BASE_URL || 'https://api.feexpay.me';
+/** API Payin / statuts publics (doc V2 : https://api-v2.feexpay.me) */
+const FEEXPAY_BASE_URL = process.env.FEEXPAY_BASE_URL || 'https://api-v2.feexpay.me';
+/** FeexLink (api-create / api-status) reste souvent sur l’hôte classique si non migré. */
+const FEEXPAY_FEEXLINK_BASE_URL =
+  process.env.FEEXPAY_FEEXLINK_BASE_URL || 'https://api.feexpay.me';
 const FEEXPAY_SHOP_ID = process.env.FEEXPAY_SHOP_ID || '';
 const FEEXPAY_API_TOKEN = process.env.FEEXPAY_API_TOKEN || '';
 const FEEXPAY_MODE = process.env.FEEXPAY_MODE || 'SANDBOX';
@@ -62,6 +66,105 @@ function getAuthHeaders() {
     'X-Shop-ID': FEEXPAY_SHOP_ID,
     'User-Agent': 'TranooAPI/1.0',
   };
+}
+
+/** Doc V2 Payin : GET public/single/status n’exige que Authorization Bearer. */
+function getBearerOnlyHeaders() {
+  return {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${FEEXPAY_API_TOKEN}`,
+    'User-Agent': 'TranooAPI/1.0',
+  };
+}
+
+const FEEXPAY_UUID_REGEX =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$/;
+
+function isUuidTransactionRef(value) {
+  return typeof value === 'string' && FEEXPAY_UUID_REGEX.test(value.trim());
+}
+
+function extractRawStatusFromFeexPayload(data) {
+  if (!data || typeof data !== 'object') return null;
+  const nested =
+    (data.data && typeof data.data === 'object' && data.data) ||
+    (data.transaction && typeof data.transaction === 'object' && data.transaction) ||
+    (data.payment && typeof data.payment === 'object' && data.payment) ||
+    null;
+  const fromNested = nested
+    ? nested.payment_status ||
+      nested.paymentStatus ||
+      nested.status ||
+      nested.state ||
+      nested.result ||
+      null
+    : null;
+  return (
+    fromNested ||
+    data.payment_status ||
+    data.paymentStatus ||
+    data.status ||
+    data.state ||
+    data.result ||
+    null
+  );
+}
+
+/**
+ * Statut FeexPay distant : UUID → GET V2 …/transactions/public/single/status ;
+ * sinon (short_code, FeexLink…) → GET legacy …/feexlink/api-status puis fallbacks.
+ */
+async function fetchFeexPayRemoteStatus(ref) {
+  const id = String(ref || '').trim();
+  if (!id) return { mapped: null, raw: null, resolvedId: null };
+
+  if (isUuidTransactionRef(id)) {
+    try {
+      const url = `${FEEXPAY_BASE_URL}/api/transactions/public/single/status/${id}`;
+      const fp = await axios.get(url, { headers: getBearerOnlyHeaders(), timeout: 10000 });
+      const raw = fp.data;
+      const fpStatus = extractRawStatusFromFeexPayload(raw);
+      return { mapped: mapStatus(fpStatus), raw, resolvedId: id };
+    } catch (e) {
+      console.error('[FeexPay][status][uuid]', id, e.response?.data || e.message);
+      return { mapped: null, raw: null, resolvedId: id };
+    }
+  }
+
+  try {
+    const linkUrl = `${FEEXPAY_FEEXLINK_BASE_URL}/api/feexlink/api-status/${encodeURIComponent(id)}`;
+    const fpLink = await axios.get(linkUrl, { headers: getAuthHeaders(), timeout: 10000 });
+    const rawLink = fpLink.data;
+    const st = extractRawStatusFromFeexPayload(rawLink);
+    if (st != null && String(st).trim() !== '') {
+      const resolved =
+        rawLink.id_transaction ||
+        rawLink.transaction_id ||
+        rawLink.transactionId ||
+        id;
+      return { mapped: mapStatus(st), raw: rawLink, resolvedId: String(resolved || id) };
+    }
+  } catch (e) {
+    console.warn('[FeexPay][status][feexlink]', id, e.response?.data || e.message);
+  }
+
+  if (id.length === 8 && /^[A-Za-z0-9]{8}$/.test(id)) {
+    const realUuid = await getRealTransactionId(id);
+    if (realUuid && realUuid !== id) {
+      return fetchFeexPayRemoteStatus(realUuid);
+    }
+  }
+
+  try {
+    const url = `${FEEXPAY_BASE_URL}/api/transactions/public/single/status/${encodeURIComponent(id)}`;
+    const fp = await axios.get(url, { headers: getBearerOnlyHeaders(), timeout: 10000 });
+    const raw = fp.data;
+    const fpStatus = extractRawStatusFromFeexPayload(raw);
+    return { mapped: mapStatus(fpStatus), raw, resolvedId: id };
+  } catch (e) {
+    console.error('[FeexPay][status][direct]', id, e.response?.data || e.message);
+    return { mapped: null, raw: null, resolvedId: id };
+  }
 }
 
 // --- Nouveaux endpoints: RequestToPay par réseau et cartes ---
@@ -257,7 +360,7 @@ async function getRealTransactionId(shortCode) {
     console.log('Recherche du vrai transactionId pour le code court:', shortCode);
     
     // Appeler l'endpoint de liste des transactions
-    const listUrl = `https://api.feexpay.me/api/transactions?page=1&limit=50`;
+    const listUrl = `${FEEXPAY_BASE_URL}/api/transactions?page=1&limit=50`;
     const response = await axios.get(listUrl, {
       headers: getAuthHeaders(),
       timeout: 15000
@@ -313,7 +416,7 @@ exports.initPayment = async (req, res) => {
 
     console.log('Initialisation paiement FeexPay avec payload:', payload);
 
-    const initUrl = `${FEEXPAY_BASE_URL}/api/feexlink/api-create`;
+    const initUrl = `${FEEXPAY_FEEXLINK_BASE_URL}/api/feexlink/api-create`;
     const fpRes = await axios.post(initUrl, payload, { 
       headers: getAuthHeaders(), 
       timeout: 30000 
@@ -388,29 +491,50 @@ exports.initPayment = async (req, res) => {
 };
 
 function mapStatus(fpStatus) {
-  switch ((fpStatus || '').toString().toLowerCase()) {
-    case 'success':
-    case 'successful':
-    case 'paid':
-    case 'completed':
-      return 'success';
-    case 'failed':
-    case 'error':
-    case 'declined':
-      return 'failed';
-    case 'processing':
-    case 'authorized':
-    case 'waiting':
-    case 'cancelled':
-    case 'canceled':
-    case 'expired':
-      return 'cancelled';
-    case 'pending':
-    case 'in pending state':
-      return 'pending';
-    default:
-      return 'pending';
+  const s = (fpStatus || '').toString().toLowerCase().trim();
+  if (!s) return 'pending';
+  // API V2 Payin / webhook : SUCCESSFUL, PENDING, FAILED (cf. doc FeexPay)
+  if (s === 'successful' || s === 'successfull') return 'success';
+  if (
+    s === 'success' ||
+    s === 'successful' ||
+    s === 'paid' ||
+    s === 'completed' ||
+    s === 'approved' ||
+    s === 'ok'
+  ) {
+    return 'success';
   }
+  if (
+    s === 'failed' ||
+    s === 'fail' ||
+    s === 'error' ||
+    s === 'declined' ||
+    s === 'rejected'
+  ) {
+    return 'failed';
+  }
+  if (
+    s === 'cancelled' ||
+    s === 'canceled' ||
+    s === 'expired' ||
+    s.includes('annul')
+  ) {
+    return 'cancelled';
+  }
+  if (
+    s === 'processing' ||
+    s === 'authorized' ||
+    s === 'waiting' ||
+    s === 'pending' ||
+    s === 'in pending state'
+  ) {
+    return 'pending';
+  }
+  if (s.includes('success') || s.includes('paid') || s.includes('approv')) return 'success';
+  if (s.includes('fail') || s.includes('declin') || s.includes('reject')) return 'failed';
+  if (s.includes('cancel') || s.includes('expir')) return 'cancelled';
+  return 'pending';
 }
 
 exports.webhook = async (req, res) => {
@@ -418,21 +542,47 @@ exports.webhook = async (req, res) => {
     console.log('Webhook FeexPay reçu:', JSON.stringify(req.body, null, 2));
     
     const payload = req.body;
-    const { transaction_id, id_transaction, status, amount, custom_id, short_code } = payload;
-    
-    const actualTransactionId = transaction_id || id_transaction || short_code;
+    const {
+      transaction_id,
+      transactionId,
+      id_transaction,
+      reference,
+      order_id,
+      status,
+      amount,
+      custom_id,
+      short_code,
+    } = payload;
+
+    const actualTransactionId =
+      transaction_id ||
+      transactionId ||
+      id_transaction ||
+      reference ||
+      order_id ||
+      short_code;
     
     if (!actualTransactionId) {
       console.error('Webhook sans identifiant de transaction');
       return res.status(400).json({ error: 'Identifiant de transaction manquant' });
     }
 
-    let payment = await Payment.findOne({ 
-      $or: [
-        { transactionId: actualTransactionId },
-        { customId: custom_id }
-      ]
-    });
+    const orConds = [
+      { transactionId: actualTransactionId },
+      { transactionId: String(actualTransactionId) },
+      { 'rawInitResponse.transKey': actualTransactionId },
+      { 'rawInitResponse.feexTransactionId': actualTransactionId },
+    ];
+    if (custom_id) {
+      orConds.push({ customId: custom_id });
+      orConds.push({ customId: String(custom_id) });
+    }
+
+    let payment = await Payment.findOne({ $or: orConds });
+
+    if (!payment && custom_id) {
+      payment = await Payment.findOne({ customId: custom_id });
+    }
 
     if (!payment) {
       console.log('Création nouveau paiement depuis webhook');
@@ -448,8 +598,27 @@ exports.webhook = async (req, res) => {
     }
 
     const newStatus = mapStatus(status);
+    console.log(
+      '[WEBHOOK_FEEXPAY]',
+      JSON.stringify({
+        actualTransactionId,
+        custom_id: custom_id || null,
+        rawStatus: status,
+        mapped: newStatus,
+        previous: payment.status,
+        paymentId: String(payment._id),
+      })
+    );
+
+    if (payment.status === 'success' && newStatus !== 'success') {
+      console.log('[WEBHOOK_FEEXPAY] conserve success — pas de rétrogradation vers', newStatus);
+      payment.rawWebhookPayload = payload;
+      await payment.save();
+      return res.json({ ok: true, note: 'ignored_downgrade_from_success' });
+    }
+
     console.log('Mise à jour statut:', payment.status, '->', newStatus);
-    
+
     payment.status = newStatus;
     payment.rawWebhookPayload = payload;
     await payment.save();
@@ -464,6 +633,19 @@ exports.webhook = async (req, res) => {
     return res.status(500).json({ message: 'Erreur webhook', error: error.message });
   }
 };
+
+async function resolvePayerUserLean(rawUserId) {
+  if (rawUserId == null) return null;
+  const s = String(rawUserId).trim();
+  if (!s) return null;
+  if (mongoose.Types.ObjectId.isValid(s)) {
+    const byId = await User.findById(s).lean();
+    if (byId) return byId;
+  }
+  const byUid = await User.findOne({ uid: s }).lean();
+  if (byUid) return byUid;
+  return null;
+}
 
 async function handleSuccessfulPayment(payment) {
   try {
@@ -494,40 +676,51 @@ async function handleSuccessfulPayment(payment) {
     }
 
     if (payment.type === 'subscription' && payment.user) {
-      const monthsFromDuree = (() => {
-        const raw = (payment.duree || '').toString();
-        const match = raw.match(/(\d+)/);
-        return match ? Number(match[1]) : 1;
-      })();
-      const months = Math.max(1, Math.min(monthsFromDuree, 24));
-      const now = new Date();
-      const existing = await Subscription.findOne({ user: payment.user });
-      if (existing) {
-        const base =
-          existing.expiresAt && existing.expiresAt > now
-            ? existing.expiresAt
-            : now;
-        const newExpiry = new Date(base);
-        newExpiry.setDate(newExpiry.getDate() + 30 * months);
-        existing.plan = 'monthly';
-        existing.months = months;
-        existing.activatedAt = base;
-        existing.expiresAt = newExpiry;
-        existing.status = 'active';
-        await existing.save();
-      } else {
-        const expiresAt = new Date(now);
-        expiresAt.setDate(expiresAt.getDate() + 30 * months);
-        await Subscription.create({
-          user: payment.user,
-          plan: 'monthly',
-          months,
-          activatedAt: now,
-          expiresAt,
-          status: 'active',
-        });
+      try {
+        const monthsFromDuree = (() => {
+          const raw = (payment.duree || '').toString();
+          const match = raw.match(/(\d+)/);
+          return match ? Number(match[1]) : 1;
+        })();
+        const months = Math.max(1, Math.min(Number(monthsFromDuree) || 1, 24));
+        const now = new Date();
+        const existing = await Subscription.findOne({ user: payment.user });
+        if (existing) {
+          const base =
+            existing.expiresAt && existing.expiresAt > now
+              ? existing.expiresAt
+              : now;
+          const newExpiry = new Date(base);
+          newExpiry.setDate(newExpiry.getDate() + 30 * months);
+          existing.plan = 'monthly';
+          existing.months = months;
+          const prevAct = existing.activatedAt ? new Date(existing.activatedAt) : null;
+          if (!prevAct || Number.isNaN(prevAct.getTime()) || prevAct > now) {
+            existing.activatedAt = now;
+          }
+          existing.expiresAt = newExpiry;
+          existing.status = 'active';
+          await existing.save();
+        } else {
+          const expiresAt = new Date(now);
+          expiresAt.setDate(expiresAt.getDate() + 30 * months);
+          await Subscription.create({
+            user: payment.user,
+            plan: 'monthly',
+            months,
+            activatedAt: now,
+            expiresAt,
+            status: 'active',
+          });
+        }
+        console.log('Abonnement vendeur active/renouvele pour user:', payment.user);
+      } catch (subErr) {
+        console.error(
+          '[SUBSCRIPTION_SYNC][ERR] sync Subscription depuis paiement — la suite (commissions) continue',
+          payment._id?.toString?.(),
+          subErr?.message || subErr
+        );
       }
-      console.log('Abonnement vendeur active/renouvele pour user:', payment.user);
     }
 
     // Commissions (paramétrables) pour l'agent commercial si l'utilisateur payeur a été parrainé par un agent
@@ -549,19 +742,53 @@ async function handleSuccessfulPayment(payment) {
         const commissionRatePercent = Number.isFinite(settings.agentCommissionRate)
           ? settings.agentCommissionRate
           : 10;
-        const payer = await User.findById(payment.user);
+        const payer = await resolvePayerUserLean(payment.user);
+        console.log(
+          '[AGENT_COMMISSION][PAYER]',
+          JSON.stringify({
+            paymentId: String(payment._id),
+            paymentUserRaw: payment.user != null ? String(payment.user) : null,
+            payerFound: Boolean(payer),
+            payerId: payer ? String(payer._id) : null,
+            payerRole: payer?.role || null,
+            payerUid: payer?.uid || null,
+          })
+        );
         if (!payer) {
           console.log(
-            '[AGENT_COMMISSION][SKIP] payer introuvable',
-            JSON.stringify({ paymentId: String(payment._id), user: String(payment.user) })
+            '[AGENT_COMMISSION][SKIP] payeur introuvable (ni _id Mongo ni uid Firebase)',
+            JSON.stringify({ paymentId: String(payment._id), userRaw: String(payment.user) })
           );
         }
         if (payer && (payer.role === 'vendeur' || payer.role === 'transitaire')) {
-          const referral = await Referral.findOne({ referredId: payer._id, status: 'completed' }).populate('referrerId');
-          const referralSource = 'completed';
+          // Referral en .lean() + chargement explicite du parrain (populate peut omettre role selon versions).
+          const referral = await Referral.findOne({ referredId: payer._id })
+            .sort({ createdAt: -1 })
+            .lean();
+          const referralSource = referral?.status || 'none';
+          let referrerUser = null;
+          if (referral?.referrerId) {
+            referrerUser = await User.findById(referral.referrerId)
+              .select('role nom prenoms email referralCode')
+              .lean();
+          }
+          console.log(
+            '[AGENT_COMMISSION][REFERRAL]',
+            JSON.stringify({
+              paymentId: String(payment._id),
+              hasReferral: Boolean(referral),
+              referralId: referral ? String(referral._id) : null,
+              referralStatus: referralSource,
+              referrerIdRaw: referral?.referrerId != null ? String(referral.referrerId) : null,
+              referrerRoleResolved: referrerUser?.role || null,
+              referrerNom: referrerUser
+                ? `${referrerUser.nom || ''} ${referrerUser.prenoms || ''}`.trim()
+                : null,
+            })
+          );
           if (!referral) {
             console.log(
-              '[AGENT_COMMISSION][SKIP] referral completed introuvable',
+              '[AGENT_COMMISSION][SKIP] aucun Referral pour ce payeur',
               JSON.stringify({
                 paymentId: String(payment._id),
                 payerId: String(payer._id),
@@ -569,46 +796,99 @@ async function handleSuccessfulPayment(payment) {
               })
             );
           }
-          if (referral && referral.referrerId && referral.referrerId.role === 'agentCommercial') {
-            const commission = Math.round((Number(payment.amount) || 0) * (commissionRatePercent / 100));
+          if (referral && referrerUser && referrerUser.role === 'agentCommercial') {
+            // ceil: avec montants test très bas (ex. 2 FCFA × 10 % = 0,2) Math.round donnait 0
+            // et aucune ligne AgentEarning n'était créée (revenue abonnement à 0 dans les KPI).
+            const commission = Math.ceil(
+              (Number(payment.amount) || 0) * (commissionRatePercent / 100)
+            );
+            console.log(
+              '[AGENT_COMMISSION][CALC]',
+              JSON.stringify({
+                paymentId: String(payment._id),
+                isSubscriptionPayment,
+                isPublicitePayment,
+                amount: Number(payment.amount) || 0,
+                commissionRatePercent,
+                commissionRounded: commission,
+              })
+            );
             if (commission > 0) {
               const earningType = isSubscriptionPayment ? 'commission_subscription' : 'commission_publicite';
-              const existingEarning = await AgentEarning.findOne({
+              // Index unique partiel sur sourcePayment : au plus une ligne AgentEarning par Payment.
+              const existingForPayment = await AgentEarning.findOne({
                 sourcePayment: payment._id,
-                type: earningType,
-              }).select('_id');
-              if (!existingEarning) await AgentEarning.create({
-                agent: referral.referrerId._id,
-                type: earningType,
-                amount: commission,
-                sourcePayment: payment._id,
-                referredUser: payer._id,
-              });
+              })
+                .select('_id type')
+                .lean();
+              if (existingForPayment) {
+                console.log(
+                  '[AGENT_COMMISSION][SKIP] AgentEarning déjà lié à ce paiement',
+                  JSON.stringify({
+                    paymentId: String(payment._id),
+                    existingType: existingForPayment.type,
+                    requestedType: earningType,
+                  })
+                );
+              } else {
+                try {
+                  await AgentEarning.create({
+                    agent: referrerUser._id,
+                    type: earningType,
+                    amount: commission,
+                    sourcePayment: payment._id,
+                    referredUser: payer._id,
+                  });
+                  console.log(
+                    '[AGENT_COMMISSION][CREATED]',
+                    JSON.stringify({
+                      paymentId: String(payment._id),
+                      agentId: String(referrerUser._id),
+                      payerId: String(payer._id),
+                      referralId: String(referral._id),
+                      referralStatus: referral.status || null,
+                      referralSource,
+                      earningType,
+                      commission,
+                    })
+                  );
+                } catch (earnErr) {
+                  console.error(
+                    '[AGENT_COMMISSION][ERR] création AgentEarning',
+                    payment._id?.toString?.(),
+                    earnErr?.message || earnErr,
+                    earnErr?.code || ''
+                  );
+                }
+              }
+            } else {
               console.log(
-                '[AGENT_COMMISSION][CREATED]',
+                '[AGENT_COMMISSION][SKIP] commission nulle (montant ou taux)',
                 JSON.stringify({
                   paymentId: String(payment._id),
-                  agentId: String(referral.referrerId._id),
-                  payerId: String(payer._id),
-                  referralId: String(referral._id),
-                  referralStatus: referral.status || null,
-                  referralSource,
-                  earningType,
-                  commission,
-                  alreadyExisting: Boolean(existingEarning),
+                  amount: Number(payment.amount) || 0,
+                  commissionRatePercent,
                 })
               );
             }
-          } else if (referral && referral.referrerId) {
+          } else if (referral && referrerUser) {
             console.log(
-              '[AGENT_COMMISSION][SKIP] referrer non-agent',
+              '[AGENT_COMMISSION][SKIP] parrain trouvé mais rôle non agentCommercial',
               JSON.stringify({
                 paymentId: String(payment._id),
                 payerId: String(payer._id),
-                referrerId: String(referral.referrerId?._id || ''),
-                referrerRole: referral.referrerId?.role || null,
+                referrerId: String(referrerUser._id),
+                referrerRole: referrerUser.role || null,
                 referralStatus: referral.status || null,
                 referralSource,
+              })
+            );
+          } else if (referral && !referrerUser) {
+            console.log(
+              '[AGENT_COMMISSION][SKIP] referral.referrerId invalide ou utilisateur parrain supprimé',
+              JSON.stringify({
+                paymentId: String(payment._id),
+                referrerIdRaw: String(referral.referrerId),
               })
             );
           }
@@ -622,6 +902,14 @@ async function handleSuccessfulPayment(payment) {
             })
           );
         }
+        console.log(
+          '[AGENT_COMMISSION][END]',
+          JSON.stringify({
+            paymentId: String(payment._id),
+            paymentType: payment.type,
+            amount: Number(payment.amount) || 0,
+          })
+        );
       } catch (e) {
         console.error('Erreur commission agent:', e.message);
       }
@@ -644,42 +932,25 @@ exports.getStatus = async (req, res) => {
 
     if (payment.status === 'pending') {
       try {
-        let transactionIdToCheck = payment.transactionId;
-        
-        // Détecter si c'est un code court (8 caractères alphanumériques)
-        if (transactionIdToCheck && transactionIdToCheck.length === 8 && /^[A-Za-z0-9]{8}$/.test(transactionIdToCheck)) {
-          console.log('Détection code court, recherche du vrai transactionId...');
-          
-          const realTransactionId = await getRealTransactionId(transactionIdToCheck);
-          if (realTransactionId) {
-            transactionIdToCheck = realTransactionId;
-            payment.transactionId = realTransactionId;
-            await payment.save();
-            console.log('✅ TransactionId mis à jour:', realTransactionId);
-          } else {
-            console.log('❌ Impossible de trouver le vrai transactionId, utilisation du code court');
-          }
-        }
-        
+        const transactionIdToCheck = payment.transactionId;
         if (transactionIdToCheck) {
-          const statusUrl = `https://api.feexpay.me/api/transactions/public/single/status/${transactionIdToCheck}`;
-          console.log('Interrogation statut FeexPay:', statusUrl);
-          
-          const fp = await axios.get(statusUrl, { 
-            headers: getAuthHeaders(), 
-            timeout: 10000 
-          });
-          
-          console.log('✅ Réponse statut FeexPay:', JSON.stringify(fp.data, null, 2));
-          
-          const fpStatus = fp.data?.status || fp.data?.state || fp.data?.result;
-          const mapped = mapStatus(fpStatus);
-          
-          if (mapped !== payment.status) {
-            console.log('Mise à jour statut:', payment.status, '->', mapped);
-            payment.status = mapped;
-            payment.rawStatusResponse = fp.data;
-            await payment.save();
+          const prevStatus = payment.status;
+          const { mapped, raw, resolvedId } = await fetchFeexPayRemoteStatus(transactionIdToCheck);
+          if (mapped) {
+            payment.rawStatusResponse = raw;
+            if (resolvedId && payment.transactionId !== resolvedId) {
+              payment.transactionId = resolvedId;
+            }
+            if (mapped !== payment.status) {
+              console.log('Mise à jour statut:', payment.status, '->', mapped);
+              payment.status = mapped;
+              await payment.save();
+              if (prevStatus !== 'success' && payment.status === 'success') {
+                await handleSuccessfulPayment(payment);
+              }
+            } else if (resolvedId) {
+              await payment.save();
+            }
           }
         }
       } catch (e) {
@@ -717,64 +988,58 @@ exports.getPublicStatus = async (req, res) => {
     if (!id) return res.status(400).json({ message: 'id requis' });
     
     console.log('getPublicStatus appelé avec id:', id, 'paymentId:', paymentId);
-    
-    // Vérifier si c'est un code court ou un UUID
-    let transactionIdToUse = id;
-    let isShortCode = false;
-    
-    if (id.length === 8 && /^[A-Za-z0-9]{8}$/.test(id)) {
-      isShortCode = true;
-      console.log('Code court détecté, recherche du vrai transactionId...');
-      
-      const realTransactionId = await getRealTransactionId(id);
-      if (realTransactionId) {
-        transactionIdToUse = realTransactionId;
-        console.log('✅ Vrai transactionId trouvé:', realTransactionId);
-      } else {
-        console.log('❌ Utilisation du code court car vrai ID non trouvé');
-      }
+
+    const { mapped, raw, resolvedId } = await fetchFeexPayRemoteStatus(id);
+    const usedFeexLinkFirst = !isUuidTransactionRef(id);
+
+    console.log(
+      '[PUBLIC_STATUS]',
+      JSON.stringify({
+        idParam: id,
+        mapped: mapped || null,
+        resolvedId: resolvedId || null,
+        usedFeexLinkFirst,
+        rawStatusSnippet:
+          raw && typeof raw === 'object'
+            ? (raw.status || raw.payment_status || raw.state || null)
+            : raw,
+      })
+    );
+
+    if (!mapped) {
+      console.warn('[PUBLIC_STATUS] mapped null — vérifiez que id est bien l’UUID FeexPay (pas seulement trans_key).');
     }
-    
-    const statusUrl = `https://api.feexpay.me/api/transactions/public/single/status/${transactionIdToUse}`;
-    console.log('Interrogation statut public:', statusUrl);
-    
-    const fp = await axios.get(statusUrl, { 
-      headers: getAuthHeaders(), 
-      timeout: 10000 
-    });
-    
-    const fpStatus = fp.data?.status || fp.data?.state || fp.data?.result;
-    const mapped = mapStatus(fpStatus);
-    
-    console.log('Statut public pour', transactionIdToUse, ':', mapped);
-    
+
     if (paymentId) {
       try {
         const payment = await Payment.findById(paymentId);
-        if (payment) {
-          // Mettre à jour avec le vrai transactionId si on l'a trouvé
-          if (isShortCode && transactionIdToUse !== id) {
-            payment.transactionId = transactionIdToUse;
-            console.log('✅ TransactionId mis à jour dans la base:', transactionIdToUse);
+        if (payment && mapped) {
+          const prevStatus = payment.status;
+          if (resolvedId && payment.transactionId !== resolvedId) {
+            payment.transactionId = resolvedId;
+            console.log('✅ TransactionId mis à jour dans la base:', resolvedId);
           }
-          
+
           if (payment.status !== mapped) {
             console.log('Mise à jour statut depuis public:', payment.status, '->', mapped);
             payment.status = mapped;
           }
-          payment.rawStatusResponse = fp.data;
+          payment.rawStatusResponse = raw;
           await payment.save();
+          if (prevStatus !== 'success' && payment.status === 'success') {
+            await handleSuccessfulPayment(payment);
+          }
         }
       } catch (e) {
         console.error('Erreur mise à jour paiement:', e.message);
       }
     }
-    
-    return res.json({ 
-      status: mapped, 
-      id_transaction: transactionIdToUse,
-      is_short_code: isShortCode,
-      raw: fp.data 
+
+    return res.json({
+      status: mapped || 'pending',
+      id_transaction: resolvedId || id,
+      is_short_code: usedFeexLinkFirst,
+      raw,
     });
   } catch (error) {
     console.error('Erreur getPublicStatus:', error.response?.data || error.message);
@@ -834,18 +1099,54 @@ exports.traceFromClient = async (req, res) => {
   }
 };
 
+/**
+ * Détail admin / dashboard : id Mongo **ou** transactionId FeexPay / customId.
+ */
+async function findPaymentForAdminDetail(id) {
+  const trimmed = String(id || '').trim();
+  if (!trimmed) return null;
+  if (isObjectIdLike(trimmed)) {
+    const byId = await Payment.findById(trimmed).populate('achat').populate('publicite').lean();
+    if (byId) return byId;
+  }
+  const byTxn = await Payment.findOne({ transactionId: trimmed })
+    .populate('achat')
+    .populate('publicite')
+    .lean();
+  if (byTxn) return byTxn;
+  return Payment.findOne({ customId: trimmed }).populate('achat').populate('publicite').lean();
+}
+
 // Récupérer une transaction spécifique par ID
 exports.getTransaction = async (req, res) => {
   try {
     const { id } = req.params;
-    
-    const payment = await Payment.findById(id)
-      .populate('achat')
-      .populate('publicite')
-      .lean();
-    
+
+    let payment = await findPaymentForAdminDetail(id);
+
     if (!payment) {
       return res.status(404).json({ message: 'Transaction non trouvée' });
+    }
+
+    // Aligner avec FeexPay V2 : si encore pending, interroger l’API distante puis mettre à jour la DB.
+    if (payment.status === 'pending' && payment.transactionId) {
+      try {
+        const { mapped, raw, resolvedId } = await fetchFeexPayRemoteStatus(String(payment.transactionId));
+        if (mapped && mapped !== payment.status) {
+          const set = { status: mapped, rawStatusResponse: raw };
+          if (resolvedId && String(resolvedId) !== String(payment.transactionId)) {
+            set.transactionId = String(resolvedId);
+          }
+          await Payment.findByIdAndUpdate(payment._id, { $set: set });
+          if (mapped === 'success') {
+            const full = await Payment.findById(payment._id);
+            if (full) await handleSuccessfulPayment(full);
+          }
+          payment = await findPaymentForAdminDetail(String(payment._id));
+        }
+      } catch (e) {
+        console.warn('[getTransaction] sync FeexPay ignorée:', e.message);
+      }
     }
 
     let userDoc = null;
@@ -947,6 +1248,19 @@ exports.list = async (req, res) => {
       if (to) filter.createdAt.$lte = new Date(to);
     }
 
+    const uid = req.user && req.user._id ? String(req.user._id) : 'anon';
+    const role = req.user && req.user.role ? String(req.user.role) : '';
+    console.log(
+      '[PAYMENTS_LIST] request',
+      JSON.stringify({
+        uid,
+        role,
+        filter,
+        limit,
+        queryKeys: Object.keys(req.query || {}),
+      })
+    );
+
     let payments = await Payment.find(filter)
       .populate('achat')
       .populate('publicite')
@@ -1024,6 +1338,7 @@ exports.list = async (req, res) => {
     }));
 
     let filteredTransactions = transactions;
+    let afterTypeCount = filteredTransactions.length;
     if (type && type !== 'all') {
       const normalizedType = normalizeTypeFilter(type);
       filteredTransactions = transactions.filter(
@@ -1032,8 +1347,10 @@ exports.list = async (req, res) => {
           String(t.type || '').toLowerCase() === String(type).toLowerCase() ||
           String(t.rawType || '').toLowerCase() === String(type).toLowerCase()
       );
+      afterTypeCount = filteredTransactions.length;
     }
 
+    let afterSearchCount = filteredTransactions.length;
     if (search) {
       const searchLower = search.toLowerCase();
       filteredTransactions = filteredTransactions.filter(t => 
@@ -1042,10 +1359,24 @@ exports.list = async (req, res) => {
         t.transactionId?.toLowerCase().includes(searchLower) ||
         t.customId?.toLowerCase().includes(searchLower)
       );
+      afterSearchCount = filteredTransactions.length;
     }
 
     const availableTypes = [...new Set(transactions.map(t => t.type).filter(Boolean))];
     const availableStatuses = [...new Set(transactions.map(t => t.status).filter(Boolean))];
+    const sampleIds = filteredTransactions.slice(0, 3).map((t) => String(t.id || t.paymentId || ''));
+    console.log(
+      '[PAYMENTS_LIST] response',
+      JSON.stringify({
+        rawPayments: payments.length,
+        transactionsBuilt: transactions.length,
+        afterTypeFilter: afterTypeCount,
+        afterSearchFilter: afterSearchCount,
+        sampleIds,
+        firstStatuses: filteredTransactions.slice(0, 5).map((t) => t.status),
+        firstTypes: filteredTransactions.slice(0, 5).map((t) => t.type),
+      })
+    );
     return res.json({
       transactions: filteredTransactions,
       total: filteredTransactions.length,
@@ -1138,7 +1469,7 @@ exports.diagnoseFeexPay = async (_req, res) => {
       };
 
       const initResponse = await axios.post(
-        'https://api.feexpay.me/api/feexlink/api-create',
+        `${FEEXPAY_FEEXLINK_BASE_URL}/api/feexlink/api-create`,
         testPayload,
         {
           headers: getAuthHeaders(),
@@ -1207,14 +1538,14 @@ async function refreshPaymentStatus(payment) {
       }
     }
 
-    const statusUrl = `https://api.feexpay.me/api/transactions/public/single/status/${transactionIdToCheck}`;
-    const fp = await axios.get(statusUrl, { headers: getAuthHeaders(), timeout: 10000 });
-    const fpStatus = fp.data?.status || fp.data?.state || fp.data?.result;
-    const mapped = mapStatus(fpStatus);
+    const { mapped, raw, resolvedId } = await fetchFeexPayRemoteStatus(transactionIdToCheck);
+    if (resolvedId && payment.transactionId !== resolvedId) {
+      payment.transactionId = resolvedId;
+    }
     if (mapped && mapped !== payment.status) {
       console.log('🔄 worker: mise à jour statut', payment._id, payment.status, '->', mapped);
       payment.status = mapped;
-      payment.rawStatusResponse = fp.data;
+      payment.rawStatusResponse = raw;
       await payment.save();
       if (payment.status === 'success') {
         await handleSuccessfulPayment(payment);
@@ -1257,33 +1588,78 @@ exports.recordFeexPayFlutter = async (req, res) => {
       type = 'verification',
       status = 'success',
       publiciteId,
+      duree: bodyDuree,
+      id_transaction: bodyIdTransaction,
+      transactionId: bodyTransactionId,
+      feexPayTransactionId,
+      localRef,
+      ref,
+      reference: bodyReference,
     } = req.body || {};
+
+    const feexRef =
+      (bodyIdTransaction && String(bodyIdTransaction).trim()) ||
+      (bodyTransactionId && String(bodyTransactionId).trim()) ||
+      (feexPayTransactionId && String(feexPayTransactionId).trim()) ||
+      (ref && String(ref).trim()) ||
+      (bodyReference && String(bodyReference).trim()) ||
+      null;
+    const localTransKey =
+      (transKey && String(transKey).trim()) ||
+      (localRef && String(localRef).trim()) ||
+      null;
+
+    const dureeStr =
+      bodyDuree != null && String(bodyDuree).trim() ? String(bodyDuree).trim() : null;
 
     console.log(
       '[PUB_PAYMENT][FLUTTER_RECORD][IN]',
       JSON.stringify({
         userId: req.user?._id ? String(req.user._id) : null,
         role: req.user?.role || null,
-        transKey: transKey || null,
+        transKey: localTransKey,
+        feexRef,
         amount: Number(amount) || 0,
         type: type || null,
         status: status || null,
         publiciteId: publiciteId || null,
+        duree: dureeStr,
       })
     );
 
-    if (!transKey || !amount) {
-      return res.status(400).json({ message: 'transKey et amount requis' });
+    if ((!localTransKey && !feexRef) || !amount) {
+      return res.status(400).json({
+        message: 'Fournir amount et au moins un identifiant: transKey (réf locale) et/ou id_transaction FeexPay',
+      });
     }
 
     const mappedStatus = mapStatus(status);
+    console.log(
+      '[PUB_PAYMENT][FLUTTER_RECORD][MAP]',
+      JSON.stringify({ incomingStatus: status, mappedStatus })
+    );
     const nowIso = new Date().toISOString();
+    const orLookup = [];
+    if (feexRef) orLookup.push({ transactionId: feexRef });
+    if (localTransKey) {
+      orLookup.push({ transactionId: localTransKey });
+      orLookup.push({ 'rawInitResponse.transKey': localTransKey });
+    }
+
+    const userKeys = [];
+    if (req.user?._id != null) {
+      userKeys.push(req.user._id);
+      userKeys.push(String(req.user._id));
+    }
+
     const existing = await Payment.findOne({
-      transactionId: transKey,
-      user: req.user?._id,
-      type,
+      user: { $in: userKeys },
       method: 'FEEXPAY_FLUTTER',
+      type,
+      $or: orLookup,
     }).sort({ createdAt: -1 });
+
+    const primaryStoredTransactionId = feexRef || localTransKey;
 
     let payment;
     let shouldReconcile = false;
@@ -1300,10 +1676,17 @@ exports.recordFeexPayFlutter = async (req, res) => {
       shouldReconcile = shouldUpgradeToSuccess;
       existing.amount = Number(amount) || existing.amount;
       existing.description = description || existing.description;
+      if (dureeStr) {
+        existing.duree = dureeStr;
+      }
+      if (feexRef && existing.transactionId !== feexRef) {
+        existing.transactionId = feexRef;
+      }
       existing.rawInitResponse = {
         ...(existing.rawInitResponse || {}),
         source: 'feexpay_flutter',
-        transKey,
+        transKey: localTransKey || existing.rawInitResponse?.transKey || null,
+        feexTransactionId: feexRef || existing.rawInitResponse?.feexTransactionId || null,
         recordedAt: nowIso,
         incomingStatus: mappedStatus,
       };
@@ -1319,19 +1702,21 @@ exports.recordFeexPayFlutter = async (req, res) => {
       const customId = `${type.toUpperCase()}_${req.user?._id}_${Date.now()}`;
       payment = await Payment.create({
         provider: 'feexpay',
-        transactionId: transKey,
+        transactionId: primaryStoredTransactionId,
         customId,
         publicite: publiciteId || undefined,
-        user: req.user?._id,
+        user: req.user?._id != null ? String(req.user._id) : undefined,
         amount: Number(amount),
         currency: 'XOF',
         status: mappedStatus,
         method: 'FEEXPAY_FLUTTER',
         description,
         type,
+        duree: dureeStr || undefined,
         rawInitResponse: {
           source: 'feexpay_flutter',
-          transKey,
+          transKey: localTransKey,
+          feexTransactionId: feexRef,
           recordedAt: nowIso,
           incomingStatus: mappedStatus,
         },

@@ -1,5 +1,6 @@
 const User = require('../models/User');
 const Article = require('../models/Article');
+const Payment = require('../models/Payment');
 
 exports.getStats = async (_req, res) => {
   try {
@@ -107,4 +108,69 @@ exports.getAcheteursStats = async (_req, res) => {
   } catch (err) {
     res.status(500).json({ message: "Erreur stats acheteurs" });
   }
-}; 
+};
+
+/** Résumé vendeur pour l’onglet Statistiques (Tranoo Pro / marque). */
+exports.getSellerMarqueStats = async (req, res) => {
+  try {
+    const user = req.user;
+    if (!user || user.role !== 'vendeur') {
+      return res.status(403).json({ message: 'Réservé aux vendeurs' });
+    }
+    const uid = user._id;
+    const userKeys = [uid, String(uid)];
+
+    const venteAgg = await Payment.aggregate([
+      {
+        $match: {
+          user: { $in: userKeys },
+          type: 'vente',
+          status: 'success',
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          totalRevenueFcfa: { $sum: '$amount' },
+          venteCount: { $sum: 1 },
+        },
+      },
+    ]);
+    const totalRevenueFcfa = Math.round(venteAgg[0]?.totalRevenueFcfa || 0);
+    const venteSuccessCount = venteAgg[0]?.venteCount || 0;
+
+    const baseListed = {
+      vendeur: uid,
+      statut: 'en_ligne',
+      statutVente: { $ne: 'vendu' },
+    };
+    const vehiclesOnline = await Article.countDocuments({ ...baseListed, type: 'voiture' });
+    const piecesOnline = await Article.countDocuments({ ...baseListed, type: 'piece' });
+    const vehiclesSold = await Article.countDocuments({
+      vendeur: uid,
+      type: 'voiture',
+      statutVente: 'vendu',
+    });
+    const piecesSold = await Article.countDocuments({
+      vendeur: uid,
+      type: 'piece',
+      statutVente: 'vendu',
+    });
+
+    const u = await User.findById(uid).select('vendeurType').lean();
+    const vendeurType = (u?.vendeurType || 'mixte').toString();
+
+    return res.json({
+      vendeurType,
+      totalRevenueFcfa,
+      venteSuccessCount,
+      vehiclesOnline,
+      piecesOnline,
+      vehiclesSold,
+      piecesSold,
+    });
+  } catch (error) {
+    console.error('[getSellerMarqueStats]', error);
+    return res.status(500).json({ message: 'Erreur stats vendeur', error: error.message });
+  }
+};

@@ -47,14 +47,23 @@ const sumPayments = async (match) => {
 
 const COMMISSION_TYPES = ['commission_publicite', 'commission_subscription'];
 
-const sumCampaignPayments = async ({ sellerIds, start, end }) => {
+/** Paiements filleuls : `user` en base peut être String ou ObjectId selon les enregistrements. */
+const referredSellerUserMatch = (sellerIds, sellerObjectIds) => ({
+  $or: [{ user: { $in: sellerIds } }, { user: { $in: sellerObjectIds } }],
+});
+
+const sumCampaignPayments = async ({ sellerIds, sellerObjectIds, start, end }) => {
   const rows = await Payment.aggregate([
     {
       $match: {
-        user: { $in: sellerIds },
-        status: 'success',
-        createdAt: { $gte: start, $lte: end },
-        $or: [{ type: 'publicite' }, { publicite: { $exists: true, $ne: null } }],
+        $and: [
+          referredSellerUserMatch(sellerIds, sellerObjectIds),
+          {
+            status: 'success',
+            createdAt: { $gte: start, $lte: end },
+            $or: [{ type: 'publicite' }, { publicite: { $exists: true, $ne: null } }],
+          },
+        ],
       },
     },
     { $group: { _id: null, count: { $sum: 1 }, totalAmount: { $sum: '$amount' } } },
@@ -65,91 +74,49 @@ const sumCampaignPayments = async ({ sellerIds, start, end }) => {
   };
 };
 
-const DEMO_WINDOW_MINUTES = Number(process.env.DEMO_WINDOW_MINUTES || 30);
 const DEMO_COOLDOWN_MINUTES = Number(process.env.DEMO_COOLDOWN_MINUTES || 15);
 
 /**
  * Compte les "démos validées" sur une période.
- * Règle:
- * - une démo commence par seller_create_started
- * - dans la fenêtre DEMO_WINDOW_MINUTES, il faut au moins 1 action commerciale:
- *   campaign_initiated ou subscription_initiated
- * - seller_create_completed est optionnel (renforce la qualité, mais n'est pas bloquant)
- * - cooldown entre deux démos comptées: DEMO_COOLDOWN_MINUTES
+ * Règle (5 actions commerciales équivalentes, pas d'événement de départ obligatoire):
+ * - seller_create_started, campaign_initiated, subscription_initiated,
+ *   notification_clicked, alert_created
+ * - Au plus **1 démo comptée toutes les DEMO_COOLDOWN_MINUTES** (fenêtre glissante entre deux comptages).
+ *   Les actions intermédiaires dans l'intervalle ne comptent pas une démo supplémentaire.
+ * - seller_create_completed / listing_* ne comptent pas dans ce KPI
  */
 const computeValidatedDemosForRange = async ({ agentId, sellerObjectIds, start, end }) => {
-  const relevantEvents = [
+  const commercialEventTypes = [
     'seller_create_started',
-    'seller_create_completed',
     'campaign_initiated',
     'subscription_initiated',
+    'notification_clicked',
+    'alert_created',
   ];
 
   const rows = await DemoEvent.find({
     createdAt: { $gte: start, $lte: end },
-    eventType: { $in: relevantEvents },
+    eventType: { $in: commercialEventTypes },
     $or: [
       { agent: agentId },
       { user: { $in: sellerObjectIds } }, // fallback si agent non renseigné dans l'event
     ],
   })
     .sort({ createdAt: 1 })
-    .select('eventType createdAt sessionKey user')
+    .select('createdAt')
     .lean();
 
-  const windowMs = DEMO_WINDOW_MINUTES * 60 * 1000;
+  const times = rows.map((r) => new Date(r.createdAt).getTime());
   const cooldownMs = DEMO_COOLDOWN_MINUTES * 60 * 1000;
 
-  let lastCountedAt = null;
   let demosCount = 0;
-  const candidates = [];
-
-  for (const row of rows) {
-    const t = new Date(row.createdAt).getTime();
-    const eventType = row.eventType;
-
-    // purge des candidats expirés
-    for (let i = candidates.length - 1; i >= 0; i -= 1) {
-      if (t - candidates[i].startedAt > windowMs) {
-        candidates.splice(i, 1);
-      }
-    }
-
-    if (eventType === 'seller_create_started') {
-      candidates.push({
-        startedAt: t,
-        hasCommercial: false,
-        hasCompleted: false,
-        counted: false,
-      });
+  let lastCountedAt = null;
+  for (const t of times) {
+    if (lastCountedAt != null && t - lastCountedAt < cooldownMs) {
       continue;
     }
-
-    // enrichir les candidats actifs
-    for (const c of candidates) {
-      if (t >= c.startedAt && t - c.startedAt <= windowMs) {
-        if (eventType === 'seller_create_completed') c.hasCompleted = true;
-        if (eventType === 'campaign_initiated' || eventType === 'subscription_initiated') {
-          c.hasCommercial = true;
-        }
-      }
-    }
-
-    // tenter de compter les candidats validés
-    for (const c of candidates) {
-      if (c.counted) continue;
-      const valid = c.hasCommercial; // started implicite car candidat créé sur started
-      if (!valid) continue;
-
-      if (lastCountedAt && c.startedAt - lastCountedAt < cooldownMs) {
-        c.counted = true; // consommé mais non compté (cooldown)
-        continue;
-      }
-
-      demosCount += 1;
-      c.counted = true;
-      lastCountedAt = c.startedAt;
-    }
+    demosCount += 1;
+    lastCountedAt = t;
   }
 
   return demosCount;
@@ -184,7 +151,10 @@ const computeKpisForRange = async ({ agentId, start, end }) => {
   });
   const abonnementsVendus = subscriptionPayments.count;
 
-  const campagnesLancees = await Publicite.countDocuments({
+  // Campagnes « finalisées » = paiements pub réussis des filleuls (aligné montants / commissions).
+  const campaignPaymentsV1 = await sumCampaignPayments({ sellerIds, sellerObjectIds, start, end });
+  const campagnesLancees = campaignPaymentsV1.count;
+  const campagnesDemandees = await Publicite.countDocuments({
     vendeur: { $in: sellerIds },
     typePub: { $in: ['Sponsorisée', 'À la une'] },
     dateDemande: { $gte: start, $lte: end },
@@ -213,6 +183,7 @@ const computeKpisForRange = async ({ agentId, start, end }) => {
     boutiquesCreees,
     abonnementsVendus,
     campagnesLancees,
+    campagnesDemandees,
     revenueAbonnement,
     revenueCampagne,
     objectifs,
@@ -221,11 +192,12 @@ const computeKpisForRange = async ({ agentId, start, end }) => {
 };
 
 const computeKpisForRangeV2 = async ({ agentId, start, end }) => {
+  const agentOid = mongoose.Types.ObjectId.isValid(String(agentId))
+    ? new mongoose.Types.ObjectId(String(agentId))
+    : agentId;
+
   const sellers = await getReferredSellerIds(agentId);
   const sellerIds = sellers.map((s) => String(s._id));
-  const piecesSellerIds = sellers
-    .filter((s) => s.vendeurType === 'pieces' || s.vendeurType === 'mixte')
-    .map((s) => String(s._id));
 
   const boutiquesCreees = await User.countDocuments({
     _id: { $in: sellerIds },
@@ -235,23 +207,94 @@ const computeKpisForRangeV2 = async ({ agentId, start, end }) => {
 
   const sellerObjectIds = sellerIds.map((id) => new mongoose.Types.ObjectId(String(id)));
   const demonstrations = await computeValidatedDemosForRange({
-    agentId,
+    agentId: agentOid,
     sellerObjectIds,
     start,
     end,
   });
 
+  // Abonnements : tous les vendeurs filleuls (pas seulement pièces) — aligné avec les paiements réels.
   const subscriptionPayments = await sumPayments({
-    user: { $in: piecesSellerIds },
-    type: 'subscription',
-    status: 'success',
-    createdAt: { $gte: start, $lte: end },
+    $and: [
+      referredSellerUserMatch(sellerIds, sellerObjectIds),
+      { type: 'subscription', status: 'success', createdAt: { $gte: start, $lte: end } },
+    ],
   });
 
-  const campaignPayments = await sumCampaignPayments({ sellerIds, start, end });
+  const campaignPayments = await sumCampaignPayments({ sellerIds, sellerObjectIds, start, end });
 
-  const revenueAbonnement = Math.round((subscriptionPayments.totalAmount || 0) * 0.10);
-  const revenueCampagne = Math.round((campaignPayments.totalAmount || 0) * 0.10);
+  /** Demandes de pub créées sur la période (peuvent être non payées) — distinct des campagnes payées. */
+  const campagnesDemandees = await Publicite.countDocuments({
+    vendeur: { $in: sellerIds },
+    typePub: { $in: ['Sponsorisée', 'À la une'] },
+    dateDemande: { $gte: start, $lte: end },
+  });
+
+  const referredSuccessByType = await Payment.aggregate([
+    {
+      $match: {
+        $and: [
+          referredSellerUserMatch(sellerIds, sellerObjectIds),
+          { status: 'success', createdAt: { $gte: start, $lte: end } },
+        ],
+      },
+    },
+    {
+      $group: {
+        _id: { type: '$type', userBson: { $type: '$user' } },
+        count: { $sum: 1 },
+        sumAmount: { $sum: '$amount' },
+      },
+    },
+  ]);
+
+  const lifetimeCommissionByType = await AgentEarning.aggregate([
+    {
+      $match: {
+        agent: agentOid,
+        type: { $in: ['commission_subscription', 'commission_publicite'] },
+      },
+    },
+    { $group: { _id: '$type', total: { $sum: '$amount' } } },
+  ]);
+
+  // Campagnes « lancées » au sens métier = paiements pub réussis sur la période (même base que campaignAmount / commissions).
+  const campagnesLancees = campaignPayments.count;
+
+  // Revenus = commissions déjà créditées (10 % enregistrés dans AgentEarning), pas un second calcul sur Payment.
+  const commissionSubAgg = await AgentEarning.aggregate([
+    {
+      $match: {
+        agent: agentOid,
+        type: 'commission_subscription',
+        createdAt: { $gte: start, $lte: end },
+      },
+    },
+    { $group: { _id: null, total: { $sum: '$amount' } } },
+  ]);
+  const revenueAbonnement = Math.round(commissionSubAgg[0]?.total || 0);
+
+  const commissionPubAgg = await AgentEarning.aggregate([
+    {
+      $match: {
+        agent: agentOid,
+        type: 'commission_publicite',
+        createdAt: { $gte: start, $lte: end },
+      },
+    },
+    { $group: { _id: null, total: { $sum: '$amount' } } },
+  ]);
+  const revenueCampagne = Math.round(commissionPubAgg[0]?.total || 0);
+
+  const earningByTypeInRange = await AgentEarning.aggregate([
+    { $match: { agent: agentOid, createdAt: { $gte: start, $lte: end } } },
+    { $group: { _id: '$type', count: { $sum: 1 }, sumAmount: { $sum: '$amount' } } },
+  ]);
+  const latestEarnings = await AgentEarning.find({ agent: agentOid })
+    .sort({ createdAt: -1 })
+    .limit(5)
+    .select('type amount createdAt sourcePayment referredUser')
+    .lean();
 
   const objectifs = {
     prospects: { target: 20 },
@@ -262,19 +305,33 @@ const computeKpisForRangeV2 = async ({ agentId, start, end }) => {
   console.log(
     '[AGENT_KPI_V2]',
     JSON.stringify({
-      agentId: String(agentId),
+      agentIdRaw: String(agentId),
+      agentOidUsed: String(agentOid),
       range: {
         start: start?.toISOString?.() || String(start),
         end: end?.toISOString?.() || String(end),
       },
       referredSellersCount: sellerIds.length,
       referredSellersSample: sellerIds.slice(0, 5),
+      demonstrations,
       abonnementsVendus: subscriptionPayments.count,
-      campagnesLancees: campaignPayments.count,
+      campagnesLancees,
+      campagnesDemandees,
       subscriptionAmount: subscriptionPayments.totalAmount || 0,
       campaignAmount: campaignPayments.totalAmount || 0,
+      kpiNote:
+        'abonnementsVendus = nb Payment subscription success (filleuls vendeurs, user string|ObjectId). campagnesLancees = nb Payment pub success même base que campaignAmount. campagnesDemandees = demandes Publicite (dateDemande). revenue* = somme AgentEarning commissions sur la période UTC jour (≠ montant brut payé).',
       revenueAbonnement,
       revenueCampagne,
+      earningByTypeInRange,
+      referredSuccessByType,
+      lifetimeCommissionByType,
+      latestEarningsPreview: latestEarnings.map((e) => ({
+        type: e.type,
+        amount: e.amount,
+        createdAt: e.createdAt,
+        hasSourcePayment: Boolean(e.sourcePayment),
+      })),
     })
   );
 
@@ -282,7 +339,8 @@ const computeKpisForRangeV2 = async ({ agentId, start, end }) => {
     demonstrations,
     boutiquesCreees,
     abonnementsVendus: subscriptionPayments.count,
-    campagnesLancees: campaignPayments.count,
+    campagnesLancees,
+    campagnesDemandees,
     revenueAbonnement,
     revenueCampagne,
     objectifs,
@@ -871,6 +929,7 @@ exports.getConsolidatedAdminStats = async (req, res) => {
         acc.totalRevenueCampagne += item.kpis.revenueCampagne || 0;
         acc.abonnementsVendus += item.kpis.abonnementsVendus || 0;
         acc.campagnesLancees += item.kpis.campagnesLancees || 0;
+        acc.campagnesDemandees += item.kpis.campagnesDemandees || 0;
         return acc;
       },
       {
@@ -878,6 +937,7 @@ exports.getConsolidatedAdminStats = async (req, res) => {
         totalRevenueCampagne: 0,
         abonnementsVendus: 0,
         campagnesLancees: 0,
+        campagnesDemandees: 0,
       }
     );
     const mapById = new Map(agents.map((a) => [String(a._id), a]));
@@ -939,6 +999,7 @@ exports.getConsolidatedAdminStats = async (req, res) => {
         boutiquesCreees: kpis.boutiquesCreees ?? 0,
         abonnementsVendus: kpis.abonnementsVendus ?? 0,
         campagnesLancees: kpis.campagnesLancees ?? 0,
+        campagnesDemandees: kpis.campagnesDemandees ?? 0,
         totalGenerer: kpis.totalGenerer ?? 0,
         adminObservation: adminObservation || '-',
       };
@@ -955,6 +1016,7 @@ exports.getConsolidatedAdminStats = async (req, res) => {
         totalRevenueCampagne: kpiTotals.totalRevenueCampagne,
         abonnementsVendus: kpiTotals.abonnementsVendus,
         campagnesLancees: kpiTotals.campagnesLancees,
+        campagnesDemandees: kpiTotals.campagnesDemandees,
         totalWithdrawn,
       },
       topAgents,

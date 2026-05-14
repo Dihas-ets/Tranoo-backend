@@ -10,5 +10,6 @@ router.get('/me', (req, res) => {
 
 router.get('/stats', statsController.getStats);
 router.get('/stats/acheteurs', statsController.getAcheteursStats);
+router.get('/stats/seller-marque', statsController.getSellerMarqueStats);
 
 module.exports = router; 

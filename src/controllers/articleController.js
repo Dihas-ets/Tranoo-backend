@@ -168,8 +168,23 @@ exports.getArticles = async (req, res) => {
           }
         }
         filter.vendeur = req.user._id;
+        const requestedStatut = (req.query.statut || '').toString().trim().toLowerCase();
+        const allowedSellerStatuts = new Set([
+          'en_attente',
+          'en_ligne',
+          'rejeté',
+          'rejete',
+          'vendu',
+          'non_vendu',
+        ]);
         if ((type || '').toString().toLowerCase() !== 'piece') {
-          filter.statut = 'en_ligne';
+          if (allowedSellerStatuts.has(requestedStatut)) {
+            filter.statut = requestedStatut === 'rejete' ? 'rejeté' : requestedStatut;
+          } else {
+            filter.statut = 'en_ligne';
+          }
+        } else if (allowedSellerStatuts.has(requestedStatut)) {
+          filter.statut = requestedStatut === 'rejete' ? 'rejeté' : requestedStatut;
         }
       } else if (req.user.role !== 'admin') {
         filter.statut = 'en_ligne';

@@ -1,16 +1,42 @@
 const DemoEvent = require('../models/DemoEvent');
+const Referral = require('../models/Referral');
 const User = require('../models/User');
 const admin = require('firebase-admin');
 
-const resolveAgentForVendor = async (vendorUser) => {
-  if (!vendorUser || vendorUser.role !== 'vendeur') return null;
+const resolveAgentForActor = async (actorUser) => {
+  if (!actorUser || !['vendeur', 'acheteur'].includes(actorUser.role)) return null;
+
+  // 1) Filleul enregistré via parrainage agent (Referral.referredId → referrerId)
+  const refRow = await Referral.findOne({ referredId: actorUser._id })
+    .select('referrerId')
+    .lean();
+  if (refRow?.referrerId) {
+    const referrerAgent = await User.findOne({
+      _id: refRow.referrerId,
+      role: 'agentCommercial',
+    })
+      .select('_id typeAgent')
+      .lean();
+    if (referrerAgent?._id) {
+      console.log('[DEMO_EVENT] agent résolu via Referral (filleul)', {
+        referredId: String(actorUser._id),
+        agentId: String(referrerAgent._id),
+      });
+      return referrerAgent._id;
+    }
+  }
+
+  // 2) Compte vendeur / acheteur lié directement sur la fiche agent
   const agent = await User.findOne({
     role: 'agentCommercial',
     typeAgent: 'Tranoo_pro',
     $or: [
-      { 'proVendorAccount.uid': vendorUser.uid },
-      { 'proVendorAccount.email': vendorUser.email },
-      { 'mobileCredentials.login': vendorUser.email },
+      { 'proVendorAccount.uid': actorUser.uid },
+      { 'proVendorAccount.email': actorUser.email },
+      { 'mobileCredentials.login': actorUser.email },
+      { 'tranooBuyerAccount.uid': actorUser.uid },
+      { 'tranooBuyerAccount.email': actorUser.email },
+      { 'tranooBuyerCredentials.login': actorUser.email },
     ],
   })
     .select('_id')
@@ -21,8 +47,8 @@ const resolveAgentForVendor = async (vendorUser) => {
 exports.track = async (req, res) => {
   try {
     const user = req.user;
-    if (!user || user.role !== 'vendeur') {
-      return res.status(403).json({ message: 'Accès réservé aux vendeurs', code: 'VENDOR_ONLY' });
+    if (!user || !['vendeur', 'acheteur'].includes(user.role)) {
+      return res.status(403).json({ message: 'Accès réservé aux vendeurs/acheteurs', code: 'MOBILE_USER_ONLY' });
     }
 
     const { eventType, page, deviceId, meta } = req.body || {};
@@ -69,7 +95,7 @@ exports.track = async (req, res) => {
       return res.status(200).json({ message: 'Event dédupliqué', sessionKey, eventType });
     }
 
-    const agentId = await resolveAgentForVendor(user);
+    const agentId = await resolveAgentForActor(user);
     console.log('[DEMO_EVENT] resolved agent', { agentId: agentId ? String(agentId) : null });
 
     await DemoEvent.create({

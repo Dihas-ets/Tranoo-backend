@@ -11,6 +11,8 @@ const demoEventSchema = new mongoose.Schema(
       enum: [
         'subscription_initiated',
         'campaign_initiated',
+        'notification_clicked',
+        'alert_created',
         'seller_create_started',
         'seller_create_completed',
         'listing_opened_une',

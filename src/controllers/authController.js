@@ -144,9 +144,17 @@ exports.register = async (req, res) => {
 
         // Pour Tranoo_pro: générer des identifiants mobile aléatoires à communiquer à l'agent
         if (typeAgent === 'Tranoo_pro') {
-          const randomSuffix = crypto.randomBytes(3).toString('hex');
-          const normalized = `${(prenoms || '').replace(/\s+/g, '').toLowerCase()}.${(nom || '').replace(/\s+/g, '').toLowerCase()}`.replace(/[^a-z0-9.]/g, '');
-          const generatedLogin = `${normalized || 'agent'}.${randomSuffix}@pro.tranoo.app`;
+          const rawFirst = String(prenoms || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+          const rawLast = String(nom || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+          const compactBase = `${rawFirst.slice(0, 2)}${rawLast.slice(0, 2)}` || 'ag';
+          const compactSuffix = () => crypto.randomBytes(2).toString('hex');
+          const buildVendorLogin = () => `${compactBase}${compactSuffix()}@pro.tranoo.app`;
+          const buildBuyerLogin = () => `b${compactBase}${compactSuffix()}@buyer.tranoo.app`;
+
+          let generatedLogin = buildVendorLogin();
+          while (await User.findOne({ email: generatedLogin })) {
+            generatedLogin = buildVendorLogin();
+          }
           const generatedPassword = crypto.randomBytes(6).toString('base64').replace(/[^a-zA-Z0-9]/g, '').slice(0, 12);
           user.mobileCredentials = {
             login: generatedLogin,
@@ -154,8 +162,10 @@ exports.register = async (req, res) => {
           };
 
           // Compte acheteur Tranoo (login dédié) — évite de réutiliser le même email/UID Firebase
-          const buyerSuffix = crypto.randomBytes(3).toString('hex');
-          const buyerLogin = `${normalized || 'agent'}.${buyerSuffix}@buyer.tranoo.app`;
+          let buyerLogin = buildBuyerLogin();
+          while (await User.findOne({ email: buyerLogin })) {
+            buyerLogin = buildBuyerLogin();
+          }
           const buyerPassword = crypto.randomBytes(6).toString('base64').replace(/[^a-zA-Z0-9]/g, '').slice(0, 12);
           user.tranooBuyerCredentials = {
             login: buyerLogin,

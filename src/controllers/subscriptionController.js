@@ -6,19 +6,33 @@ const Article = require('../models/Article');
 async function hasSellerPieceAccess(userId) {
   const user = await User.findById(userId).lean();
   if (!user) return false;
-  const inscriptionDate = user.dateInscription || user.createdAt;
-  if (inscriptionDate) {
-    const pricing =
-      (await SubscriptionPricing.findOne({
-        key: 'SUBSCRIPTION_PRICING_SINGLETON',
-      }).lean()) || {};
-    const freeTrialDays = Number(pricing.freeTrialDays ?? 45);
-    const trialEnd = new Date(inscriptionDate);
-    trialEnd.setDate(trialEnd.getDate() + (Number.isFinite(freeTrialDays) ? freeTrialDays : 45));
-    if (new Date() <= trialEnd) return true;
-  }
+  const trialEnd = await getSellerTrialEndDate(user);
+  if (trialEnd && new Date() <= trialEnd) return true;
   const sub = await Subscription.findOne({ user: userId }).lean();
-  return Boolean(sub && sub.expiresAt && new Date(sub.expiresAt) > new Date());
+  const now = new Date();
+  if (!sub || !sub.expiresAt) return false;
+  const exp = new Date(sub.expiresAt);
+  if (!(exp > now)) return false;
+  const act = sub.activatedAt ? new Date(sub.activatedAt) : null;
+  // Période payante valide si échéance future. `activatedAt` dans le futur = ancien bug
+  // d’écriture au renouvellement ; on ne refuse pas l’accès tant que expiresAt > now.
+  if (!act || Number.isNaN(act.getTime())) return true;
+  return act <= now || (act > now && exp > now);
+}
+
+async function getSellerTrialEndDate(user) {
+  const inscriptionDate = user?.dateInscription || user?.createdAt;
+  if (!inscriptionDate) return null;
+  const pricing =
+    (await SubscriptionPricing.findOne({
+      key: 'SUBSCRIPTION_PRICING_SINGLETON',
+    }).lean()) || {};
+  const freeTrialDays = Number(pricing.freeTrialDays ?? 45);
+  const trialEnd = new Date(inscriptionDate);
+  trialEnd.setDate(
+    trialEnd.getDate() + (Number.isFinite(freeTrialDays) ? freeTrialDays : 45)
+  );
+  return trialEnd;
 }
 
 async function syncSellerPieceVisibility(userId, allowed) {
@@ -69,7 +83,17 @@ exports.getMySubscription = async (req, res) => {
       );
       return res.json({ hasSubscription: false, monthlyPrice: resolvedMonthlyPrice });
     }
-    const hasSubscription = sub.expiresAt && new Date(sub.expiresAt) > new Date();
+    const now = new Date();
+    const exp = sub.expiresAt ? new Date(sub.expiresAt) : null;
+    const act = sub.activatedAt ? new Date(sub.activatedAt) : null;
+    const hasSubscription = Boolean(
+      exp &&
+        exp > now &&
+        (!act ||
+          Number.isNaN(act.getTime()) ||
+          act <= now ||
+          (act > now && exp > now))
+    );
     const resolvedMonthlyPrice = Number(pricing.prixMensuel ?? 0);
     console.log(
       '[SUBSCRIPTION_ME] activeOrExpired=%s resolvedMonthlyPrice=%s months=%s expiresAt=%s',
@@ -100,19 +124,29 @@ exports.subscribe = async (req, res) => {
     const plan = (req.body?.plan || 'monthly').toLowerCase();
     const months = Math.max(1, Math.min(Number(req.body?.months || 1), 24));
     const now = new Date();
-    const expiresAt = new Date(now);
+    const user = await User.findById(userId).lean();
+    const trialEnd = await getSellerTrialEndDate(user);
     // monthly => +30 jours par mois acheté
-    expiresAt.setDate(expiresAt.getDate() + 30 * months);
 
     const existing = await Subscription.findOne({ user: userId });
     if (existing) {
       // prolonge si encore actif, sinon redémarre
-      const base = existing.expiresAt && existing.expiresAt > now ? existing.expiresAt : now;
+      const base =
+        existing.expiresAt && existing.expiresAt > now
+          ? existing.expiresAt
+          : trialEnd && trialEnd > now
+            ? trialEnd
+            : now;
       const newExpiry = new Date(base);
       newExpiry.setDate(newExpiry.getDate() + 30 * months);
       existing.plan = plan;
       existing.months = months;
-      existing.activatedAt = base;
+      // `activatedAt` ne doit jamais être dans le futur : sinon GET /subscription/me
+      // considère l'abonnement inactif (activatedAt <= now requis).
+      const prevAct = existing.activatedAt ? new Date(existing.activatedAt) : null;
+      if (!prevAct || Number.isNaN(prevAct.getTime()) || prevAct > now) {
+        existing.activatedAt = now;
+      }
       existing.expiresAt = newExpiry;
       existing.status = 'active';
       await existing.save();
@@ -127,11 +161,15 @@ exports.subscribe = async (req, res) => {
       });
     }
 
+    const activatedAt = trialEnd && trialEnd > now ? trialEnd : now;
+    const expiresAt = new Date(activatedAt);
+    expiresAt.setDate(expiresAt.getDate() + 30 * months);
+
     const sub = await Subscription.create({
       user: userId,
       plan,
       months,
-      activatedAt: now,
+      activatedAt,
       expiresAt,
       status: 'active',
     });
@@ -179,7 +217,3 @@ exports.getUserSubscriptionStatus = async (req, res) => {
     return res.status(500).json({ message: 'Erreur vérification statut', error: e?.message });
   }
 };
-
-
-
-

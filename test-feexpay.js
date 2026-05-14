@@ -1,5 +1,8 @@
 const axios = require('axios');
 
+const FEEXPAY_V2 = process.env.FEEXPAY_BASE_URL || 'https://api-v2.feexpay.me';
+const FEEXPAY_FEEXLINK = process.env.FEEXPAY_FEEXLINK_BASE_URL || 'https://api.feexpay.me';
+
 async function testFeexPayIntegration() {
   const FEEXPAY_API_TOKEN = process.env.FEEXPAY_API_TOKEN;
   const FEEXPAY_SHOP_ID = process.env.FEEXPAY_SHOP_ID;
@@ -31,7 +34,7 @@ async function testFeexPayIntegration() {
     };
 
     const initResponse = await axios.post(
-      'https://api.feexpay.me/api/feexlink/api-create',
+      `${FEEXPAY_FEEXLINK}/api/feexlink/api-create`,
       payload,
       { headers, timeout: 15000 }
     );
@@ -55,7 +58,7 @@ async function testFeexPayIntegration() {
       console.log('\n2. Test liste des transactions pour trouver le vrai ID...');
       try {
         const listResponse = await axios.get(
-          'https://api.feexpay.me/api/transactions?page=1&limit=50',
+          `${FEEXPAY_V2}/api/transactions?page=1&limit=50`,
           { headers, timeout: 15000 }
         );
         
@@ -76,8 +79,14 @@ async function testFeexPayIntegration() {
               console.log('\n3. Test statut avec le vrai transactionId:', transaction.id);
               try {
                 const statusResponse = await axios.get(
-                  `https://api.feexpay.me/api/transactions/public/single/status/${transaction.id}`,
-                  { headers, timeout: 10000 }
+                  `${FEEXPAY_V2}/api/transactions/public/single/status/${transaction.id}`,
+                  {
+                    headers: {
+                      'Content-Type': 'application/json',
+                      Authorization: `Bearer ${FEEXPAY_API_TOKEN}`,
+                    },
+                    timeout: 10000,
+                  },
                 );
                 
                 console.log('✅ Statut récupéré avec succès');
