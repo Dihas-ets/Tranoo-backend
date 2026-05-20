@@ -2,6 +2,7 @@ const Subscription = require('../models/Subscription');
 const SubscriptionPricing = require('../models/SubscriptionPricing');
 const User = require('../models/User');
 const Article = require('../models/Article');
+const Payment = require('../models/Payment');
 
 async function hasSellerPieceAccess(userId) {
   const user = await User.findById(userId).lean();
@@ -57,12 +58,76 @@ async function syncSellerPieceVisibility(userId, allowed) {
   );
 }
 
+function parseMonthsFromPaymentDuration(rawDuration) {
+  const raw = (rawDuration || '').toString();
+  const match = raw.match(/(\d+)/);
+  const parsed = match ? Number(match[1]) : 1;
+  return Math.max(1, Math.min(Number(parsed) || 1, 24));
+}
+
+async function rebuildSubscriptionFromPayments(userId) {
+  const payments = await Payment.find({
+    user: userId.toString(),
+    type: 'subscription',
+    status: 'success',
+  })
+    .select('duree createdAt')
+    .sort({ createdAt: 1 })
+    .lean();
+
+  if (!payments.length) return null;
+
+  let activatedAt = null;
+  let expiresAt = null;
+  let totalMonths = 0;
+
+  for (const payment of payments) {
+    const months = parseMonthsFromPaymentDuration(payment.duree);
+    totalMonths += months;
+    const paidAt = payment.createdAt ? new Date(payment.createdAt) : new Date();
+
+    if (!activatedAt) {
+      activatedAt = new Date(paidAt);
+      expiresAt = new Date(paidAt);
+      expiresAt.setDate(expiresAt.getDate() + 30 * months);
+      continue;
+    }
+
+    const base = expiresAt > paidAt ? expiresAt : paidAt;
+    expiresAt = new Date(base);
+    expiresAt.setDate(expiresAt.getDate() + 30 * months);
+  }
+
+  return {
+    plan: 'monthly',
+    months: Math.max(1, totalMonths),
+    activatedAt,
+    expiresAt,
+    status: expiresAt > new Date() ? 'active' : 'expired',
+  };
+}
+
 // GET /api/subscription/me
 exports.getMySubscription = async (req, res) => {
   try {
     const userId = req.user?._id;
     if (!userId) return res.status(401).json({ message: 'Non authentifié' });
     let sub = await Subscription.findOne({ user: userId }).lean();
+    if (!sub) {
+      const rebuilt = await rebuildSubscriptionFromPayments(userId);
+      if (rebuilt) {
+        sub = (
+          await Subscription.findOneAndUpdate(
+            { user: userId },
+            {
+              $set: rebuilt,
+              $setOnInsert: { user: userId },
+            },
+            { new: true, upsert: true }
+          )
+        )?.toObject?.() || rebuilt;
+      }
+    }
     const pricing =
       (await SubscriptionPricing.findOne({
         key: 'SUBSCRIPTION_PRICING_SINGLETON',
@@ -140,7 +205,11 @@ exports.subscribe = async (req, res) => {
       const newExpiry = new Date(base);
       newExpiry.setDate(newExpiry.getDate() + 30 * months);
       existing.plan = plan;
-      existing.months = months;
+      if (existing.expiresAt && existing.expiresAt > now) {
+        existing.months = Math.max(1, Number(existing.months || 1) + months);
+      } else {
+        existing.months = months;
+      }
       // `activatedAt` ne doit jamais être dans le futur : sinon GET /subscription/me
       // considère l'abonnement inactif (activatedAt <= now requis).
       const prevAct = existing.activatedAt ? new Date(existing.activatedAt) : null;

@@ -59,16 +59,35 @@ exports.createNotification = async (
             relatedModel !== undefined && relatedModel !== null
               ? String(relatedModel)
               : '',
+          title: String(title ?? ''),
+          message: String(message ?? ''),
           ...fcmSafeData,
         };
-        const resp = await admin.messaging().send({
+        const isAlertePush = String(type ?? '') === 'alerte';
+        // Alertes : push data-only pour que l'app affiche tout de suite la notif
+        // « appel » (fullScreenIntent) en arrière-plan, pas seulement au retour.
+        const fcmMessage = {
           token: recipient.fcmToken,
-          notification: {
-            title: title,
-            body: message
-          },
           data: fcmData,
-        });
+          android: {
+            priority: 'high',
+          },
+          apns: {
+            payload: {
+              aps: {
+                contentAvailable: true,
+                sound: 'default',
+              },
+            },
+          },
+        };
+        if (!isAlertePush) {
+          fcmMessage.notification = {
+            title: title,
+            body: message,
+          };
+        }
+        const resp = await admin.messaging().send(fcmMessage);
         console.log(`[NOTIFICATION] Push envoyée à ${recipient.email} messageId=${resp}`);
       } catch (error) {
         console.error(
@@ -277,25 +296,42 @@ exports.handleVerificationAction = async (notificationId, action, userId) => {
 // Récupérer les notifications d'un utilisateur
 exports.getUserNotifications = async (req, res) => {
   try {
-    const { page = 1, limit = 20, unreadOnly = false } = req.query;
+    const {
+      page = 1,
+      limit = 20,
+      unreadOnly = false,
+      scope = '',
+    } = req.query;
     const skip = (page - 1) * limit;
 
+    const adminRoles = ['admin', 'superAdmin', 'principal', 'gestionnaire'];
+    const isAdminUser = adminRoles.includes(String(req.user?.role || ''));
+    const wantsAdminInbox =
+      scope === 'adminDashboard' || scope === 'admin';
+
     const filter = { recipient: req.user._id };
+    if (wantsAdminInbox && isAdminUser) {
+      filter.$or = [
+        { 'data.audience': 'admin' },
+        { type: 'verification' },
+      ];
+    }
     if (unreadOnly === 'true') {
       filter.isRead = false;
     }
 
     const notifications = await Notification.find(filter)
-      .populate('sender', 'nom prenoms photo')
+      .populate('sender', 'nom prenoms photo email')
+      .populate('recipient', 'nom prenoms email role')
       .populate('relatedId')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit));
 
     const total = await Notification.countDocuments(filter);
-    const unreadCount = await Notification.countDocuments({ 
-      recipient: req.user._id, 
-      isRead: false 
+    const unreadCount = await Notification.countDocuments({
+      ...filter,
+      isRead: false,
     });
 
     res.json({
@@ -328,6 +364,28 @@ exports.markAsRead = async (req, res) => {
     res.json({ message: 'Notification marquée comme lue', notification });
   } catch (error) {
     console.error('[NOTIFICATION] Erreur marquage lu:', error);
+    res.status(500).json({ message: 'Erreur lors du marquage' });
+  }
+};
+
+// Marquer une notification comme non lue
+exports.markAsUnread = async (req, res) => {
+  try {
+    const { notificationId } = req.params;
+
+    const notification = await Notification.findOneAndUpdate(
+      { _id: notificationId, recipient: req.user._id },
+      { isRead: false },
+      { new: true }
+    );
+
+    if (!notification) {
+      return res.status(404).json({ message: 'Notification non trouvée' });
+    }
+
+    res.json({ message: 'Notification marquée comme non lue', notification });
+  } catch (error) {
+    console.error('[NOTIFICATION] Erreur marquage non lu:', error);
     res.status(500).json({ message: 'Erreur lors du marquage' });
   }
 };
@@ -557,11 +615,15 @@ exports.createVehicleSearchRequestHTTP = async (req, res) => {
       localisation,
       description,
       telephone,
+      photos,
     } = req.body || {};
 
     const cleanMarque = String(marque || '').trim();
     const cleanModele = String(modele || '').trim();
     const cleanEtat = String(etat || '').trim().toLowerCase();
+    const cleanPhotos = Array.isArray(photos)
+      ? photos.map((p) => String(p || '').trim()).filter(Boolean).slice(0, 8)
+      : [];
     const cleanUrgence = String(urgence || '').trim();
     const cleanLocalisation = String(localisation || '').trim();
     const cleanDescription = String(description || '').trim();
@@ -640,6 +702,8 @@ exports.createVehicleSearchRequestHTTP = async (req, res) => {
             urgence: cleanUrgence,
             localisation: cleanLocalisation,
             description: cleanDescription,
+            photos: cleanPhotos,
+            thumbnailUrl: cleanPhotos.length > 0 ? cleanPhotos[0] : '',
             // Important: données acheteur conservées pour le workflow interne,
             // mais le message/sender vendeur restent anonymisés.
           }
@@ -673,11 +737,15 @@ exports.createPieceSearchRequestHTTP = async (req, res) => {
       localisation,
       description,
       telephone,
+      photos,
     } = req.body || {};
 
     const cleanMarque = String(marque || '').trim();
     const cleanModele = String(modele || '').trim();
     const cleanPieceName = String(pieceName || '').trim();
+    const cleanPhotos = Array.isArray(photos)
+      ? photos.map((p) => String(p || '').trim()).filter(Boolean).slice(0, 8)
+      : [];
     const cleanAnnee = String(annee || '').trim();
     const cleanUrgence = String(urgence || '').trim();
     const cleanLocalisation = String(localisation || '').trim();
@@ -757,6 +825,8 @@ exports.createPieceSearchRequestHTTP = async (req, res) => {
             quantity: String(cleanQuantity),
             localisation: cleanLocalisation,
             description: cleanDescription,
+            photos: cleanPhotos,
+            thumbnailUrl: cleanPhotos.length > 0 ? cleanPhotos[0] : '',
             // Important: données acheteur conservées pour le workflow interne,
             // mais le message/sender vendeur restent anonymisés.
           }

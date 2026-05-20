@@ -693,7 +693,11 @@ async function handleSuccessfulPayment(payment) {
           const newExpiry = new Date(base);
           newExpiry.setDate(newExpiry.getDate() + 30 * months);
           existing.plan = 'monthly';
-          existing.months = months;
+          if (existing.expiresAt && existing.expiresAt > now) {
+            existing.months = Math.max(1, Number(existing.months || 1) + months);
+          } else {
+            existing.months = months;
+          }
           const prevAct = existing.activatedAt ? new Date(existing.activatedAt) : null;
           if (!prevAct || Number.isNaN(prevAct.getTime()) || prevAct > now) {
             existing.activatedAt = now;

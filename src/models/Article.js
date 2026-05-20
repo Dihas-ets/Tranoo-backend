@@ -49,8 +49,10 @@ const articleSchema = new mongoose.Schema({
   statut: {
     type: String,
     enum: ['en_attente', 'en_ligne', 'rejeté', 'vendu', 'non_vendu'],
-    default: 'en_attente'
+    default: 'en_ligne',
   },
+  motifRejet: { type: String, default: null },
+  dateRejet: { type: Date, default: null },
   // Rupture / disponible (vendeur) — rupture = vert côté vendeur, badge non cliquable côté acheteur ; disponible = rouge côté vendeur, rien côté acheteur
   stockStatus: {
     type: String,
@@ -81,8 +83,23 @@ const articleSchema = new mongoose.Schema({
     requestType: { type: String, default: null },
   },
   // Statistiques de vues
-  views: { type: Number, default: 0 }, // Nombre total de vues de tous les utilisateurs
-  lastViewed: { type: Date, default: null }, // Date de la dernière vue
+  viewsReal: { type: Number, default: 0 },
+  viewsAuto: { type: Number, default: 0 },
+  views: { type: Number, default: 0 }, // Total affiché (réelles + auto), recalculé à la sauvegarde
+  lastViewed: { type: Date, default: null },
+  autoViewsTarget: { type: Number, default: 50 },
+  autoViewsStartedAt: { type: Date, default: null },
+  autoViewsCompleted: { type: Boolean, default: false },
+});
+
+articleSchema.pre('save', function syncViewsTotal(next) {
+  const real = Number(this.viewsReal) || 0;
+  const auto = Number(this.viewsAuto) || 0;
+  if (real === 0 && auto === 0 && Number(this.views) > 0 && !this.isModified('viewsReal')) {
+    this.viewsReal = Number(this.views);
+  }
+  this.views = real + auto;
+  next();
 });
 
 module.exports = mongoose.model('Article', articleSchema);

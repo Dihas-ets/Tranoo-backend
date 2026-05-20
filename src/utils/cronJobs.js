@@ -1,6 +1,7 @@
 const cron = require('node-cron');
 const Publicite = require('../models/Publicite');
 const Article = require('../models/Article');
+const { tickAutoViewsForArticles } = require('./articleViews');
 
 // Tâche qui s'exécute toutes les heures pour vérifier les publicités expirées
 const checkExpiredPublicites = cron.schedule('0 * * * *', async () => {
@@ -56,14 +57,28 @@ const checkExpiredPublicites = cron.schedule('0 * * * *', async () => {
   scheduled: false
 });
 
+// Progression des vues automatiques (~50 vues sur 60 minutes)
+const autoViewsCron = cron.schedule('* * * * *', async () => {
+  try {
+    await tickAutoViewsForArticles();
+  } catch (error) {
+    console.error('[CRON][AUTO_VIEWS] Erreur:', error);
+  }
+}, {
+  scheduled: false,
+});
+
 const startCronJobs = () => {
   console.log('[CRON] Démarrage des tâches automatiques...');
   checkExpiredPublicites.start();
+  autoViewsCron.start();
+  console.log('[CRON] Worker vues automatiques démarré (chaque minute)');
 };
 
 const stopCronJobs = () => {
   console.log('[CRON] Arrêt des tâches automatiques...');
   checkExpiredPublicites.stop();
+  autoViewsCron.stop();
 };
 
 module.exports = {

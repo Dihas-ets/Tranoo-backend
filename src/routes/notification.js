@@ -19,6 +19,9 @@ router.get('/unread-count', notificationController.getUnreadCount);
 // Marquer une notification comme lue
 router.put('/:notificationId/read', notificationController.markAsRead);
 
+// Marquer une notification comme non lue
+router.put('/:notificationId/unread', notificationController.markAsUnread);
+
 // Marquer toutes les notifications comme lues
 router.put('/mark-all-read', notificationController.markAllAsRead);
 

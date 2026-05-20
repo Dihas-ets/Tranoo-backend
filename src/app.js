@@ -509,6 +509,14 @@ try {
   console.warn('Subscription pricing routes non chargées:', e.message);
 }
 
+// Verification pricing routes (véhicule — Tranoo)
+try {
+  const verificationPricingRoutes = require('./routes/verificationPricing');
+  app.use('/api/admin/verification-pricing', verificationPricingRoutes);
+} catch (e) {
+  console.warn('Verification pricing routes non chargées:', e.message);
+}
+
 // Referral routes
 try {
   const referralRoutes = require('./routes/referral');

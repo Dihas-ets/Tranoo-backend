@@ -23,9 +23,15 @@ function buildCloudinaryVideoVariants(url) {
   };
 }
 
+const { normalizeArticleViews } = require('../utils/articleViews');
+const {
+  scheduleNewArticleSideEffects,
+  initAutoViewsSchedule,
+} = require('../services/articlePublishService');
+
 function withVideoTransforms(doc) {
   if (!doc) return doc;
-  const data = doc.toObject ? doc.toObject() : doc;
+  const data = normalizeArticleViews(doc);
   const { videoOptimized, videoThumbnail } = buildCloudinaryVideoVariants(data.video);
   return { ...data, videoOptimized, videoThumbnail };
 }
@@ -75,7 +81,7 @@ exports.createArticle = async (req, res) => {
     if (req.body.entreprise && req.body.entreprise.trim().toUpperCase() === 'TRANOO') {
       source = 'tranoo';
     }
-    // Forcer le statut à 'en_attente' à la création
+    // Publication directe en ligne (validation admin retirée)
     const normalizedLieu = (req.body.lieu || req.body.localisation || '').toString();
     if ((req.body.type || '').toString().toLowerCase() === 'piece') {
       console.log(
@@ -88,10 +94,14 @@ exports.createArticle = async (req, res) => {
       lieu: req.body.lieu ?? normalizedLieu,
       localisation: req.body.localisation ?? normalizedLieu,
       vendeur: vendeurId,
-      statut: 'en_attente',
+      statut: 'en_ligne',
       source,
+      viewsReal: 0,
+      viewsAuto: 0,
     });
+    initAutoViewsSchedule(article);
     await article.save();
+    scheduleNewArticleSideEffects(article, vendeurId);
     if ((article.type || '').toString().toLowerCase() === 'piece') {
       console.log(
         '[ARTICLE_CREATE][PIECE] saved fournisseur=%j lieu=%s localisation=%s',
@@ -100,7 +110,7 @@ exports.createArticle = async (req, res) => {
         article.localisation
       );
     }
-    res.status(201).json({ message: 'Article créé', article });
+    res.status(201).json({ message: 'Article créé', article: withVideoTransforms(article) });
   } catch (error) {
     console.error('Erreur détaillée lors de la création de l\'article :', error);
     res.status(500).json({ message: 'Erreur lors de la création de l\'article', error });
@@ -206,7 +216,9 @@ exports.getArticles = async (req, res) => {
     // LOG DEBUG
     console.log('USER:', req.user);
     console.log('FILTER:', filter);
-    const articles = await Article.find(filter).populate('vendeur', 'nom prenoms email entreprise');
+    const articles = await Article.find(filter)
+      .sort({ dateCreation: -1, createdAt: -1 })
+      .populate('vendeur', 'nom prenoms email entreprise telephone');
     res.json(articles.map(withVideoTransforms));
   } catch (error) {
     res.status(500).json({ message: 'Erreur lors de la récupération des articles', error });
@@ -219,7 +231,7 @@ exports.getArticlesPublic = (req, res) => exports.getArticles(req, res);
 // Détail d'un article
 exports.getArticleById = async (req, res) => {
   try {
-    const article = await Article.findById(req.params.id).populate('vendeur', 'nom prenoms email entreprise');
+    const article = await Article.findById(req.params.id).populate('vendeur', 'nom prenoms email entreprise telephone');
     if (!article) return res.status(404).json({ message: 'Article non trouvé' });
     const f = article.fournisseur || {};
     console.log(
@@ -336,24 +348,51 @@ exports.updateStatut = async (req, res) => {
   try {
     const article = await Article.findById(req.params.id);
     if (!article) return res.status(404).json({ message: 'Article non trouvé' });
-    // Vérifier que l'utilisateur est admin
     if (req.user.role !== 'admin') {
       return res.status(403).json({ message: 'Seul un admin peut changer le statut' });
     }
-    // Autoriser tous les statuts définis dans le modèle
     const allowedStatus = ['en_attente', 'en_ligne', 'rejeté', 'vendu', 'non_vendu'];
-    if (!allowedStatus.includes(req.body.statut)) {
+    const nextStatut = req.body.statut;
+    if (!allowedStatus.includes(nextStatut)) {
       return res.status(400).json({ message: 'Statut non autorisé' });
     }
-    article.statut = req.body.statut;
-    // Correction : forcer la présence du champ vendeur
+
+    const raison = (req.body.raison || req.body.motifRejet || '').toString().trim();
+    if (nextStatut === 'rejeté' && !raison) {
+      return res.status(400).json({ message: 'Le motif de rejet est obligatoire' });
+    }
+
+    const previousStatut = article.statut;
+    article.statut = nextStatut;
+    if (nextStatut === 'rejeté') {
+      article.motifRejet = raison;
+      article.dateRejet = new Date();
+    } else {
+      article.motifRejet = null;
+      article.dateRejet = null;
+    }
+
     if (!article.vendeur) {
       const original = await Article.findById(req.params.id).lean();
       article.vendeur = original?.vendeur || null;
     }
     await article.save();
+
     if (
-      req.body.statut === 'en_ligne' &&
+      nextStatut === 'en_ligne' &&
+      previousStatut !== 'en_ligne' &&
+      !article.alertContext?.buyerId
+    ) {
+      const sellerId =
+        article.vendeur?.toString?.() ||
+        (article.vendeur ? String(article.vendeur) : null);
+      if (sellerId) {
+        scheduleNewArticleSideEffects(article, sellerId);
+      }
+    }
+
+    if (
+      nextStatut === 'en_ligne' &&
       article.alertContext &&
       article.alertContext.buyerId
     ) {
@@ -389,25 +428,35 @@ exports.updateStatut = async (req, res) => {
         console.error('[ARTICLE] Erreur notification acheteur apres validation:', buyerNotifError);
       }
     }
-    // Envoi de notification push au vendeur si fcmToken présent
-    const User = require('../models/User');
-    const adminSdk = require('firebase-admin');
-    const vendeur = await User.findById(article.vendeur);
-    if (vendeur && vendeur.fcmToken) {
-      const message = {
-        token: vendeur.fcmToken,
-        notification: {
-          title: 'Statut de votre article',
-          body: `Votre article "${article.titre}" a été ${article.statut}`
-        }
-      };
+
+    if (nextStatut === 'rejeté' && article.vendeur) {
       try {
-        await adminSdk.messaging().send(message);
+        const notificationController = require('./notificationController');
+        const isPiece = (article.type || '').toString().toLowerCase() === 'piece';
+        const label = isPiece ? 'pièce' : 'véhicule';
+        await notificationController.createNotification(
+          article.vendeur,
+          req.user._id,
+          'Annonce rejetée',
+          `Votre ${label} "${article.titre}" a été rejetée. Motif : ${raison}`,
+          'general',
+          article._id,
+          'Article',
+          {
+            action: 'article_rejected',
+            motifRejet: raison,
+            articleTitle: article.titre || '',
+            articleType: article.type || '',
+            targetPath: isPiece ? 'mastervac' : 'cars_info',
+            targetArticleId: article._id.toString(),
+          }
+        );
       } catch (notifError) {
-        console.error('Erreur lors de l\'envoi de la notification FCM :', notifError);
+        console.error('[ARTICLE] Erreur notification vendeur rejet:', notifError);
       }
     }
-    res.json({ message: 'Statut mis à jour', article });
+
+    res.json({ message: 'Statut mis à jour', article: withVideoTransforms(article) });
   } catch (error) {
     console.error('Erreur lors de la mise à jour du statut:', error);
     res.status(500).json({ message: 'Erreur lors de la mise à jour du statut', error });

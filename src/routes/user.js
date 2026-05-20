@@ -49,8 +49,7 @@ router.get('/:id', roleMiddleware('superAdmin', 'principal', 'gestionnaire'), us
 router.put('/:id', roleMiddleware('superAdmin', 'principal', 'gestionnaire'), userController.updateUser);
 // Suppression d'un utilisateur
 router.delete('/:id', roleMiddleware('superAdmin', 'principal', 'gestionnaire'), userController.deleteUser);
-// Mise à jour du mot de passe d'un utilisateur (ANCIEN - désactivé pour éviter conflits)
-// router.put('/:id/password', roleMiddleware('superAdmin', 'principal', 'gestionnaire', 'admin'), userController.updatePassword);
+router.put('/:id/password', roleMiddleware('superAdmin', 'principal', 'gestionnaire'), userController.updatePassword);
 
 // Route pour upload photo de profil (chemin conservé pour compatibilité)
 router.post('/users/photo', auth, upload.single('photo'), userController.uploadProfilePhoto);
