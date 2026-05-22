@@ -3,10 +3,10 @@ const router = express.Router();
 const pushOtpController = require('../controllers/pushOtpController');
 
 /**
- * Nouveau flux "forgot password" sécurisé (deviceId-first)
- * - request: email + deviceId + fcmToken -> push OTP uniquement au device demandeur
- * - verify-code: requestId + deviceId + code -> vérifie OTP (3 essais max, 5 min)
- * - reset-password: requestId + deviceId + newPassword -> reset après vérif OTP
+ * Mot de passe oublié — OTP WhatsApp uniquement (numéro du compte)
+ * - request: telephone (+ indicatif) -> code WhatsApp
+ * - verify-code: requestId + deviceId (clé téléphone) + code
+ * - reset-password: requestId + deviceId + newPassword
  */
 router.post('/request', pushOtpController.requestPasswordReset);
 router.post('/verify-code', pushOtpController.verifyPasswordResetOtp);

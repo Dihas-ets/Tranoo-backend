@@ -186,6 +186,13 @@ const userSchema = new mongoose.Schema({
   registreCommerce: { type: String },
   numeroIFU: { type: String },
   entrepriseProvenance: { type: String },
+  fournisseurProfil: {
+    telephone: { type: String, default: null },
+    adresseTexte: { type: String, default: null },
+    ville: { type: String, default: null },
+    latitude: { type: Number, default: null },
+    longitude: { type: Number, default: null },
+  },
   pieceIdentite: {
     type: {
       type: String,

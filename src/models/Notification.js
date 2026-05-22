@@ -27,6 +27,7 @@ const notificationSchema = new mongoose.Schema({
       'paiement',
       'promotion',
       'alerte',
+      'proposition_alerte',
       'new_article', // notification de nouvel article
       'general',
       'verification',

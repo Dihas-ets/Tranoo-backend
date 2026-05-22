@@ -72,6 +72,9 @@ const startCronJobs = () => {
   console.log('[CRON] Démarrage des tâches automatiques...');
   checkExpiredPublicites.start();
   autoViewsCron.start();
+  tickAutoViewsForArticles().catch((err) => {
+    console.error('[CRON][AUTO_VIEWS] Erreur au démarrage:', err);
+  });
   console.log('[CRON] Worker vues automatiques démarré (chaque minute)');
 };
 

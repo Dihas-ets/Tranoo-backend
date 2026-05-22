@@ -4,7 +4,13 @@ const AgentEarningSchema = new mongoose.Schema({
   agent: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   type: { 
     type: String, 
-    enum: ['referral_signup', 'commission_publicite', 'commission_subscription', 'withdrawal'], 
+    enum: [
+      'referral_signup',
+      'commission_publicite',
+      'commission_subscription',
+      'daily_presence',
+      'withdrawal',
+    ], 
     required: true 
   },
   amount: { type: Number, required: true }, // en XOF

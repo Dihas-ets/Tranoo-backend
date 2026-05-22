@@ -3,20 +3,46 @@ const crypto = require('crypto');
 const User = require('../models/User');
 const UserDevice = require('../models/UserDevice');
 const PasswordResetRequest = require('../models/PasswordResetRequest');
+const { digitsOnly, sendWhatsAppOtpCode } = require('../utils/whatsappService');
+const authConfig = require('../config/authConfig');
 
 // Store temporaire pour les codes OTP (en production, utiliser Redis)
 const otpStore = new Map();
 
-const generateOTP = () => Math.floor(100000 + Math.random() * 900000).toString();
+const generateOTP = () => {
+  const len = authConfig.OTP_LENGTH;
+  const min = Math.pow(10, len - 1);
+  const max = Math.pow(10, len) - 1;
+  return String(Math.floor(min + Math.random() * (max - min + 1)));
+};
 const generateSessionId = () => (crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(16).toString('hex'));
 const hashOtp = (otp) => crypto.createHash('sha256').update(String(otp)).digest('hex');
 const makeKey = ({ telephone, fcmToken, otpSessionId }) =>
   `${String(telephone)}::${String(fcmToken)}::${String(otpSessionId)}`;
 
-const OTP_TTL_MS = 5 * 60 * 1000; // 5 minutes
-const OTP_MAX_ATTEMPTS = 3;
+const OTP_TTL_MS = authConfig.OTP_TTL_MS;
+const OTP_MAX_ATTEMPTS = authConfig.OTP_MAX_ATTEMPTS;
 
 const normalizeEmail = (email) => String(email || '').trim().toLowerCase();
+
+const WHATSAPP_CHANNEL = 'whatsapp';
+
+async function findUserByPhoneDigits(phoneDigits) {
+  if (!phoneDigits) return null;
+  const variants = [
+    phoneDigits,
+    `+${phoneDigits}`,
+    phoneDigits.replace(/^00/, ''),
+  ];
+  for (const v of variants) {
+    const u = await User.findOne({ telephone: v });
+    if (u) return u;
+  }
+  const suffix = phoneDigits.length >= 8 ? phoneDigits.slice(-8) : phoneDigits;
+  return User.findOne({
+    telephone: { $regex: new RegExp(`${suffix}$`) },
+  });
+}
 
 const pushOtpMessage = ({ fcmToken, otpCode }) => ({
   token: String(fcmToken).trim(),
@@ -50,75 +76,71 @@ const pushOtpMessage = ({ fcmToken, otpCode }) => ({
 });
 
 /**
- * NOUVEAU FLUX (deviceId-first)
- * Règle: OTP envoyé uniquement au device (deviceId) ayant initié la demande.
- * Sécurité: demande autorisée uniquement depuis un device "trusted" déjà connu,
- * sinon récupération assistée.
+ * Récupération mot de passe : OTP WhatsApp uniquement (numéro enregistré sur le compte).
  */
 exports.requestPasswordReset = async (req, res) => {
   try {
-    const { identifier, deviceId, fcmToken } = req.body || {};
-    const email = normalizeEmail(identifier);
+    const { telephone, countryCode, nationalNumber } = req.body || {};
 
-    // UX neutre: même réponse si compte inexistant
     const neutralOk = () =>
       res.json({
         success: true,
-        message: 'Si le compte existe, un code a été envoyé par notification sur cet appareil.',
-      });
-
-    if (!email || !email.includes('@')) return neutralOk();
-    if (!deviceId || typeof deviceId !== 'string' || !deviceId.trim()) return neutralOk();
-    if (!fcmToken || typeof fcmToken !== 'string' || !fcmToken.trim()) return neutralOk();
-
-    const user = await User.findOne({ email: email });
-    if (!user) return neutralOk();
-
-    // Vérifier que ce device est déjà connu + trusted
-    const trustedDevice = await UserDevice.findOne({
-      userUid: user.uid,
-      deviceId: deviceId.trim(),
-      isTrusted: true,
-    });
-
-    if (!trustedDevice) {
-      return res.status(403).json({
-        success: false,
         message:
-          "Ce téléphone n'est pas autorisé pour cette récupération. Veuillez contacter le support.",
+          'Si un compte existe pour ce numéro, un code a été envoyé sur WhatsApp.',
       });
-    }
 
-    // Mettre à jour le token FCM sur le device
-    trustedDevice.fcmToken = fcmToken.trim();
-    trustedDevice.lastSeenAt = new Date();
-    await trustedDevice.save();
+    let phoneDigits = digitsOnly(telephone);
+    if (!phoneDigits && countryCode && nationalNumber) {
+      phoneDigits = digitsOnly(String(countryCode) + String(nationalNumber));
+    }
+    if (!phoneDigits || phoneDigits.length < 8) return neutralOk();
+
+    const user = await findUserByPhoneDigits(phoneDigits);
+    if (!user || !user.telephone) return neutralOk();
 
     const otpCode = generateOTP();
     const expiresAt = new Date(Date.now() + OTP_TTL_MS);
+    const sessionKey = phoneDigits;
+
+    try {
+      await sendWhatsAppOtpCode({ phone: user.telephone, code: otpCode });
+    } catch (waErr) {
+      console.error('[RESET] WhatsApp OTP:', waErr?.response?.data || waErr.message);
+      if (waErr.code === 'whatsapp_not_configured') {
+        return res.status(503).json({
+          success: false,
+          message:
+            'Envoi WhatsApp indisponible. Contactez le support pour réinitialiser votre mot de passe.',
+        });
+      }
+      return res.status(503).json({
+        success: false,
+        message:
+          "Impossible d'envoyer le code sur WhatsApp. Vérifiez le numéro ou réessayez plus tard.",
+      });
+    }
 
     const requestDoc = await PasswordResetRequest.create({
       userUid: user.uid,
-      deviceId: deviceId.trim(),
-      fcmToken: fcmToken.trim(),
+      deviceId: sessionKey,
+      fcmToken: WHATSAPP_CHANNEL,
       otpHash: hashOtp(otpCode),
       expiresAt,
       attempts: 0,
       status: 'pending',
-      audit: { attempts: [], requestedAt: new Date() },
+      audit: { attempts: [], requestedAt: new Date(), channel: WHATSAPP_CHANNEL },
     });
-
-    await admin.messaging().send(pushOtpMessage({ fcmToken: fcmToken.trim(), otpCode }));
 
     return res.json({
       success: true,
-      message: 'Code envoyé par notification sur cet appareil.',
+      message: 'Code envoyé sur WhatsApp au numéro enregistré sur votre compte.',
       requestId: requestDoc._id,
+      deviceId: sessionKey,
       expiresInSeconds: Math.floor(OTP_TTL_MS / 1000),
     });
   } catch (error) {
     console.error('[RESET] Erreur requestPasswordReset:', error);
-    return res.status(500).json({ success: false, message: "Erreur. Réessayez." });
+    return res.status(500).json({ success: false, message: 'Erreur. Réessayez.' });
   }
 };
 
@@ -186,6 +208,13 @@ exports.resetPasswordWithOtp = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Champs requis manquants.' });
     }
 
+    if (String(newPassword).length < authConfig.PASSWORD_MIN_LENGTH) {
+      return res.status(400).json({
+        success: false,
+        message: `Le mot de passe doit contenir au moins ${authConfig.PASSWORD_MIN_LENGTH} caractères.`,
+      });
+    }
+
     const requestDoc = await PasswordResetRequest.findById(requestId);
     if (!requestDoc) {
       return res.status(400).json({ success: false, message: 'Demande invalide.' });
@@ -233,8 +262,8 @@ exports.resetPasswordWithOtp = async (req, res) => {
       { upsert: true }
     );
 
-    // Confirmation push sur le device demandeur uniquement
-    if (requestDoc.fcmToken) {
+    // Confirmation push (legacy) — ignoré pour canal WhatsApp
+    if (requestDoc.fcmToken && requestDoc.fcmToken !== WHATSAPP_CHANNEL) {
       try {
         await admin.messaging().send({
           token: String(requestDoc.fcmToken).trim(),

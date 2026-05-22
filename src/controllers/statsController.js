@@ -1,6 +1,34 @@
 const User = require('../models/User');
 const Article = require('../models/Article');
 const Payment = require('../models/Payment');
+const AgentEarning = require('../models/AgentEarning');
+
+const MONTH_LABELS = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc'];
+
+const paymentActivityLabel = (payment, articleType) => {
+  const t = (payment.type || '').toLowerCase();
+  if (t === 'publicite') return 'Publicité';
+  if (t === 'subscription') return 'Abonnement';
+  if (t === 'verification') return 'Vérification';
+  if (t === 'vente' || t === 'achat') {
+    return articleType === 'piece' ? 'Vente Pièce' : 'Vente Voiture';
+  }
+  return 'Autre';
+};
+
+const paymentStatusLabel = (status) => {
+  if (status === 'success') return 'Confirmé';
+  if (status === 'failed' || status === 'cancelled') return 'Refusé';
+  return 'En attente';
+};
+
+const paymentMethodLabel = (method) => {
+  if (!method) return '—';
+  const m = String(method).toLowerCase();
+  if (m.includes('momo') || m.includes('mtn') || m.includes('moov')) return 'Mobile Money';
+  if (m.includes('card')) return 'Carte';
+  return method;
+};
 
 exports.getStats = async (_req, res) => {
   try {
@@ -172,5 +200,169 @@ exports.getSellerMarqueStats = async (req, res) => {
   } catch (error) {
     console.error('[getSellerMarqueStats]', error);
     return res.status(500).json({ message: 'Erreur stats vendeur', error: error.message });
+  }
+};
+
+/** Revenus / comptabilité dashboard admin (graphiques + tableau). */
+exports.getDashboardFinance = async (req, res) => {
+  try {
+    const now = new Date();
+    const year = Number(req.query.year) || now.getFullYear();
+    const month = req.query.month != null ? Number(req.query.month) : now.getMonth() + 1;
+    const safeMonth = month >= 1 && month <= 12 ? month : now.getMonth() + 1;
+
+    const yearStart = new Date(`${year}-01-01T00:00:00.000Z`);
+    const yearEnd = new Date(`${year}-12-31T23:59:59.999Z`);
+    const monthStart = new Date(`${year}-${String(safeMonth).padStart(2, '0')}-01T00:00:00.000Z`);
+    const monthEnd = new Date(year, safeMonth, 0, 23, 59, 59, 999);
+
+    const chartStart = new Date(now);
+    chartStart.setMonth(chartStart.getMonth() - 11);
+    chartStart.setDate(1);
+    chartStart.setHours(0, 0, 0, 0);
+
+    const paymentsForCharts = await Payment.find({
+      createdAt: { $gte: chartStart, $lte: now },
+      status: 'success',
+    })
+      .select('amount type createdAt achat method description')
+      .populate({ path: 'achat', populate: { path: 'article', select: 'type' } })
+      .lean();
+
+    const monthlyMap = {};
+    for (let i = 0; i < 12; i++) {
+      const d = new Date(chartStart);
+      d.setMonth(chartStart.getMonth() + i);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      monthlyMap[key] = {
+        month: MONTH_LABELS[d.getMonth()],
+        monthKey: key,
+        carSales: 0,
+        partsSales: 0,
+        subscriptions: 0,
+        ads: 0,
+      };
+    }
+
+    for (const p of paymentsForCharts) {
+      const key = `${p.createdAt.getFullYear()}-${String(p.createdAt.getMonth() + 1).padStart(2, '0')}`;
+      if (!monthlyMap[key]) continue;
+      const amt = Number(p.amount) || 0;
+      const articleType = p.achat?.article?.type || null;
+      const t = (p.type || '').toLowerCase();
+      if (t === 'publicite') monthlyMap[key].ads += amt;
+      else if (t === 'subscription') monthlyMap[key].subscriptions += amt;
+      else if (t === 'vente' || t === 'achat') {
+        if (articleType === 'piece') monthlyMap[key].partsSales += amt;
+        else monthlyMap[key].carSales += amt;
+      } else if (t === 'verification') {
+        monthlyMap[key].carSales += amt;
+      }
+    }
+
+    const monthlyRevenue = Object.values(monthlyMap).sort((a, b) =>
+      a.monthKey.localeCompare(b.monthKey)
+    );
+
+    const monthPayments = paymentsForCharts.filter(
+      (p) => p.createdAt >= monthStart && p.createdAt <= monthEnd
+    );
+
+    let voitures = 0;
+    let pieces = 0;
+    let ads = 0;
+    let subscriptions = 0;
+    let services = 0;
+    for (const p of monthPayments) {
+      const amt = Number(p.amount) || 0;
+      const articleType = p.achat?.article?.type || null;
+      const t = (p.type || '').toLowerCase();
+      if (t === 'publicite') ads += amt;
+      else if (t === 'subscription') subscriptions += amt;
+      else if (t === 'verification') services += amt;
+      else if (t === 'vente' || t === 'achat') {
+        if (articleType === 'piece') pieces += amt;
+        else voitures += amt;
+      }
+    }
+
+    const agentWithdrawalsMonth = await AgentEarning.aggregate([
+      {
+        $match: {
+          type: 'withdrawal',
+          createdAt: { $gte: monthStart, $lte: monthEnd },
+        },
+      },
+      { $group: { _id: null, total: { $sum: '$amount' } } },
+    ]);
+    const agentWithdrawals = agentWithdrawalsMonth[0]?.total || 0;
+
+    const activityComparison = [
+      { name: 'Vente de voitures', value: Math.round(voitures) },
+      { name: 'Vente de pièces', value: Math.round(pieces) },
+      { name: 'Prestations de service', value: Math.round(services) },
+      { name: 'Publicités', value: Math.round(ads) },
+      { name: 'Abonnements', value: Math.round(subscriptions) },
+    ];
+
+    const recentPayments = await Payment.find({})
+      .sort({ createdAt: -1 })
+      .limit(80)
+      .select('amount type status method description createdAt achat')
+      .populate({ path: 'achat', populate: { path: 'article', select: 'type titre' } })
+      .lean();
+
+    const accountingRows = recentPayments.map((p, idx) => {
+      const articleType = p.achat?.article?.type || null;
+      const activityType = paymentActivityLabel(p, articleType);
+      const isEntry = p.status === 'success';
+      return {
+        id: String(p._id || idx),
+        date: p.createdAt,
+        activityType,
+        movementType: isEntry ? 'Entrée' : 'Sortie',
+        amount: Number(p.amount) || 0,
+        description:
+          p.description ||
+          p.achat?.article?.titre ||
+          activityType,
+        paymentMethod: paymentMethodLabel(p.method),
+        status: paymentStatusLabel(p.status),
+      };
+    });
+
+    const successYear = await Payment.aggregate([
+      { $match: { status: 'success', createdAt: { $gte: yearStart, $lte: yearEnd } } },
+      { $group: { _id: null, total: { $sum: '$amount' } } },
+    ]);
+    const withdrawalsYear = await AgentEarning.aggregate([
+      { $match: { type: 'withdrawal', createdAt: { $gte: yearStart, $lte: yearEnd } } },
+      { $group: { _id: null, total: { $sum: '$amount' } } },
+    ]);
+
+    const entries = accountingRows
+      .filter((r) => r.movementType === 'Entrée' && r.status === 'Confirmé')
+      .reduce((s, r) => s + r.amount, 0);
+    const exits = accountingRows
+      .filter((r) => r.movementType === 'Sortie' || r.status === 'Refusé')
+      .reduce((s, r) => s + r.amount, 0);
+
+    return res.json({
+      filters: { year, month: safeMonth },
+      monthlyRevenue,
+      activityComparison,
+      accountingRows,
+      accountingTotals: {
+        entries: Math.round(entries),
+        exits: Math.round(exits),
+        net: Math.round(entries - exits),
+        yearRevenueSuccess: Math.round(successYear[0]?.total || 0),
+        yearAgentWithdrawals: Math.round(withdrawalsYear[0]?.total || 0),
+        monthAgentWithdrawals: Math.round(agentWithdrawals),
+      },
+    });
+  } catch (error) {
+    console.error('[getDashboardFinance]', error);
+    return res.status(500).json({ message: 'Erreur stats finance dashboard', error: error.message });
   }
 };

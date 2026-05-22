@@ -36,6 +36,7 @@ router.post('/:id/daily/observation', auth, role('superAdmin', 'principal', 'ges
 
 // Historique global des retraits (vue admin)
 router.get('/withdrawals', auth, role('superAdmin', 'principal', 'gestionnaire', 'admin'), agentController.getAllWithdrawalsForAdmin);
+router.post('/admin/backfill-daily-presence', auth, role('superAdmin', 'principal', 'gestionnaire', 'admin'), agentController.backfillDailyPresenceBonuses);
 router.get('/admin/consolidated', auth, role('superAdmin', 'principal', 'gestionnaire', 'admin'), agentController.getConsolidatedAdminStats);
 
 module.exports = router;

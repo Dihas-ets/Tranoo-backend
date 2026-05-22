@@ -23,11 +23,14 @@ function normalizeArticleViews(doc) {
   };
 }
 
-function initAutoViewsSchedule(article) {
+/** (Re)démarre le compteur horaire quand l'article passe en ligne. */
+function initAutoViewsSchedule(article, { resetTimer = true } = {}) {
   article.viewsReal = article.viewsReal || 0;
   article.viewsAuto = article.viewsAuto || 0;
   article.autoViewsTarget = VIEWS_PER_HOUR;
-  article.autoViewsStartedAt = article.autoViewsStartedAt || new Date();
+  if (resetTimer || !article.autoViewsStartedAt) {
+    article.autoViewsStartedAt = new Date();
+  }
   article.autoViewsCompleted = false;
   article.views = (article.viewsReal || 0) + (article.viewsAuto || 0);
 }
@@ -50,11 +53,9 @@ async function tickAutoViewsForArticles() {
     }
 
     const startedAt = new Date(article.autoViewsStartedAt).getTime();
-    const hoursOnline = Math.floor((now - startedAt) / HOUR_MS);
-
-    if (hoursOnline < 1) continue;
-
-    const expectedAuto = hoursOnline * VIEWS_PER_HOUR;
+    const elapsedMs = Math.max(0, now - startedAt);
+    // Progression continue : ~50 vues/heure (visible dès la 1ère minute).
+    const expectedAuto = Math.floor((elapsedMs / HOUR_MS) * VIEWS_PER_HOUR);
     const currentAuto = article.viewsAuto || 0;
 
     if (currentAuto < expectedAuto) {

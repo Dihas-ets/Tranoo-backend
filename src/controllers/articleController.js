@@ -376,6 +376,11 @@ exports.updateStatut = async (req, res) => {
       const original = await Article.findById(req.params.id).lean();
       article.vendeur = original?.vendeur || null;
     }
+
+    if (nextStatut === 'en_ligne' && previousStatut !== 'en_ligne') {
+      initAutoViewsSchedule(article, { resetTimer: true });
+    }
+
     await article.save();
 
     if (
@@ -405,7 +410,7 @@ exports.updateStatut = async (req, res) => {
           req.user._id,
           'Une proposition correspond a votre alerte',
           `Votre alerte a recu une nouvelle proposition: "${article.titre}".`,
-          'general',
+          'proposition_alerte',
           article._id,
           'Article',
           {

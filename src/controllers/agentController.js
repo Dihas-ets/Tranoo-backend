@@ -11,6 +11,7 @@ const Publicite = require('../models/Publicite');
 const AuthEvent = require('../models/AuthEvent');
 const DemoEvent = require('../models/DemoEvent');
 const mongoose = require('mongoose');
+const agentConfig = require('../config/agentConfig');
 
 const toDateKey = (value) => {
   const d = value ? new Date(value) : new Date();
@@ -45,7 +46,68 @@ const sumPayments = async (match) => {
   };
 };
 
-const COMMISSION_TYPES = ['commission_publicite', 'commission_subscription'];
+const EARNING_CREDIT_TYPES = [
+  'referral_signup',
+  'commission_publicite',
+  'commission_subscription',
+  'daily_presence',
+];
+
+const hasValidZoneLocation = (zoneLocation) => {
+  if (!zoneLocation || typeof zoneLocation !== 'object') return false;
+  const lat = Number(zoneLocation.lat);
+  const lng = Number(zoneLocation.lng);
+  return Number.isFinite(lat) && Number.isFinite(lng);
+};
+
+/**
+ * Crédite la prime journalière (2000 FCFA par défaut) une seule fois par dateKey
+ * lorsque la localisation GPS du jour est enregistrée.
+ */
+const tryCreditDailyPresenceBonus = async (agentId, dateKey) => {
+  const log = await AgentDailyLog.findOne({ agent: agentId, dateKey }).lean();
+  if (!hasValidZoneLocation(log?.zoneLocation)) {
+    return { credited: false, reason: 'location_required' };
+  }
+  if (log.dailyBonusCredited) {
+    return {
+      credited: false,
+      reason: 'already_credited',
+      amount: agentConfig.DAILY_PRESENCE_BONUS_XOF,
+    };
+  }
+
+  const marked = await AgentDailyLog.findOneAndUpdate(
+    { agent: agentId, dateKey, dailyBonusCredited: { $ne: true } },
+    {
+      $set: {
+        dailyBonusCredited: true,
+        dayCompletedAt: log.dayCompletedAt || new Date(),
+      },
+    },
+    { new: true }
+  );
+  if (!marked) {
+    return {
+      credited: false,
+      reason: 'already_credited',
+      amount: agentConfig.DAILY_PRESENCE_BONUS_XOF,
+    };
+  }
+
+  await AgentEarning.create({
+    agent: agentId,
+    type: 'daily_presence',
+    amount: agentConfig.DAILY_PRESENCE_BONUS_XOF,
+    currency: 'XOF',
+  });
+
+  return {
+    credited: true,
+    amount: agentConfig.DAILY_PRESENCE_BONUS_XOF,
+    dayCompletedAt: marked.dayCompletedAt,
+  };
+};
 
 /** Paiements filleuls : `user` en base peut être String ou ObjectId selon les enregistrements. */
 const referredSellerUserMatch = (sellerIds, sellerObjectIds) => ({
@@ -424,7 +486,7 @@ exports.getMyDashboard = async (req, res) => {
 
     // Somme des gains enregistrés (sans compter les retraits)
     const earnings = await AgentEarning.aggregate([
-      { $match: { agent: user._id, type: { $in: COMMISSION_TYPES } } },
+      { $match: { agent: user._id, type: { $in: EARNING_CREDIT_TYPES } } },
       { $group: { _id: null, total: { $sum: '$amount' } } }
     ]);
     const totalEarnings = (earnings[0]?.total || 0);
@@ -438,13 +500,44 @@ exports.getMyDashboard = async (req, res) => {
     const currentBalance = totalEarnings - totalWithdrawn;
 
     const tariffs = await ReferralTariff.find({}).sort({ createdAt: -1 });
-    const daily = await AgentDailyLog.findOne({ agent: user._id, dateKey }).lean();
+    let daily = await AgentDailyLog.findOne({ agent: user._id, dateKey }).lean();
+
+    // Anciennes localisations GPS : créditer la prime si pas encore fait pour cette date
+    if (daily && hasValidZoneLocation(daily.zoneLocation) && !daily.dailyBonusCredited) {
+      await tryCreditDailyPresenceBonus(user._id, dateKey);
+      daily = await AgentDailyLog.findOne({ agent: user._id, dateKey }).lean();
+    }
+
+    let totalEarningsFinal = totalEarnings;
+    let currentBalanceFinal = currentBalance;
+    if (daily?.dailyBonusCredited) {
+      const earningsRefresh = await AgentEarning.aggregate([
+        { $match: { agent: user._id, type: { $in: EARNING_CREDIT_TYPES } } },
+        { $group: { _id: null, total: { $sum: '$amount' } } },
+      ]);
+      totalEarningsFinal = earningsRefresh[0]?.total || 0;
+      currentBalanceFinal = totalEarningsFinal - totalWithdrawn;
+    }
+
     const kpis = await computeKpisForRangeV2({ agentId: user._id, start, end });
-    const history = await AgentDailyLog.find({ agent: user._id })
+
+    const historyPage = Math.max(1, parseInt(req.query.historyPage, 10) || 1);
+    const historyLimit = Math.min(
+      50,
+      Math.max(5, parseInt(req.query.historyLimit, 10) || 10)
+    );
+    const historySkip = (historyPage - 1) * historyLimit;
+    const historyFilter = { agent: user._id };
+    const historyTotal = await AgentDailyLog.countDocuments(historyFilter);
+    const historyItems = await AgentDailyLog.find(historyFilter)
       .sort({ dateKey: -1 })
-      .limit(60)
-      .select('dateKey zoneText prospectsApproached adminObservation updatedAt')
+      .skip(historySkip)
+      .limit(historyLimit)
+      .select(
+        'dateKey zoneText prospectsApproached adminObservation updatedAt dailyBonusCredited zoneLocation'
+      )
       .lean();
+    const historyTotalPages = Math.max(1, Math.ceil(historyTotal / historyLimit));
 
     res.json({
       agent: {
@@ -471,9 +564,9 @@ exports.getMyDashboard = async (req, res) => {
         totalReferrals,
         completedReferrals: completedCount,
         pendingReferrals: totalReferrals - completedCount,
-        totalEarnings,
+        totalEarnings: totalEarningsFinal,
         totalWithdrawn,
-        currentBalance,
+        currentBalance: currentBalanceFinal,
       },
       daily: {
         dateKey,
@@ -481,9 +574,19 @@ exports.getMyDashboard = async (req, res) => {
         zoneLocation: daily?.zoneLocation || null,
         prospectsApproached: daily?.prospectsApproached || 0,
         adminObservation: daily?.adminObservation || '',
+        dayCompleted: hasValidZoneLocation(daily?.zoneLocation),
+        dailyBonusCredited: !!daily?.dailyBonusCredited,
+        dailyPresenceBonusXof: agentConfig.DAILY_PRESENCE_BONUS_XOF,
+        dayCompletedAt: daily?.dayCompletedAt || null,
         ...kpis,
       },
-      history,
+      history: {
+        items: historyItems,
+        page: historyPage,
+        limit: historyLimit,
+        total: historyTotal,
+        totalPages: historyTotalPages,
+      },
       tariffs,
     });
   } catch (err) {
@@ -545,7 +648,26 @@ exports.upsertMyDailyLog = async (req, res) => {
       { upsert: true, new: true, setDefaultsOnInsert: true }
     ).lean();
 
-    return res.json({ message: 'Données journalières sauvegardées', daily: doc });
+    let dailyPresence = null;
+    if (hasValidZoneLocation(doc?.zoneLocation)) {
+      dailyPresence = await tryCreditDailyPresenceBonus(user._id, dateKey);
+    }
+
+    const fresh = await AgentDailyLog.findOne({ agent: user._id, dateKey }).lean();
+    let message = 'Données journalières sauvegardées';
+    if (dailyPresence?.credited) {
+      message = `Journée validée. +${dailyPresence.amount} FCFA crédités sur votre compte.`;
+    } else if (fresh && hasValidZoneLocation(fresh.zoneLocation) && fresh.dailyBonusCredited) {
+      message = 'Journée déjà validée pour cette date.';
+    }
+
+    return res.json({
+      message,
+      daily: fresh || doc,
+      dailyPresence,
+      dayCompleted: hasValidZoneLocation(fresh?.zoneLocation),
+      dailyPresenceBonusXof: agentConfig.DAILY_PRESENCE_BONUS_XOF,
+    });
   } catch (err) {
     return res.status(500).json({ message: 'Erreur sauvegarde journalière', error: err.message });
   }
@@ -650,7 +772,7 @@ exports.getAgentReferralStatsForAdmin = async (req, res) => {
 
     // Somme de tous les gains (hors retraits)
     const earningsAgg = await AgentEarning.aggregate([
-      { $match: { agent: referrerId, type: { $in: COMMISSION_TYPES } } },
+      { $match: { agent: referrerId, type: { $in: EARNING_CREDIT_TYPES } } },
       { $group: { _id: null, total: { $sum: '$amount' } } }
     ]);
     const totalEarnings = earningsAgg[0]?.total || 0;
@@ -734,7 +856,7 @@ exports.registerAgentWithdrawal = async (req, res) => {
 
     // Calculer le solde actuel (gains - retraits déjà enregistrés)
     const earningsAgg = await AgentEarning.aggregate([
-      { $match: { agent: agent._id, type: { $in: COMMISSION_TYPES } } },
+      { $match: { agent: agent._id, type: { $in: EARNING_CREDIT_TYPES } } },
       { $group: { _id: null, total: { $sum: '$amount' } } }
     ]);
     const totalEarnings = earningsAgg[0]?.total || 0;
@@ -773,13 +895,120 @@ exports.getAllWithdrawalsForAdmin = async (req, res) => {
     }
 
     const rows = await AgentEarning.find(match)
-      .populate('agent', 'nom prenoms email')
+      .populate('agent', 'nom prenoms email telephone typeAgent referralCode')
       .sort({ createdAt: -1 })
       .lean();
 
-    return res.json(rows);
+    const agentIds = [...new Set(rows.map((r) => String(r.agent?._id || r.agent)).filter(Boolean))];
+    const balanceByAgent = {};
+    await Promise.all(
+      agentIds.map(async (aid) => {
+        const oid = new mongoose.Types.ObjectId(aid);
+        const earningsAgg = await AgentEarning.aggregate([
+          { $match: { agent: oid, type: { $in: EARNING_CREDIT_TYPES } } },
+          { $group: { _id: null, total: { $sum: '$amount' } } },
+        ]);
+        const withdrawnAgg = await AgentEarning.aggregate([
+          { $match: { agent: oid, type: 'withdrawal' } },
+          { $group: { _id: null, total: { $sum: '$amount' } } },
+        ]);
+        const totalEarnings = earningsAgg[0]?.total || 0;
+        const totalWithdrawn = withdrawnAgg[0]?.total || 0;
+        balanceByAgent[aid] = { totalEarnings, totalWithdrawn, currentBalance: totalEarnings - totalWithdrawn };
+      })
+    );
+
+    const byAgentChrono = {};
+    for (const row of rows) {
+      const aid = String(row.agent?._id || row.agent || '');
+      if (!aid) continue;
+      if (!byAgentChrono[aid]) byAgentChrono[aid] = [];
+      byAgentChrono[aid].push(row);
+    }
+    const runningBalance = {};
+    for (const aid of Object.keys(byAgentChrono)) {
+      let balance = balanceByAgent[aid]?.totalEarnings ?? 0;
+      const list = byAgentChrono[aid].sort(
+        (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      );
+      for (const w of list) {
+        const before = balance;
+        balance -= w.amount || 0;
+        runningBalance[String(w._id)] = { balanceBefore: before, balanceAfter: balance };
+      }
+    }
+
+    const totalAmount = rows.reduce((s, r) => s + (r.amount || 0), 0);
+    const detailed = rows.map((r) => {
+      const aid = String(r.agent?._id || r.agent || '');
+      const bal = balanceByAgent[aid] || { totalEarnings: 0, totalWithdrawn: 0, currentBalance: 0 };
+      const run = runningBalance[String(r._id)] || { balanceBefore: null, balanceAfter: null };
+      return {
+        _id: r._id,
+        amount: r.amount,
+        currency: r.currency || 'XOF',
+        createdAt: r.createdAt,
+        agent: r.agent
+          ? {
+              _id: r.agent._id,
+              nom: r.agent.nom,
+              prenoms: r.agent.prenoms,
+              email: r.agent.email,
+              telephone: r.agent.telephone || null,
+              typeAgent: r.agent.typeAgent || 'Tranoo',
+              referralCode: r.agent.referralCode || null,
+            }
+          : null,
+        agentCurrentBalance: bal.currentBalance,
+        agentTotalEarnings: bal.totalEarnings,
+        agentTotalWithdrawn: bal.totalWithdrawn,
+        balanceBeforeWithdrawal: run.balanceBefore,
+        balanceAfterWithdrawal: run.balanceAfter,
+        label: 'Retrait manuel admin',
+      };
+    });
+
+    return res.json({
+      withdrawals: detailed,
+      summary: {
+        count: detailed.length,
+        totalAmount,
+        agentsCount: agentIds.length,
+      },
+    });
   } catch (err) {
     return res.status(500).json({ message: 'Erreur chargement historiques retraits', error: err.message });
+  }
+};
+
+/** Crédite rétroactivement les primes journalières pour les GPS déjà enregistrés. */
+exports.backfillDailyPresenceBonuses = async (req, res) => {
+  try {
+    const logs = await AgentDailyLog.find({
+      dailyBonusCredited: { $ne: true },
+      'zoneLocation.lat': { $ne: null },
+      'zoneLocation.lng': { $ne: null },
+    })
+      .select('agent dateKey')
+      .lean();
+
+    let credited = 0;
+    let skipped = 0;
+    for (const log of logs) {
+      const result = await tryCreditDailyPresenceBonus(log.agent, log.dateKey);
+      if (result.credited) credited += 1;
+      else skipped += 1;
+    }
+
+    return res.json({
+      message: 'Rétroactivité des présences journalières terminée',
+      scanned: logs.length,
+      credited,
+      skipped,
+      bonusXof: agentConfig.DAILY_PRESENCE_BONUS_XOF,
+    });
+  } catch (err) {
+    return res.status(500).json({ message: 'Erreur rétroactivité présence', error: err.message });
   }
 };
 
@@ -908,8 +1137,38 @@ exports.getConsolidatedAdminStats = async (req, res) => {
     ]);
     const totalWithdrawn = withdrawalsAgg[0]?.total || 0;
 
+    const presenceAgg = await AgentEarning.aggregate([
+      {
+        $match: {
+          agent: { $in: agentIds },
+          type: 'daily_presence',
+          createdAt: { $gte: fromDate, $lte: toDate },
+        },
+      },
+      { $group: { _id: null, total: { $sum: '$amount' } } },
+    ]);
+    const totalDailyPresence = presenceAgg[0]?.total || 0;
+
+    const referralSignupAgg = await AgentEarning.aggregate([
+      {
+        $match: {
+          agent: { $in: agentIds },
+          type: 'referral_signup',
+          createdAt: { $gte: fromDate, $lte: toDate },
+        },
+      },
+      { $group: { _id: null, total: { $sum: '$amount' } } },
+    ]);
+    const totalReferralSignup = referralSignupAgg[0]?.total || 0;
+
     const totalByAgent = await AgentEarning.aggregate([
-      { $match: { agent: { $in: agentIds }, type: { $in: ['commission_publicite', 'commission_subscription'] }, createdAt: { $gte: fromDate, $lte: toDate } } },
+      {
+        $match: {
+          agent: { $in: agentIds },
+          type: { $in: EARNING_CREDIT_TYPES },
+          createdAt: { $gte: fromDate, $lte: toDate },
+        },
+      },
       { $group: { _id: '$agent', total: { $sum: '$amount' } } },
       { $sort: { total: -1 } },
     ]);
@@ -1011,9 +1270,15 @@ exports.getConsolidatedAdminStats = async (req, res) => {
         agents: agents.length,
         activeAgents,
         inactiveAgents,
-        totalGenerer: kpiTotals.totalRevenueSubscription + kpiTotals.totalRevenueCampagne,
+        totalGenerer:
+          kpiTotals.totalRevenueSubscription +
+          kpiTotals.totalRevenueCampagne +
+          totalDailyPresence +
+          totalReferralSignup,
         totalRevenueSubscription: kpiTotals.totalRevenueSubscription,
         totalRevenueCampagne: kpiTotals.totalRevenueCampagne,
+        totalDailyPresence,
+        totalReferralSignup,
         abonnementsVendus: kpiTotals.abonnementsVendus,
         campagnesLancees: kpiTotals.campagnesLancees,
         campagnesDemandees: kpiTotals.campagnesDemandees,
@@ -1049,16 +1314,24 @@ exports.getAgentProDailyMonitorForAdmin = async (req, res) => {
     const dailyLog = await AgentDailyLog.findOne({ agent: id, dateKey: selectedDate }).lean();
     const kpis = await computeKpisForRangeV2({ agentId: agent._id, start: dayStart, end: dayEnd });
 
-    const history = await AgentDailyLog.find({
+    const fromKey = fromDate.toISOString().slice(0, 10);
+    const toKey = toDate.toISOString().slice(0, 10);
+    const historyPage = Math.max(1, parseInt(req.query.historyPage, 10) || 1);
+    const historyLimit = Math.min(
+      50,
+      Math.max(5, parseInt(req.query.historyLimit, 10) || 10)
+    );
+    const historySkip = (historyPage - 1) * historyLimit;
+    const historyFilter = {
       agent: id,
-      dateKey: {
-        $gte: fromDate.toISOString().slice(0, 10),
-        $lte: toDate.toISOString().slice(0, 10),
-      },
-    })
+      dateKey: { $gte: fromKey, $lte: toKey },
+    };
+    const historyTotal = await AgentDailyLog.countDocuments(historyFilter);
+    const historyItems = await AgentDailyLog.find(historyFilter)
       .sort({ dateKey: -1 })
-      .limit(120)
-      .select('dateKey zoneText prospectsApproached adminObservation updatedAt')
+      .skip(historySkip)
+      .limit(historyLimit)
+      .select('dateKey zoneText prospectsApproached adminObservation updatedAt dailyBonusCredited')
       .lean();
 
     const stats = await AgentEarning.aggregate([
@@ -1068,7 +1341,7 @@ exports.getAgentProDailyMonitorForAdmin = async (req, res) => {
           _id: null,
           totalEarnings: {
             $sum: {
-              $cond: [{ $in: ['$type', COMMISSION_TYPES] }, '$amount', 0],
+              $cond: [{ $in: ['$type', EARNING_CREDIT_TYPES] }, '$amount', 0],
             },
           },
           totalWithdrawn: {
@@ -1106,7 +1379,13 @@ exports.getAgentProDailyMonitorForAdmin = async (req, res) => {
         adminObservation: dailyLog?.adminObservation || '',
         ...kpis,
       },
-      history,
+      history: {
+        items: historyItems,
+        page: historyPage,
+        limit: historyLimit,
+        total: historyTotal,
+        totalPages: Math.max(1, Math.ceil(historyTotal / historyLimit)),
+      },
       balance: {
         totalEarnings,
         totalWithdrawn,

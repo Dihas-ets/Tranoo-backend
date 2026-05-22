@@ -38,10 +38,18 @@ async function getSellerTrialEndDate(user) {
 
 async function syncSellerPieceVisibility(userId, allowed) {
   if (allowed) {
+    const { VIEWS_PER_HOUR } = require('../utils/articleViews');
     await Article.updateMany(
       { type: 'piece', vendeur: userId, subscriptionLocked: true },
       {
-        $set: { subscriptionLocked: false, subscriptionLockedAt: null, statut: 'en_ligne' },
+        $set: {
+          subscriptionLocked: false,
+          subscriptionLockedAt: null,
+          statut: 'en_ligne',
+          autoViewsStartedAt: new Date(),
+          autoViewsTarget: VIEWS_PER_HOUR,
+          autoViewsCompleted: false,
+        },
       },
     );
     return;

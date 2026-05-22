@@ -126,6 +126,8 @@ exports.updateStatut = async (req, res) => {
           }
 
           article.statut = 'en_ligne';
+          const { initAutoViewsSchedule } = require('../utils/articleViews');
+          initAutoViewsSchedule(article, { resetTimer: true });
 
           if (publicite.typePub === 'Sponsorisée') {
             article.sponsorise = true;

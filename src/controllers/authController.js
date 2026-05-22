@@ -30,7 +30,10 @@ exports.register = async (req, res) => {
       dureeContratMois,
       password,
       referralCode, // Code de parrainage optionnel
-      vehicule // Objet véhicule (livreur/chauffeur)
+      vehicule, // Objet véhicule (livreur/chauffeur)
+      latitude,
+      longitude,
+      fournisseurProfil,
     } = req.body;
 
     // Cas spécial : création d'admin ou agent commercial via dashboard (avec mot de passe)
@@ -371,6 +374,11 @@ exports.register = async (req, res) => {
     console.log('[REGISTER] Utilisateur non trouvé, création...');
 
     console.log('[REGISTER] Création objet utilisateur MongoDB...');
+    const parsedLat = latitude != null ? Number(latitude) : null;
+    const parsedLng = longitude != null ? Number(longitude) : null;
+    const hasCoords =
+      Number.isFinite(parsedLat) && Number.isFinite(parsedLng);
+
     user = new User({
       uid,
       nom,
@@ -384,10 +392,14 @@ exports.register = async (req, res) => {
       entreprise,
       registreCommerce,
       numeroIFU,
-      entrepriseProvenance,
+      entrepriseProvenance: entrepriseProvenance || null,
       adresse,
       ville,
       photo,
+      fournisseurProfil:
+        fournisseurProfil && typeof fournisseurProfil === 'object'
+          ? fournisseurProfil
+          : undefined,
       typeAdmin,
       statutContrat,
       typeAgent: role === 'agentCommercial' ? (typeAgent || null) : null,
@@ -405,6 +417,14 @@ exports.register = async (req, res) => {
         urlPhoto: vehicule.urlPhoto || null,
       } : undefined,
     });
+
+    if (hasCoords) {
+      user.location = {
+        type: 'Point',
+        coordinates: [parsedLng, parsedLat],
+      };
+      user.lastLocationAt = new Date();
+    }
 
     console.log('[REGISTER] Sauvegarde initiale dans MongoDB...');
     try {
@@ -490,7 +510,8 @@ exports.startWebSession = async (req, res) => {
   try {
     const user = req.user;
     const now = Date.now();
-    const idleMs = Number(process.env.WEB_SESSION_IDLE_MS || 10 * 60 * 1000);
+    const authConfig = require('../config/authConfig');
+    const idleMs = authConfig.WEB_SESSION_IDLE_MS;
     const sessionId =
       typeof crypto.randomUUID === 'function'
         ? crypto.randomUUID()

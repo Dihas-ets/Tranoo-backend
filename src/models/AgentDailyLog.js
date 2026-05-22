@@ -12,6 +12,9 @@ const AgentDailyLogSchema = new mongoose.Schema(
       capturedAt: { type: Date, default: null },
     },
     prospectsApproached: { type: Number, default: 0, min: 0 },
+    /** Journée terrain validée (localisation GPS enregistrée). */
+    dayCompletedAt: { type: Date, default: null },
+    dailyBonusCredited: { type: Boolean, default: false },
     adminObservation: { type: String, default: '' },
     adminObservationUpdatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     adminObservationUpdatedAt: { type: Date, default: null },

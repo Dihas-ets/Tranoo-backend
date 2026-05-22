@@ -676,7 +676,20 @@ exports.getMyFavorites = async (req, res) => {
 // Met à jour les informations du profil de l'utilisateur connecté
 exports.updateMe = async (req, res) => {
   try {
-    const allowedFields = ['nom', 'prenoms', 'entreprise', 'email', 'telephone', 'photo', 'vendeurType'];
+    const allowedFields = [
+      'nom',
+      'prenoms',
+      'entreprise',
+      'email',
+      'telephone',
+      'photo',
+      'vendeurType',
+      'adresse',
+      'ville',
+      'latitude',
+      'longitude',
+      'fournisseurProfil',
+    ];
     const updates = {};
     allowedFields.forEach((field) => {
       if (req.body[field] !== undefined) updates[field] = req.body[field];
@@ -687,6 +700,26 @@ exports.updateMe = async (req, res) => {
     }
 
     const user = req.user;
+
+    if (req.body.latitude != null && req.body.longitude != null) {
+      const lat = Number(req.body.latitude);
+      const lng = Number(req.body.longitude);
+      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+        user.location = { type: 'Point', coordinates: [lng, lat] };
+        user.lastLocationAt = new Date();
+      }
+    }
+    if (req.body.fournisseurProfil !== undefined) {
+      const prev =
+        user.fournisseurProfil && typeof user.fournisseurProfil.toObject === 'function'
+          ? user.fournisseurProfil.toObject()
+          : { ...(user.fournisseurProfil || {}) };
+      user.fournisseurProfil = { ...prev, ...req.body.fournisseurProfil };
+      if (user.telephone && !user.fournisseurProfil.telephone) {
+        user.fournisseurProfil.telephone = user.telephone;
+      }
+    }
+
     // Validation vendeurType
     if (Object.prototype.hasOwnProperty.call(updates, 'vendeurType')) {
       if (user.role !== 'vendeur') {
@@ -698,6 +731,14 @@ exports.updateMe = async (req, res) => {
         return res.status(400).json({ message: 'vendeurType invalide' });
       }
     }
+    if (updates.telephone) {
+      const prevFp =
+        user.fournisseurProfil && typeof user.fournisseurProfil.toObject === 'function'
+          ? user.fournisseurProfil.toObject()
+          : { ...(user.fournisseurProfil || {}) };
+      user.fournisseurProfil = { ...prevFp, telephone: updates.telephone };
+    }
+
     const emailChanged = updates.email && updates.email !== user.email;
     Object.assign(user, updates);
     await user.save();

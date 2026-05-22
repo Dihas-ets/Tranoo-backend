@@ -147,7 +147,8 @@ module.exports = async function (req, res, next) {
       const webSessionId = String(req.headers['x-web-session-id'] || '');
       const currentSessionId = user?.webSession?.sessionId || null;
       const lastActivityAt = user?.webSession?.lastActivityAt ? new Date(user.webSession.lastActivityAt).getTime() : null;
-      const idleMs = Number(process.env.WEB_SESSION_IDLE_MS || 10 * 60 * 1000);
+      const authConfig = require('../config/authConfig');
+      const idleMs = authConfig.WEB_SESSION_IDLE_MS;
       const now = Date.now();
       const isSessionBootstrapRoute =
         req.originalUrl.includes('/api/protected/me') ||

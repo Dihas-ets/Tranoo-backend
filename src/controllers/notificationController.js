@@ -63,9 +63,9 @@ exports.createNotification = async (
           message: String(message ?? ''),
           ...fcmSafeData,
         };
-        const isAlertePush = String(type ?? '') === 'alerte';
-        // Alertes : push data-only pour que l'app affiche tout de suite la notif
-        // « appel » (fullScreenIntent) en arrière-plan, pas seulement au retour.
+        const urgentTypes = ['alerte', 'proposition_alerte'];
+        const isAlertePush = urgentTypes.includes(String(type ?? ''));
+        // Alertes / propositions : push data-only → notif locale avec son + plein écran.
         const fcmMessage = {
           token: recipient.fcmToken,
           data: fcmData,
