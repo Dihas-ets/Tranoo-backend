@@ -8,6 +8,8 @@ const { getAchatsByAcheteur, updateDateLivraison } = require('../controllers/art
 router.post('/', authMiddleware, articleController.createArticle);
 // Lister les articles (public ou authentifié)
 router.get('/', articleController.getArticles);
+// Acheteur (paiement vérification) — avant /:id générique
+router.get('/:id/verification-buyer', authMiddleware, articleController.getVerificationBuyer);
 // Détail d'un article
 router.get('/:id', articleController.getArticleById);
 // Mettre à jour un article (authentifié)

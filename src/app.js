@@ -517,6 +517,14 @@ try {
   console.warn('Verification pricing routes non chargées:', e.message);
 }
 
+// Documents partagés (admin dashboard)
+try {
+  const adminDocumentsRoutes = require('./routes/adminDocuments');
+  app.use('/api/admin/documents', adminDocumentsRoutes);
+} catch (e) {
+  console.warn('Admin documents routes non chargées:', e.message);
+}
+
 // Referral routes
 try {
   const referralRoutes = require('./routes/referral');

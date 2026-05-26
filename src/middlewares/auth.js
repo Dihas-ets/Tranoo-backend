@@ -21,6 +21,32 @@ const admin = require('firebase-admin');
 const User = require('../models/User');
 const AuthEvent = require('../models/AuthEvent');
 
+const DASHBOARD_ADMIN_KEYS = new Set([
+  'admin',
+  'superAdmin',
+  'principal',
+  'gestionnaire',
+  'moderateur',
+  'marketing',
+  'responsableService',
+  'responsablePaiement',
+]);
+
+function isDashboardPaymentsAdmin(user) {
+  if (!user) return false;
+  if (String(user.role) === 'admin') return true;
+  const key = user.typeAdmin || user.role;
+  return DASHBOARD_ADMIN_KEYS.has(String(key || ''));
+}
+
+/** GET liste ou détail paiement (dashboard historique). */
+function isAdminPaymentsReadRoute(originalUrl, method) {
+  if (method !== 'GET') return false;
+  const path = String(originalUrl || '').split('?')[0];
+  if (path === '/api/payments') return true;
+  return /^\/api\/payments\/[^/]+\/details$/.test(path);
+}
+
 module.exports = async function (req, res, next) {
   console.log('[AUTH] ===== DÉBUT AUTHENTIFICATION =====');
   console.log('[AUTH] Route:', req.method, req.path);
@@ -143,7 +169,16 @@ module.exports = async function (req, res, next) {
 
     // Politique session web: 1 seule session à la fois + expiration par inactivité
     const clientPlatform = String(req.headers['x-client-platform'] || '').toLowerCase();
-    if (clientPlatform === 'web') {
+    const skipWebSessionCheck =
+      clientPlatform === 'web' &&
+      isDashboardPaymentsAdmin(user) &&
+      isAdminPaymentsReadRoute(req.originalUrl, req.method);
+
+    if (skipWebSessionCheck) {
+      console.log('[AUTH] Lecture paiements admin — session web non exigée:', req.originalUrl);
+    }
+
+    if (clientPlatform === 'web' && !skipWebSessionCheck) {
       const webSessionId = String(req.headers['x-web-session-id'] || '');
       const currentSessionId = user?.webSession?.sessionId || null;
       const lastActivityAt = user?.webSession?.lastActivityAt ? new Date(user.webSession.lastActivityAt).getTime() : null;

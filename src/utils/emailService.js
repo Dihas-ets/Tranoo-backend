@@ -207,7 +207,7 @@ function buildVerificationEmailHtml({ user, title, message, details, date, artic
 `;
 }
 
-async function sendMail({ to, subject, html }) {
+async function sendMail({ to, subject, html, attachments = [] }) {
   const transport = getTransporter();
   if (!transport) {
     console.warn('[EMAIL] Transporter non disponible, email ignoré.');
@@ -221,6 +221,7 @@ async function sendMail({ to, subject, html }) {
     to,
     subject,
     html,
+    attachments,
   });
 
   console.log('[EMAIL] Message envoyé:', info.messageId);

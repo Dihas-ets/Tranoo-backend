@@ -1,5 +1,7 @@
+const mongoose = require('mongoose');
 const Article = require('../models/Article');
 const User = require('../models/User');
+const Payment = require('../models/Payment');
 const Subscription = require('../models/Subscription');
 const SubscriptionPricing = require('../models/SubscriptionPricing');
 const cloudinary = require('cloudinary').v2;
@@ -28,6 +30,63 @@ const {
   scheduleNewArticleSideEffects,
   initAutoViewsSchedule,
 } = require('../services/articlePublishService');
+
+function isAlertProposalArticle(articleOrBody) {
+  const buyerId = articleOrBody?.alertContext?.buyerId;
+  return buyerId != null && String(buyerId).trim() !== '';
+}
+
+function applyPublicCatalogFilter(filter, req) {
+  const isSellerBrowsingOwnStock =
+    req.user?.role === 'vendeur' &&
+    filter.vendeur &&
+    String(filter.vendeur) === String(req.user._id);
+  if (req.user?.role === 'admin' || isSellerBrowsingOwnStock) {
+    return;
+  }
+  filter.$and = filter.$and || [];
+  filter.$and.push({
+    $or: [
+      { 'alertContext.buyerId': { $exists: false } },
+      { 'alertContext.buyerId': null },
+    ],
+  });
+}
+
+async function notifyBuyerAlertProposal(article, sellerId) {
+  if (!isAlertProposalArticle(article)) return;
+  try {
+    const notificationController = require('./notificationController');
+    const isPiece = (article.type || '').toString().toLowerCase() === 'piece';
+    const detailPath = isPiece ? 'mastervac' : 'cars_info';
+    await notificationController.createNotification(
+      article.alertContext.buyerId,
+      sellerId,
+      'Une proposition correspond a votre alerte',
+      `Votre alerte a recu une nouvelle proposition: "${article.titre}".`,
+      'proposition_alerte',
+      article._id,
+      'Article',
+      {
+        action: 'view_proposal',
+        ctaLabel: 'Voir la proposition',
+        targetArticleId: article._id.toString(),
+        targetType: article.type,
+        targetPath: detailPath,
+        articleTitle: article.titre || '',
+        thumbnailUrl:
+          Array.isArray(article.photos) && article.photos.length > 0
+            ? article.photos[0]
+            : '',
+        sourceNotificationId: article.alertContext.sourceNotificationId
+          ? article.alertContext.sourceNotificationId.toString()
+          : null,
+      },
+    );
+  } catch (buyerNotifError) {
+    console.error('[ARTICLE] Erreur notification proposition alerte:', buyerNotifError);
+  }
+}
 
 function withVideoTransforms(doc) {
   if (!doc) return doc;
@@ -101,7 +160,11 @@ exports.createArticle = async (req, res) => {
     });
     initAutoViewsSchedule(article);
     await article.save();
-    scheduleNewArticleSideEffects(article, vendeurId);
+    if (isAlertProposalArticle(article)) {
+      await notifyBuyerAlertProposal(article, vendeurId);
+    } else {
+      scheduleNewArticleSideEffects(article, vendeurId);
+    }
     if ((article.type || '').toString().toLowerCase() === 'piece') {
       console.log(
         '[ARTICLE_CREATE][PIECE] saved fournisseur=%j lieu=%s localisation=%s',
@@ -213,6 +276,8 @@ exports.getArticles = async (req, res) => {
       filter.statutVente = 'vendu';
     }
 
+    applyPublicCatalogFilter(filter, req);
+
     // LOG DEBUG
     console.log('USER:', req.user);
     console.log('FILTER:', filter);
@@ -227,6 +292,56 @@ exports.getArticles = async (req, res) => {
 
 // Alias public qui réutilise la même logique que getArticles
 exports.getArticlesPublic = (req, res) => exports.getArticles(req, res);
+
+/** Acheteur ayant payé la vérification pour cet article (dernier paiement success). */
+exports.getVerificationBuyer = async (req, res) => {
+  try {
+    const articleId = req.params.id;
+    if (!mongoose.Types.ObjectId.isValid(articleId)) {
+      return res.status(400).json({ success: false, message: 'ID article invalide' });
+    }
+
+    const payment = await Payment.findOne({
+      status: 'success',
+      type: 'verification',
+      customId: new RegExp(`VERIFICATION_${articleId}`, 'i'),
+    })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    if (!payment?.user) {
+      return res.status(404).json({
+        success: false,
+        message: 'Aucun paiement de vérification trouvé pour cet article',
+      });
+    }
+
+    const user = await User.findById(payment.user)
+      .select('nom prenoms email telephone')
+      .lean();
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'Acheteur introuvable' });
+    }
+
+    return res.json({
+      success: true,
+      user: {
+        _id: String(user._id),
+        fullName: `${user.prenoms || ''} ${user.nom || ''}`.trim() || 'Client',
+        email: user.email || null,
+        telephone: user.telephone || null,
+      },
+      paymentId: String(payment._id),
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Erreur lors de la récupération de l\'acheteur',
+      error: error.message,
+    });
+  }
+};
 
 // Détail d'un article
 exports.getArticleById = async (req, res) => {
@@ -396,42 +511,11 @@ exports.updateStatut = async (req, res) => {
       }
     }
 
-    if (
-      nextStatut === 'en_ligne' &&
-      article.alertContext &&
-      article.alertContext.buyerId
-    ) {
-      try {
-        const notificationController = require('./notificationController');
-        const isPiece = (article.type || '').toString().toLowerCase() === 'piece';
-        const detailPath = isPiece ? 'mastervac' : 'cars_info';
-        await notificationController.createNotification(
-          article.alertContext.buyerId,
-          req.user._id,
-          'Une proposition correspond a votre alerte',
-          `Votre alerte a recu une nouvelle proposition: "${article.titre}".`,
-          'proposition_alerte',
-          article._id,
-          'Article',
-          {
-            action: 'view_proposal',
-            ctaLabel: 'Voir la proposition',
-            targetArticleId: article._id.toString(),
-            targetType: article.type,
-            targetPath: detailPath,
-            articleTitle: article.titre || '',
-            thumbnailUrl:
-              Array.isArray(article.photos) && article.photos.length > 0
-                ? article.photos[0]
-                : '',
-            sourceNotificationId: article.alertContext.sourceNotificationId
-              ? article.alertContext.sourceNotificationId.toString()
-              : null,
-          }
-        );
-      } catch (buyerNotifError) {
-        console.error('[ARTICLE] Erreur notification acheteur apres validation:', buyerNotifError);
-      }
+    if (nextStatut === 'en_ligne' && previousStatut !== 'en_ligne' && isAlertProposalArticle(article)) {
+      const sellerId =
+        article.vendeur?.toString?.() ||
+        (article.vendeur ? String(article.vendeur) : req.user._id.toString());
+      await notifyBuyerAlertProposal(article, sellerId);
     }
 
     if (nextStatut === 'rejeté' && article.vendeur) {

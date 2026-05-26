@@ -326,8 +326,8 @@ exports.completeReferral = async (req, res) => {
 exports.getAllReferrals = async (_req, res) => {
   try {
     const referrals = await Referral.find()
-      .populate('referrerId', 'nom prenoms email')
-      .populate('referredId', 'nom prenoms email')
+      .populate('referrerId', 'nom prenoms email role referralCode typeAgent')
+      .populate('referredId', 'nom prenoms email role')
       .sort({ createdAt: -1 });
     
     res.status(200).json(referrals);

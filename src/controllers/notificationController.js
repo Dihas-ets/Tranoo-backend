@@ -1,8 +1,27 @@
+const axios = require('axios');
 const Notification = require('../models/Notification');
 const User = require('../models/User');
 const Article = require('../models/Article');
+const Payment = require('../models/Payment');
 const admin = require('firebase-admin');
 const { sendMail, buildVerificationEmailHtml } = require('../utils/emailService');
+const {
+  extractVerificationBodyFragment,
+  plainTextFromHtml,
+} = require('../utils/verificationMessage');
+
+async function resolveVerificationBuyerUser(articleId) {
+  if (!articleId) return null;
+  const payment = await Payment.findOne({
+    status: 'success',
+    type: 'verification',
+    customId: new RegExp(`VERIFICATION_${articleId}`, 'i'),
+  })
+    .sort({ createdAt: -1 })
+    .lean();
+  if (!payment?.user) return null;
+  return User.findById(payment.user);
+}
 
 // Créer une notification générique
 exports.createNotification = async (
@@ -468,9 +487,48 @@ exports.createVerificationNotificationHTTP = async (req, res) => {
 };
 
 // Créer un message administrateur générique (verification/alert/promotion/notification)
+async function sendFcmForNotification(user, notification, { title, message, type }) {
+  if (!user?.fcmToken) return;
+  try {
+    const fcmData = {
+      type: String(type ?? 'general'),
+      notificationId: String(notification._id),
+      title: String(title ?? ''),
+      message: String(message ?? '').replace(/<[^>]+>/g, ' ').slice(0, 500),
+    };
+    const fcmMessage = {
+      token: user.fcmToken,
+      data: fcmData,
+      notification: {
+        title: String(title ?? ''),
+        body: String(message ?? '').replace(/<[^>]+>/g, ' ').slice(0, 200),
+      },
+      android: { priority: 'high' },
+    };
+    await admin.messaging().send(fcmMessage);
+  } catch (error) {
+    console.error('[ADMIN MSG] Erreur push FCM:', error?.message || error);
+  }
+}
+
 exports.createAdminMessageHTTP = async (req, res) => {
   try {
-    const { type = 'general', recipient, title, message, details, date, images = [], stampUrl, signatureUrl, articleId } = req.body;
+    const {
+      type = 'general',
+      recipient,
+      title,
+      message,
+      details,
+      date,
+      images = [],
+      stampUrl,
+      signatureUrl,
+      articleId,
+      bodyHtml,
+      pdfUrl,
+      sendEmail: sendEmailBody,
+      sendNotification: sendNotificationBody,
+    } = req.body;
 
     if (!req.user) {
       return res.status(401).json({ message: 'Non authentifié' });
@@ -485,7 +543,10 @@ exports.createAdminMessageHTTP = async (req, res) => {
 
     console.log('[ADMIN MSG] Recherche destinataire:', recipient);
     let user = null;
-    if (recipient.userId) user = await User.findById(recipient.userId);
+    if (recipient.userId) {
+      user = await User.findById(recipient.userId);
+      if (user) console.log('[ADMIN MSG] Utilisateur trouvé par userId:', recipient.userId);
+    }
     if (!user && recipient.phone) user = await User.findOne({ telephone: recipient.phone });
     if (!user && recipient.idOrEmail) {
       try {
@@ -501,11 +562,30 @@ exports.createAdminMessageHTTP = async (req, res) => {
       console.error('[ADMIN MSG] Destinataire introuvable pour:', recipient);
       return res.status(404).json({ message: 'Destinataire introuvable' });
     }
-    console.log('[ADMIN MSG] Destinataire trouvé:', user.email, user._id.toString());
 
     let normalizedType = String(type).toLowerCase();
     if (normalizedType === 'alert') normalizedType = 'alerte';
     if (normalizedType === 'notification') normalizedType = 'general';
+
+    if (normalizedType === 'verification' && articleId) {
+      const buyer = await resolveVerificationBuyerUser(articleId);
+      if (buyer) {
+        user = buyer;
+        console.log(
+          '[ADMIN MSG] Destinataire vérification = acheteur (paiement):',
+          user.email,
+          user._id.toString()
+        );
+      } else {
+        console.warn(
+          '[ADMIN MSG] Paiement vérification introuvable pour article',
+          articleId,
+          '— destinataire saisi conservé'
+        );
+      }
+    }
+
+    console.log('[ADMIN MSG] Destinataire trouvé:', user.email, user._id.toString());
 
     // Détermination du sender (ObjectId ou email/uid fallback)
     let senderId = null;
@@ -555,14 +635,48 @@ exports.createAdminMessageHTTP = async (req, res) => {
       }
     }
 
-    const notification = new Notification(notifDoc);
-    await notification.save();
-    console.log('[ADMIN MSG] Notification enregistrée en base avec ID:', notification._id.toString());
+    const sendEmailFlag = !!sendEmailBody;
+    const sendNotificationFlag =
+      sendNotificationBody === undefined || sendNotificationBody === null
+        ? true
+        : !!sendNotificationBody;
 
-    // ENVOI EMAIL (Uniquement pour type "verification" côté web admin, et si sendEmail !== false)
-    const sendEmailFlag = req.body && Object.prototype.hasOwnProperty.call(req.body, 'sendEmail')
-      ? !!req.body.sendEmail
-      : normalizedType === 'verification';
+    const htmlForEmail =
+      bodyHtml && String(bodyHtml).trim()
+        ? String(bodyHtml)
+        : null;
+    const pdfUrlClean =
+      pdfUrl && String(pdfUrl).trim() ? String(pdfUrl).trim() : null;
+    const fragmentHtml = htmlForEmail
+      ? extractVerificationBodyFragment(htmlForEmail)
+      : extractVerificationBodyFragment(message);
+    const plainMessage =
+      plainTextFromHtml(message) ||
+      plainTextFromHtml(fragmentHtml) ||
+      String(message).replace(/<[^>]+>/g, ' ').trim();
+
+    if (normalizedType === 'verification') {
+      notifDoc.message = plainMessage;
+      notifDoc.data = {
+        ...(notifDoc.data && typeof notifDoc.data === 'object' ? notifDoc.data : {}),
+        bodyHtml: fragmentHtml || plainMessage,
+        pdfUrl: pdfUrlClean,
+        channelEmail: sendEmailFlag,
+        channelNotification: sendNotificationFlag,
+      };
+    }
+
+    let notification = null;
+    if (sendNotificationFlag) {
+      notification = new Notification(notifDoc);
+      await notification.save();
+      console.log('[ADMIN MSG] Notification enregistrée en base avec ID:', notification._id.toString());
+      await sendFcmForNotification(user, notification, {
+        title,
+        message: plainMessage,
+        type: normalizedType,
+      });
+    }
 
     if (normalizedType === 'verification' && sendEmailFlag) {
       try {
@@ -570,19 +684,43 @@ exports.createAdminMessageHTTP = async (req, res) => {
           const article =
             articleId ? await Article.findById(articleId).select('titre type') : null;
 
-          const html = buildVerificationEmailHtml({
-            user,
-            title,
-            message,
-            details,
-            date,
-            article,
-          });
+          const html =
+            htmlForEmail ||
+            buildVerificationEmailHtml({
+              user,
+              title,
+              message: plainMessage,
+              details,
+              date,
+              article,
+            });
+
+          const mailAttachments = [];
+          if (pdfUrlClean) {
+            try {
+              const pdfResp = await axios.get(pdfUrlClean, {
+                responseType: 'arraybuffer',
+                timeout: 30000,
+              });
+              mailAttachments.push({
+                filename: 'rapport-verification-tranoo.pdf',
+                content: Buffer.from(pdfResp.data),
+                contentType: 'application/pdf',
+              });
+            } catch (pdfErr) {
+              console.warn('[ADMIN MSG] PDF email non joint:', pdfErr?.message);
+            }
+          }
+
+          const emailHtml = pdfUrlClean
+            ? `${html}<p style="margin-top:16px;font-size:14px;"><a href="${pdfUrlClean}">Télécharger le rapport PDF</a></p>`
+            : html;
 
           await sendMail({
             to: user.email,
             subject: `[Vérification] ${title}`,
-            html,
+            html: emailHtml,
+            attachments: mailAttachments,
           });
           console.log('[ADMIN MSG] Email envoyé à', user.email);
         } else {
@@ -593,7 +731,11 @@ exports.createAdminMessageHTTP = async (req, res) => {
       }
     }
 
-    res.status(201).json({ message: 'Message enregistré', notification });
+    res.status(201).json({
+      message: 'Message enregistré',
+      notification,
+      channels: { email: sendEmailFlag, notification: sendNotificationFlag },
+    });
   } catch (error) {
     console.error('[ADMIN MSG] Erreur création:', error, error?.message, error?.stack);
     res.status(500).json({ message: 'Erreur lors de la création du message', details: error?.message });

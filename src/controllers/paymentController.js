@@ -1156,8 +1156,15 @@ exports.getTransaction = async (req, res) => {
     let userDoc = null;
     const userId = typeof payment.user === 'string' ? payment.user : null;
     if (userId && isObjectIdLike(userId)) {
-      userDoc = await User.findById(userId).select('nom prenoms email').lean();
+      userDoc = await User.findById(userId).select('nom prenoms email telephone').lean();
     }
+
+    const fromIds = String(payment.customId || payment.transactionId || '');
+    const verificationArticleMatch = fromIds.match(/VERIFICATION_([a-f0-9]{24})_/i);
+    const articleId =
+      verificationArticleMatch && verificationArticleMatch[1]
+        ? verificationArticleMatch[1]
+        : null;
 
     // Formater la transaction avec toutes les informations
     const transaction = {
@@ -1178,7 +1185,14 @@ exports.getTransaction = async (req, res) => {
       provider: payment.provider || 'feexpay',
       feexpayTransactionId: payment.transactionId,
       type: getTransactionType(payment),
+      paymentType: payment.type || null,
       duree: payment.duree || extractDurationFromDescription(payment.description),
+      articleId,
+      userId: userDoc?._id ? String(userDoc._id) : userId,
+      userPhone: userDoc?.telephone || null,
+      userName: userDoc
+        ? `${userDoc.prenoms || ''} ${userDoc.nom || ''}`.trim() || null
+        : null,
     };
 
     return res.json(transaction);
@@ -1240,27 +1254,91 @@ function normalizeTypeFilter(typeValue) {
   }
 }
 
+const PAYMENTS_ADMIN_ROLES = new Set([
+  'admin',
+  'superAdmin',
+  'principal',
+  'gestionnaire',
+  'moderateur',
+  'marketing',
+  'responsableService',
+  'responsablePaiement',
+]);
+
+function canListAllPayments(user) {
+  if (!user) return false;
+  if (String(user.role) === 'admin') return true;
+  const key = user.typeAdmin || user.role;
+  return PAYMENTS_ADMIN_ROLES.has(String(key || ''));
+}
+
+/** Libellé dashboard → champ Payment.type Mongo */
+function dashboardTypeToDbType(typeValue) {
+  const normalized = normalizeTypeFilter(typeValue);
+  if (!normalized) return null;
+  const map = {
+    Abonnement: 'subscription',
+    Achats: 'achat',
+    'Demande de pub': 'publicite',
+    Vente: 'vente',
+    Vérification: 'verification',
+  };
+  return map[normalized] || null;
+}
+
 exports.list = async (req, res) => {
   try {
     const { status, user, from, to, limit = 100, type, search } = req.query;
     const filter = {};
     if (status) filter.status = status;
-    if (user) filter.user = user;
+
+    const scopedAdmin = canListAllPayments(req.user);
+    if (user) {
+      filter.user = String(user);
+    } else if (!scopedAdmin && req.user?._id) {
+      filter.user = String(req.user._id);
+    }
+
+    const dbType = type && type !== 'all' ? dashboardTypeToDbType(type) : null;
+    if (dbType) {
+      filter.type = dbType;
+    }
+
     if (from || to) {
       filter.createdAt = {};
-      if (from) filter.createdAt.$gte = new Date(from);
-      if (to) filter.createdAt.$lte = new Date(to);
+      if (from) {
+        const fromDate = new Date(from);
+        if (!Number.isNaN(fromDate.getTime())) {
+          filter.createdAt.$gte = fromDate;
+        }
+      }
+      if (to) {
+        const toDate = new Date(to);
+        if (!Number.isNaN(toDate.getTime())) {
+          if (String(to).length <= 10) {
+            toDate.setHours(23, 59, 59, 999);
+          }
+          filter.createdAt.$lte = toDate;
+        }
+      }
     }
 
     const uid = req.user && req.user._id ? String(req.user._id) : 'anon';
     const role = req.user && req.user.role ? String(req.user.role) : '';
+    const typeAdmin = req.user?.typeAdmin ? String(req.user.typeAdmin) : '';
+    const maxLimit = Math.min(Math.max(Number(limit) || 100, 1), scopedAdmin ? 1000 : 100);
+
     console.log(
       '[PAYMENTS_LIST] request',
       JSON.stringify({
         uid,
         role,
+        typeAdmin,
+        scopedAdmin,
         filter,
-        limit,
+        maxLimit,
+        queryType: type || null,
+        dbType,
         queryKeys: Object.keys(req.query || {}),
       })
     );
@@ -1269,7 +1347,7 @@ exports.list = async (req, res) => {
       .populate('achat')
       .populate('publicite')
       .sort({ createdAt: -1 })
-      .limit(Math.min(Number(limit) || 100, 500));
+      .limit(maxLimit);
 
     const now = Date.now();
     const toSave = [];
@@ -1289,7 +1367,7 @@ exports.list = async (req, res) => {
         .populate('achat')
         .populate('publicite')
         .sort({ createdAt: -1 })
-        .limit(Math.min(Number(limit) || 100, 500));
+        .limit(maxLimit);
     }
 
     const transactions = await Promise.all(payments.map(async (payment) => {
@@ -1357,12 +1435,15 @@ exports.list = async (req, res) => {
     let afterSearchCount = filteredTransactions.length;
     if (search) {
       const searchLower = search.toLowerCase();
-      filteredTransactions = filteredTransactions.filter(t => 
-        t.client.toLowerCase().includes(searchLower) ||
-        t.description?.toLowerCase().includes(searchLower) ||
-        t.transactionId?.toLowerCase().includes(searchLower) ||
-        t.customId?.toLowerCase().includes(searchLower)
-      );
+      filteredTransactions = filteredTransactions.filter((t) => {
+        const client = String(t.client || '').toLowerCase();
+        return (
+          client.includes(searchLower) ||
+          String(t.description || '').toLowerCase().includes(searchLower) ||
+          String(t.transactionId || '').toLowerCase().includes(searchLower) ||
+          String(t.customId || '').toLowerCase().includes(searchLower)
+        );
+      });
       afterSearchCount = filteredTransactions.length;
     }
 
@@ -1390,7 +1471,7 @@ exports.list = async (req, res) => {
       availableStatuses
     });
   } catch (error) {
-    console.error('[list] error:', error);
+    console.error('[PAYMENTS_LIST] error:', error?.message || error, error?.stack);
     return res.status(500).json({ message: 'Erreur liste paiements', error: error.message });
   }
 };

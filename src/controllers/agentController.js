@@ -891,7 +891,10 @@ exports.getAllWithdrawalsForAdmin = async (req, res) => {
     const { agentId } = req.query;
     const match = { type: 'withdrawal' };
     if (agentId) {
-      match.agent = agentId;
+      if (!mongoose.Types.ObjectId.isValid(String(agentId))) {
+        return res.status(400).json({ message: 'Identifiant agent invalide' });
+      }
+      match.agent = new mongoose.Types.ObjectId(String(agentId));
     }
 
     const rows = await AgentEarning.find(match)
@@ -903,18 +906,23 @@ exports.getAllWithdrawalsForAdmin = async (req, res) => {
     const balanceByAgent = {};
     await Promise.all(
       agentIds.map(async (aid) => {
-        const oid = new mongoose.Types.ObjectId(aid);
-        const earningsAgg = await AgentEarning.aggregate([
-          { $match: { agent: oid, type: { $in: EARNING_CREDIT_TYPES } } },
-          { $group: { _id: null, total: { $sum: '$amount' } } },
-        ]);
-        const withdrawnAgg = await AgentEarning.aggregate([
-          { $match: { agent: oid, type: 'withdrawal' } },
-          { $group: { _id: null, total: { $sum: '$amount' } } },
-        ]);
-        const totalEarnings = earningsAgg[0]?.total || 0;
-        const totalWithdrawn = withdrawnAgg[0]?.total || 0;
-        balanceByAgent[aid] = { totalEarnings, totalWithdrawn, currentBalance: totalEarnings - totalWithdrawn };
+        if (!mongoose.Types.ObjectId.isValid(aid)) return;
+        try {
+          const oid = new mongoose.Types.ObjectId(aid);
+          const earningsAgg = await AgentEarning.aggregate([
+            { $match: { agent: oid, type: { $in: EARNING_CREDIT_TYPES } } },
+            { $group: { _id: null, total: { $sum: '$amount' } } },
+          ]);
+          const withdrawnAgg = await AgentEarning.aggregate([
+            { $match: { agent: oid, type: 'withdrawal' } },
+            { $group: { _id: null, total: { $sum: '$amount' } } },
+          ]);
+          const totalEarnings = earningsAgg[0]?.total || 0;
+          const totalWithdrawn = withdrawnAgg[0]?.total || 0;
+          balanceByAgent[aid] = { totalEarnings, totalWithdrawn, currentBalance: totalEarnings - totalWithdrawn };
+        } catch (balanceErr) {
+          console.warn('[WITHDRAWALS_LIST] balance skip agent', aid, balanceErr.message);
+        }
       })
     );
 
