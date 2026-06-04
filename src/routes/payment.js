@@ -4,7 +4,7 @@ const paymentController = require('../controllers/paymentController');
 const auth = require('../middlewares/auth');
 
 // Trace toute requête sur ce routeur (confirme que le mobile atteint bien /api/payments/...)
-router.use((req, res, next) => {
+router.use((req, _res, next) => {
   console.log('[PAYMENTS_HTTP]', req.method, req.originalUrl || req.url);
   next();
 });

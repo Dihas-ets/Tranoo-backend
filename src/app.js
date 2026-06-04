@@ -430,6 +430,14 @@ try {
   console.warn('Push OTP routes non chargées:', e.message);
 }
 
+// Webhook Meta WhatsApp (statuts livraison OTP — logs [RESET][WA][webhook])
+try {
+  const whatsappWebhookRoutes = require('./routes/whatsappWebhook');
+  app.use('/api/whatsapp', whatsappWebhookRoutes);
+} catch (e) {
+  console.warn('WhatsApp webhook routes non chargées:', e.message);
+}
+
 // Routes géographiques Bénin (départements/communes/villes/quartiers)
 try {
   const geoBeninRoutes = require('./routes/geoBenin');
@@ -454,6 +462,14 @@ try {
   app.use('/api/payments', paymentRoutes);
 } catch (e) {
   console.warn('Payment routes non chargées:', e.message);
+}
+
+// Vérification véhicule (Tranoo — après paiement FeexPay)
+try {
+  const verificationRoutes = require('./routes/verification');
+  app.use('/api/verification', verificationRoutes);
+} catch (e) {
+  console.warn('Verification routes non chargées:', e.message);
 }
 
 // Subscription routes

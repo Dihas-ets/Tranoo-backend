@@ -31,6 +31,7 @@ const notificationSchema = new mongoose.Schema({
       'new_article', // notification de nouvel article
       'general',
       'verification',
+      'verification_result',
       'delivery', // notifications liées aux livraisons
       'tricycle', // notifications liées aux contacts tricycle
     ],
@@ -86,12 +87,9 @@ const notificationSchema = new mongoose.Schema({
   // Pièces jointes (Cloudinary URLs)
   attachments: {
     images: [{ type: String }],
+    documents: [{ type: String }],
     stampUrl: { type: String },
     signatureUrl: { type: String },
-  },
-  data: {
-    type: mongoose.Schema.Types.Mixed,
-    default: {},
   },
   createdAt: {
     type: Date,

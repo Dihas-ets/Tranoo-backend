@@ -224,8 +224,10 @@ exports.getDashboardFinance = async (req, res) => {
     const paymentsForCharts = await Payment.find({
       createdAt: { $gte: chartStart, $lte: now },
       status: 'success',
+      provider: 'feexpay',
+      type: { $in: ['achat', 'vente', 'publicite', 'subscription', 'verification'] },
     })
-      .select('amount type createdAt achat method description')
+      .select('amount type createdAt achat method description provider')
       .populate({ path: 'achat', populate: { path: 'article', select: 'type' } })
       .lean();
 
@@ -253,8 +255,9 @@ exports.getDashboardFinance = async (req, res) => {
       if (t === 'publicite') monthlyMap[key].ads += amt;
       else if (t === 'subscription') monthlyMap[key].subscriptions += amt;
       else if (t === 'vente' || t === 'achat') {
+        // Strict: ne compter que les vrais paiements rattachés à un article voiture/pièce.
         if (articleType === 'piece') monthlyMap[key].partsSales += amt;
-        else monthlyMap[key].carSales += amt;
+        else if (articleType === 'voiture') monthlyMap[key].carSales += amt;
       } else if (t === 'verification') {
         monthlyMap[key].carSales += amt;
       }
@@ -281,8 +284,9 @@ exports.getDashboardFinance = async (req, res) => {
       else if (t === 'subscription') subscriptions += amt;
       else if (t === 'verification') services += amt;
       else if (t === 'vente' || t === 'achat') {
+        // Strict: pas de fallback "sinon voiture".
         if (articleType === 'piece') pieces += amt;
-        else voitures += amt;
+        else if (articleType === 'voiture') voitures += amt;
       }
     }
 
@@ -305,16 +309,22 @@ exports.getDashboardFinance = async (req, res) => {
       { name: 'Abonnements', value: Math.round(subscriptions) },
     ];
 
-    const recentPayments = await Payment.find({})
+    const recentPayments = await Payment.find({
+      provider: 'feexpay',
+      type: { $in: ['achat', 'vente', 'publicite', 'subscription', 'verification'] },
+    })
       .sort({ createdAt: -1 })
       .limit(80)
-      .select('amount type status method description createdAt achat')
+      .select('amount type status method description createdAt achat provider')
       .populate({ path: 'achat', populate: { path: 'article', select: 'type titre' } })
       .lean();
 
     const accountingRows = recentPayments.map((p, idx) => {
       const articleType = p.achat?.article?.type || null;
-      const activityType = paymentActivityLabel(p, articleType);
+      let activityType = paymentActivityLabel(p, articleType);
+      if ((p.type === 'achat' || p.type === 'vente') && !['voiture', 'piece'].includes(articleType)) {
+        activityType = 'Autre';
+      }
       const isEntry = p.status === 'success';
       return {
         id: String(p._id || idx),

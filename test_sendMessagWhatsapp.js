@@ -56,7 +56,7 @@ async function sendMessage() {
         messaging_product: "whatsapp",
 
         // IMPORTANT
-        to: "22997385788",
+        to: "22959399349",
 
         type: "template",
 

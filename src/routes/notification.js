@@ -1,8 +1,21 @@
 const express = require('express');
 const router = express.Router();
+const multer = require('multer');
 const notificationController = require('../controllers/notificationController');
 const auth = require('../middlewares/auth');
 const roleMiddleware = require('../middlewares/role');
+
+const verificationPdfUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype === 'application/pdf' || /\.pdf$/i.test(file.originalname || '')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Seuls les fichiers PDF sont acceptés'));
+    }
+  },
+});
 
 // Route de test (à supprimer en production) - SANS AUTH POUR LES TESTS
 router.post('/test', notificationController.testNotification);
@@ -41,6 +54,14 @@ router.post(
   '/admin-message',
   roleMiddleware('superAdmin', 'principal', 'gestionnaire', 'moderateur', 'marketing', 'responsableService'),
   notificationController.createAdminMessageHTTP
+);
+
+// PDF vérification — upload serveur (API secret Cloudinary, URL accessible Meta/WhatsApp)
+router.post(
+  '/verification-pdf',
+  roleMiddleware('superAdmin', 'principal', 'gestionnaire', 'moderateur', 'marketing', 'responsableService'),
+  verificationPdfUpload.single('pdf'),
+  notificationController.uploadVerificationPdfHTTP
 );
 
 // Demande de recherche véhicule par acheteur (notifie les vendeurs)

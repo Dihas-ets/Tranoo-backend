@@ -11,7 +11,9 @@ const AgentEarning = require('../models/AgentEarning');
 const ReferralSettings = require('../models/ReferralSettings');
 
 function isObjectIdLike(value) {
-  return typeof value === 'string' && mongoose.Types.ObjectId.isValid(value);
+  if (value == null) return false;
+  const s = String(value).trim();
+  return mongoose.Types.ObjectId.isValid(s) && /^[a-f0-9]{24}$/i.test(s);
 }
 
 async function resolveClientLabel(payment) {
@@ -675,6 +677,18 @@ async function handleSuccessfulPayment(payment) {
       }
     }
 
+    if (payment.type === 'verification') {
+      const fromIds = String(
+        payment.customId || payment.transactionId || payment.rawInitResponse?.transKey || ''
+      );
+      const m = fromIds.match(/VERIFICATION_([a-f0-9]{24})_/i);
+      if (m?.[1]) {
+        console.log('[VERIFICATION][PAYMENT_OK] article=', m[1], 'payment=', payment._id);
+      } else {
+        console.log('[VERIFICATION][PAYMENT_OK] payment=', payment._id, '(articleId non détecté dans customId)');
+      }
+    }
+
     if (payment.type === 'subscription' && payment.user) {
       try {
         const monthsFromDuree = (() => {
@@ -1129,7 +1143,8 @@ exports.getTransaction = async (req, res) => {
     let payment = await findPaymentForAdminDetail(id);
 
     if (!payment) {
-      return res.status(404).json({ message: 'Transaction non trouvée' });
+      console.warn('[getTransaction] non trouvé', { id, params: req.params });
+      return res.status(404).json({ message: 'Transaction non trouvée', id });
     }
 
     // Aligner avec FeexPay V2 : si encore pending, interroger l’API distante puis mettre à jour la DB.
@@ -1159,7 +1174,12 @@ exports.getTransaction = async (req, res) => {
       userDoc = await User.findById(userId).select('nom prenoms email telephone').lean();
     }
 
-    const fromIds = String(payment.customId || payment.transactionId || '');
+    const fromIds = String(
+      payment.customId ||
+        payment.transactionId ||
+        payment.rawInitResponse?.transKey ||
+        ''
+    );
     const verificationArticleMatch = fromIds.match(/VERIFICATION_([a-f0-9]{24})_/i);
     const articleId =
       verificationArticleMatch && verificationArticleMatch[1]
@@ -1399,6 +1419,9 @@ exports.list = async (req, res) => {
         transaction.duree = payment.duree || extractDurationFromDescription(payment.description);
       } else if (payment.type === 'verification') {
         transaction.type = 'Vérification';
+        const vid = String(payment.customId || payment.transactionId || '');
+        const vm = vid.match(/VERIFICATION_([a-f0-9]{24})_/i);
+        if (vm?.[1]) transaction.articleId = vm[1];
       } else if (payment.type === 'subscription') {
         transaction.type = 'Abonnement';
       } else {
@@ -1728,6 +1751,7 @@ exports.recordFeexPayFlutter = async (req, res) => {
     if (feexRef) orLookup.push({ transactionId: feexRef });
     if (localTransKey) {
       orLookup.push({ transactionId: localTransKey });
+      orLookup.push({ customId: localTransKey });
       orLookup.push({ 'rawInitResponse.transKey': localTransKey });
     }
 
@@ -1784,7 +1808,10 @@ exports.recordFeexPayFlutter = async (req, res) => {
         payment.status,
       );
     } else {
-      const customId = `${type.toUpperCase()}_${req.user?._id}_${Date.now()}`;
+      const customId =
+        localTransKey && String(localTransKey).trim().length > 0
+          ? String(localTransKey).trim()
+          : `${type.toUpperCase()}_${req.user?._id}_${Date.now()}`;
       payment = await Payment.create({
         provider: 'feexpay',
         transactionId: primaryStoredTransactionId,

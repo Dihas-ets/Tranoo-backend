@@ -7,6 +7,7 @@ const router = express.Router();
 const articleController = require('../controllers/articleController');
 const userController = require('../controllers/userController');
 const publiciteController = require('../controllers/publiciteController');
+const publicVerificationPdfController = require('../controllers/publicVerificationPdfController');
 
 // Endpoint public (sans auth): liste des articles (même logique que privé)
 router.get('/articles', articleController.getArticlesPublic);
@@ -16,6 +17,12 @@ router.get('/publicites', publiciteController.getPublicitesPublic);
 
 // Endpoint public pour récupérer le numéro de téléphone par email
 router.post('/users/phone-by-email', userController.getPhoneByEmail);
+
+// PDF rapport vérification — URL publique pour Meta/WhatsApp (proxy, pas Cloudinary CDN)
+router.get(
+  '/verification-reports/:token',
+  publicVerificationPdfController.serveVerificationReportPdf
+);
 
 module.exports = router;
 

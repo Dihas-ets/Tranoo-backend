@@ -3,6 +3,12 @@ const User = require('../models/User');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const { createReferralRecord, ReferralCreationError } = require('./referralController');
+const {
+  authAppFromRole,
+  prepareUserPhoneFields,
+  assertPhoneNotTaken,
+  phoneConflictMessage,
+} = require('../utils/authAppPhone');
 // In-memory OTP store (replace with Redis/DB in production)
 
 // Contrôleur pour l'inscription d'un utilisateur (mobile ou admin)
@@ -34,6 +40,9 @@ exports.register = async (req, res) => {
       latitude,
       longitude,
       fournisseurProfil,
+      authApp,
+      countryCode,
+      nationalNumber,
     } = req.body;
 
     // Cas spécial : création d'admin ou agent commercial via dashboard (avec mot de passe)
@@ -106,7 +115,6 @@ exports.register = async (req, res) => {
         nom,
         prenoms,
         email,
-        telephone,
         role,
         adresse,
         ville,
@@ -177,6 +185,10 @@ exports.register = async (req, res) => {
         }
       }
 
+      if (telephone) {
+        prepareUserPhoneFields(user, { telephone, countryCode, nationalNumber });
+      }
+
       // Sauvegarder dans MongoDB
       console.log('[REGISTER] Sauvegarde dans MongoDB...');
       try {
@@ -233,7 +245,7 @@ exports.register = async (req, res) => {
                 nom,
                 prenoms,
                 email: vendorEmail,
-                telephone: telephone || '0000000000',
+                authApp: 'tranoo_pro',
                 role: 'vendeur',
                 vendeurType: 'mixte',
                 password: vendorHashedPassword,
@@ -243,6 +255,11 @@ exports.register = async (req, res) => {
                 adresse: adresse || null,
                 ville: ville || null,
               });
+              if (telephone) {
+                prepareUserPhoneFields(vendorUser, { telephone, countryCode, nationalNumber });
+              } else {
+                vendorUser.telephone = '0000000000';
+              }
               await vendorUser.save();
               vendorMongoId = vendorUser._id;
 
@@ -288,7 +305,7 @@ exports.register = async (req, res) => {
                 nom,
                 prenoms,
                 email: buyerEmail,
-                telephone: telephone || '0000000000',
+                authApp: 'tranoo',
                 role: 'acheteur',
                 password: buyerHashedPassword,
                 statut: 'actif',
@@ -296,6 +313,11 @@ exports.register = async (req, res) => {
                 adresse: adresse || null,
                 ville: ville || null,
               });
+              if (telephone) {
+                prepareUserPhoneFields(buyerUser, { telephone, countryCode, nationalNumber });
+              } else {
+                buyerUser.telephone = '0000000000';
+              }
               await buyerUser.save();
               buyerMongoId = buyerUser._id;
 
@@ -379,12 +401,22 @@ exports.register = async (req, res) => {
     const hasCoords =
       Number.isFinite(parsedLat) && Number.isFinite(parsedLng);
 
+    const resolvedAuthApp = authApp || authAppFromRole(role);
+    if (
+      ['acheteur', 'vendeur', 'livreur', 'chauffeur', 'transitaire'].includes(role) &&
+      !resolvedAuthApp
+    ) {
+      return res.status(400).json({
+        message: 'Application requise (tranoo ou tranoo_pro).',
+      });
+    }
+
     user = new User({
       uid,
       nom,
       prenoms,
       email: userEmail,
-      telephone,
+      authApp: resolvedAuthApp,
       role,
       vendeurType: role === 'vendeur' ? (vendeurType || null) : null,
       pays,
@@ -426,12 +458,36 @@ exports.register = async (req, res) => {
       user.lastLocationAt = new Date();
     }
 
+    if (telephone) {
+      try {
+        prepareUserPhoneFields(user, { telephone, countryCode, nationalNumber });
+        if (user.telephoneCanonical && user.authApp) {
+          await assertPhoneNotTaken({
+            telephoneCanonical: user.telephoneCanonical,
+            authApp: user.authApp,
+            role,
+          });
+        }
+      } catch (phoneErr) {
+        const msg = phoneConflictMessage(phoneErr);
+        if (msg) {
+          return res.status(409).json({ message: msg });
+        }
+        throw phoneErr;
+      }
+    }
+
     console.log('[REGISTER] Sauvegarde initiale dans MongoDB...');
     try {
     await user.save();
       console.log('[REGISTER] ✅ Utilisateur MongoDB sauvegardé');
       console.log('[REGISTER] MongoDB _id:', user._id);
+      console.log('[REGISTER] authApp:', user.authApp, 'telephone:', user.telephone);
     } catch (saveError) {
+      const msg = phoneConflictMessage(saveError);
+      if (msg) {
+        return res.status(409).json({ message: msg });
+      }
       console.error('[REGISTER] ❌ Erreur sauvegarde MongoDB:', saveError.message);
       console.error('[REGISTER] Détails erreur:', saveError);
       throw saveError;

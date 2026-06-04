@@ -1,6 +1,11 @@
 const User = require('../models/User');
 const UserDevice = require('../models/UserDevice');
 const bcrypt = require('bcryptjs');
+const {
+  prepareUserPhoneFields,
+  assertPhoneNotTaken,
+  phoneConflictMessage,
+} = require('../utils/authAppPhone');
 const Article = require('../models/Article');
 const cloudinary = require('cloudinary').v2;
 const admin = require('firebase-admin');
@@ -732,16 +737,38 @@ exports.updateMe = async (req, res) => {
       }
     }
     if (updates.telephone) {
-      const prevFp =
-        user.fournisseurProfil && typeof user.fournisseurProfil.toObject === 'function'
-          ? user.fournisseurProfil.toObject()
-          : { ...(user.fournisseurProfil || {}) };
-      user.fournisseurProfil = { ...prevFp, telephone: updates.telephone };
+      try {
+        prepareUserPhoneFields(user, { telephone: updates.telephone });
+        if (user.telephoneCanonical && user.authApp) {
+          await assertPhoneNotTaken({
+            telephoneCanonical: user.telephoneCanonical,
+            authApp: user.authApp,
+            excludeUserId: user._id,
+            role: user.role,
+          });
+        }
+        updates.telephone = user.telephone;
+        const prevFp =
+          user.fournisseurProfil && typeof user.fournisseurProfil.toObject === 'function'
+            ? user.fournisseurProfil.toObject()
+            : { ...(user.fournisseurProfil || {}) };
+        user.fournisseurProfil = { ...prevFp, telephone: user.telephone };
+      } catch (phoneErr) {
+        const msg = phoneConflictMessage(phoneErr);
+        if (msg) return res.status(409).json({ message: msg });
+        throw phoneErr;
+      }
     }
 
     const emailChanged = updates.email && updates.email !== user.email;
     Object.assign(user, updates);
-    await user.save();
+    try {
+      await user.save();
+    } catch (saveErr) {
+      const msg = phoneConflictMessage(saveErr);
+      if (msg) return res.status(409).json({ message: msg });
+      throw saveErr;
+    }
 
     // Synchroniser l'email avec Firebase si modifié
     if (emailChanged) {

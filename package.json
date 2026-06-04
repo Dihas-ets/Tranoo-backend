@@ -10,7 +10,8 @@
     "dev": "nodemon src/app.js",
     "test:referral": "node tests/referralSchema.test.js",
     "drop:referral-index": "node scripts/dropReferralCodeIndex.js",
-    "migrate:referral-stats": "node scripts/backfillReferralStats.js"
+    "migrate:referral-stats": "node scripts/backfillReferralStats.js",
+    "cleanup:vehicle-payments": "node scripts/cleanupVehiclePayments.js"
   },
   "keywords": [],
   "author": "",

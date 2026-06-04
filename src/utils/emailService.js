@@ -6,10 +6,18 @@ const {
   SMTP_PORT,
   SMTP_USER,
   SMTP_PASS,
-  MAIL_FROM,
+  MAIL_FROM: MAIL_FROM_ENV,
+  EMAIL_FROM,
+  EMAIL_FROM_NAME,
   APP_NAME = 'Tranoo',
   WEB_ADMIN_URL,
 } = process.env;
+
+const MAIL_FROM =
+  MAIL_FROM_ENV ||
+  (EMAIL_FROM
+    ? `"${EMAIL_FROM_NAME || APP_NAME}" <${EMAIL_FROM}>`
+    : undefined);
 
 let transporter = null;
 

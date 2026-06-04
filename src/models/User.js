@@ -180,6 +180,18 @@ const userSchema = new mongoose.Schema({
     },
     trim: true,
   },
+  /** Chiffres E.164 canoniques (ex. 22959399349) — unicité avec authApp. */
+  telephoneCanonical: {
+    type: String,
+    trim: true,
+    default: null,
+  },
+  /** Application mobile liée au compte : tranoo (acheteur) ou tranoo_pro (vendeur, livreur, …). */
+  authApp: {
+    type: String,
+    enum: ['tranoo', 'tranoo_pro', null],
+    default: null,
+  },
   pays: { type: String },
   maison: { type: String },
   entreprise: { type: String },
@@ -342,10 +354,31 @@ const userSchema = new mongoose.Schema({
 
 // Index utiles
 userSchema.index({ telephone: 1 });
+userSchema.index(
+  { telephoneCanonical: 1, authApp: 1 },
+  { unique: true, sparse: true }
+);
 userSchema.index({ location: '2dsphere' });
 
-// Pré-save : sécuriser location
+const {
+  canonicalPhoneDigits,
+  internationalPhoneFromDigits,
+} = require('../utils/phoneNormalize');
+const { authAppFromRole } = require('../utils/authAppRoles');
+
+// Pré-save : normaliser téléphone + authApp
 userSchema.pre('save', function (next) {
+  if (this.telephone) {
+    const canon = canonicalPhoneDigits({ telephone: this.telephone });
+    if (canon && canon.length >= 8 && !/^0+$/.test(canon)) {
+      this.telephoneCanonical = canon;
+      this.telephone = internationalPhoneFromDigits(canon);
+    }
+  }
+  if (!this.authApp && this.role) {
+    this.authApp = authAppFromRole(this.role);
+  }
+
   if (this.location) {
     const coords = this.location.coordinates;
     const isValidPoint =

@@ -2,9 +2,14 @@ const express = require('express');
 const router = express.Router();
 const pushOtpController = require('../controllers/pushOtpController');
 
+router.use((req, res, next) => {
+  console.log(`[RESET] >>> ${req.method} ${req.originalUrl}`);
+  next();
+});
+
 /**
- * Mot de passe oublié — OTP WhatsApp uniquement (numéro du compte)
- * - request: telephone (+ indicatif) -> code WhatsApp
+ * Mot de passe oublié — OTP WhatsApp + fallback notification push (FCM)
+ * - request: telephone (+ indicatif, fcmToken optionnel) -> code WhatsApp et/ou push
  * - verify-code: requestId + deviceId (clé téléphone) + code
  * - reset-password: requestId + deviceId + newPassword
  */

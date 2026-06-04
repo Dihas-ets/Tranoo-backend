@@ -9,6 +9,16 @@ const {
   extractVerificationBodyFragment,
   plainTextFromHtml,
 } = require('../utils/verificationMessage');
+const {
+  sendWhatsAppVerificationDocument,
+  formatMetaError,
+  digitsOnly,
+  cloudinaryPdfDeliveryUrl,
+} = require('../utils/whatsappService');
+const {
+  uploadVerificationPdfBuffer,
+  resolvePdfUrlForDelivery,
+} = require('../utils/cloudinaryPdf');
 
 async function resolveVerificationBuyerUser(articleId) {
   if (!articleId) return null;
@@ -21,6 +31,32 @@ async function resolveVerificationBuyerUser(articleId) {
     .lean();
   if (!payment?.user) return null;
   return User.findById(payment.user);
+}
+
+/** E-mail / WhatsApp / nom affiché : champs du compose admin en priorité. */
+function resolveComposeDeliveryContacts(recipient, accountUser) {
+  const name =
+    (recipient?.name && String(recipient.name).trim()) ||
+    [accountUser?.prenoms, accountUser?.nom].filter(Boolean).join(' ').trim() ||
+    'Client';
+
+  const idOrEmail =
+    recipient?.idOrEmail && String(recipient.idOrEmail).trim()
+      ? String(recipient.idOrEmail).trim()
+      : '';
+  const email =
+    idOrEmail && idOrEmail.includes('@')
+      ? idOrEmail
+      : accountUser?.email
+        ? String(accountUser.email).trim()
+        : null;
+
+  const phone =
+    (recipient?.phone && String(recipient.phone).trim()) ||
+    (accountUser?.telephone && String(accountUser.telephone).trim()) ||
+    '';
+
+  return { name, email, phone };
 }
 
 // Créer une notification générique
@@ -283,24 +319,44 @@ exports.handleVerificationAction = async (notificationId, action, userId) => {
     notification.isRead = true;
     await notification.save();
 
-    // Envoyer une notification de confirmation à tous les admins
-    if (notification.verificationData && notification.verificationData.articleId) {
+    // Notifier le dashboard admin (inbox scope=adminDashboard)
+    if (notification.verificationData?.articleId) {
       try {
-        const art = await Article.findById(notification.verificationData.articleId).select('titre title nom');
+        const art = await Article.findById(notification.verificationData.articleId)
+          .select('titre title nom')
+          .lean();
         const articleTitle = (art?.titre || art?.title || art?.nom || '').toString();
-        const admins = await require('../models/User').find({ role: { $in: ['admin', 'superAdmin', 'principal', 'gestionnaire'] } }).select('_id');
+        const articleIdStr = String(notification.verificationData.articleId);
+        const buyer = await User.findById(userId).select('nom prenoms email telephone').lean();
+        const buyerLabel = buyer
+          ? `${buyer.prenoms || ''} ${buyer.nom || ''}`.trim() || buyer.email || buyer.telephone
+          : 'Utilisateur';
+        const actionLabel = action === 'approve' ? 'validé' : 'rejeté';
+        const admins = await User.find({
+          $or: [
+            { role: { $in: ['admin', 'superAdmin', 'principal', 'gestionnaire'] } },
+            { typeAdmin: { $in: ['admin', 'superAdmin', 'principal', 'gestionnaire', 'moderateur', 'marketing', 'responsableService', 'responsablePaiement'] } },
+          ],
+        }).select('_id');
         for (const adminUser of admins) {
-          await this.createNotification(
+          await exports.createNotification(
             adminUser._id,
             userId,
-            `Achat ${action === 'approve' ? 'validé' : 'rejeté'}${articleTitle ? `: ${articleTitle}` : ''}`,
-            `L'utilisateur a ${action === 'approve' ? 'validé' : 'rejeté'} l'achat de l'article ${articleTitle || notification.verificationData.articleId}`,
+            `Vérification ${actionLabel}${articleTitle ? ` — ${articleTitle}` : ''}`,
+            `${buyerLabel} a ${actionLabel} la demande liée à l'article ${articleTitle || articleIdStr}.`,
             'verification_result',
             notification.verificationData.articleId,
-            'Article'
+            'Article',
+            {
+              audience: 'admin',
+              action,
+              articleTitle,
+              targetArticleId: articleIdStr,
+              buyerName: buyerLabel,
+            }
           );
         }
-      } catch(e) {
+      } catch (e) {
         console.error('[VERIFICATION] Impossible d\'envoyer la notif admin:', e);
       }
     }
@@ -332,7 +388,7 @@ exports.getUserNotifications = async (req, res) => {
     if (wantsAdminInbox && isAdminUser) {
       filter.$or = [
         { 'data.audience': 'admin' },
-        { type: 'verification' },
+        { type: { $in: ['verification', 'verification_result'] } },
       ];
     }
     if (unreadOnly === 'true') {
@@ -521,13 +577,16 @@ exports.createAdminMessageHTTP = async (req, res) => {
       details,
       date,
       images = [],
+      documents = [],
       stampUrl,
       signatureUrl,
       articleId,
       bodyHtml,
       pdfUrl,
+      secure_url: pdfSecureUrlBody,
       sendEmail: sendEmailBody,
       sendNotification: sendNotificationBody,
+      sendWhatsapp: sendWhatsappBody,
     } = req.body;
 
     if (!req.user) {
@@ -567,25 +626,32 @@ exports.createAdminMessageHTTP = async (req, res) => {
     if (normalizedType === 'alert') normalizedType = 'alerte';
     if (normalizedType === 'notification') normalizedType = 'general';
 
+    let notificationUser = user;
     if (normalizedType === 'verification' && articleId) {
       const buyer = await resolveVerificationBuyerUser(articleId);
       if (buyer) {
-        user = buyer;
+        notificationUser = buyer;
+        if (!user) user = buyer;
         console.log(
-          '[ADMIN MSG] Destinataire vérification = acheteur (paiement):',
-          user.email,
-          user._id.toString()
+          '[ADMIN MSG] Notification in-app → acheteur paiement:',
+          buyer.email,
+          buyer._id.toString()
         );
       } else {
         console.warn(
           '[ADMIN MSG] Paiement vérification introuvable pour article',
-          articleId,
-          '— destinataire saisi conservé'
+          articleId
         );
       }
     }
 
-    console.log('[ADMIN MSG] Destinataire trouvé:', user.email, user._id.toString());
+    const delivery = resolveComposeDeliveryContacts(recipient, user);
+    console.log('[ADMIN MSG] Destinataire compte:', user.email, user._id.toString());
+    console.log('[ADMIN MSG] Contacts envoi (champs compose):', {
+      name: delivery.name,
+      email: delivery.email,
+      phone: delivery.phone ? `${delivery.phone.slice(0, 6)}…` : null,
+    });
 
     // Détermination du sender (ObjectId ou email/uid fallback)
     let senderId = null;
@@ -604,12 +670,17 @@ exports.createAdminMessageHTTP = async (req, res) => {
 
     // Préparer le document de notification
     const notifDoc = {
-      recipient: user._id,
+      recipient: notificationUser._id,
       sender: senderId,
       title,
       message,
       type: normalizedType,
-      attachments: { images, stampUrl, signatureUrl },
+      attachments: {
+        images: Array.isArray(images) ? images : [],
+        documents: Array.isArray(documents) ? documents : [],
+        stampUrl,
+        signatureUrl,
+      },
     };
 
     // Si type vérification, lier l'article
@@ -636,17 +707,60 @@ exports.createAdminMessageHTTP = async (req, res) => {
     }
 
     const sendEmailFlag = !!sendEmailBody;
+    const sendWhatsappFlag = !!sendWhatsappBody;
     const sendNotificationFlag =
       sendNotificationBody === undefined || sendNotificationBody === null
         ? true
         : !!sendNotificationBody;
 
+    if (sendWhatsappFlag && normalizedType === 'verification' && !pdfUrl?.trim()) {
+      return res.status(400).json({
+        message:
+          'Un rapport PDF (pdfUrl) est requis pour envoyer la vérification par WhatsApp.',
+      });
+    }
+
     const htmlForEmail =
       bodyHtml && String(bodyHtml).trim()
         ? String(bodyHtml)
         : null;
-    const pdfUrlClean =
+    const pdfUrlRaw =
       pdfUrl && String(pdfUrl).trim() ? String(pdfUrl).trim() : null;
+    let pdfUrlClean = pdfUrlRaw
+      ? cloudinaryPdfDeliveryUrl(pdfUrlRaw) || pdfUrlRaw
+      : null;
+    const pdfSecureRaw =
+      pdfSecureUrlBody && String(pdfSecureUrlBody).trim()
+        ? String(pdfSecureUrlBody).trim()
+        : null;
+    if (
+      pdfUrlClean &&
+      /^http:\/\//i.test(pdfUrlClean) &&
+      pdfSecureRaw &&
+      /^https:\/\//i.test(pdfSecureRaw)
+    ) {
+      pdfUrlClean = cloudinaryPdfDeliveryUrl(pdfSecureRaw) || pdfSecureRaw;
+      console.log('[ADMIN MSG] pdfUrl http remplacé par secure_url Cloudinary HTTPS');
+    }
+    let pdfUrlDelivery = pdfUrlClean;
+    if (pdfUrlClean) {
+      const pdfResolved = await resolvePdfUrlForDelivery(pdfUrlClean);
+      if (pdfResolved.ok) {
+        pdfUrlDelivery = pdfResolved.url;
+        console.log('[ADMIN MSG] PDF livraison résolu', {
+          delivery: pdfResolved.proxy ? 'proxy' : 'cloudinary',
+          host: (() => {
+            try {
+              return new URL(pdfUrlDelivery).host;
+            } catch {
+              return '?';
+            }
+          })(),
+        });
+      } else {
+        console.warn('[ADMIN MSG] PDF non résolu pour canaux externes', pdfResolved.attempts);
+      }
+    }
     const fragmentHtml = htmlForEmail
       ? extractVerificationBodyFragment(htmlForEmail)
       : extractVerificationBodyFragment(message);
@@ -660,9 +774,11 @@ exports.createAdminMessageHTTP = async (req, res) => {
       notifDoc.data = {
         ...(notifDoc.data && typeof notifDoc.data === 'object' ? notifDoc.data : {}),
         bodyHtml: fragmentHtml || plainMessage,
-        pdfUrl: pdfUrlClean,
+        pdfUrl: pdfUrlDelivery || pdfUrlClean,
+        articleId: articleId ? String(articleId) : undefined,
         channelEmail: sendEmailFlag,
         channelNotification: sendNotificationFlag,
+        channelWhatsapp: sendWhatsappFlag,
       };
     }
 
@@ -671,23 +787,24 @@ exports.createAdminMessageHTTP = async (req, res) => {
       notification = new Notification(notifDoc);
       await notification.save();
       console.log('[ADMIN MSG] Notification enregistrée en base avec ID:', notification._id.toString());
-      await sendFcmForNotification(user, notification, {
+      await sendFcmForNotification(notificationUser, notification, {
         title,
         message: plainMessage,
         type: normalizedType,
       });
     }
 
+    let emailChannel = { sent: false, skipped: !sendEmailFlag };
     if (normalizedType === 'verification' && sendEmailFlag) {
       try {
-        if (user.email) {
+        if (delivery.email) {
           const article =
             articleId ? await Article.findById(articleId).select('titre type') : null;
 
           const html =
             htmlForEmail ||
             buildVerificationEmailHtml({
-              user,
+              user: notificationUser,
               title,
               message: plainMessage,
               details,
@@ -696,9 +813,9 @@ exports.createAdminMessageHTTP = async (req, res) => {
             });
 
           const mailAttachments = [];
-          if (pdfUrlClean) {
+          if (pdfUrlDelivery) {
             try {
-              const pdfResp = await axios.get(pdfUrlClean, {
+              const pdfResp = await axios.get(pdfUrlDelivery, {
                 responseType: 'arraybuffer',
                 timeout: 30000,
               });
@@ -712,29 +829,132 @@ exports.createAdminMessageHTTP = async (req, res) => {
             }
           }
 
-          const emailHtml = pdfUrlClean
-            ? `${html}<p style="margin-top:16px;font-size:14px;"><a href="${pdfUrlClean}">Télécharger le rapport PDF</a></p>`
+          const emailHtml = pdfUrlDelivery
+            ? `${html}<p style="margin-top:16px;font-size:14px;"><a href="${pdfUrlDelivery}">Télécharger le rapport PDF</a></p>`
             : html;
 
-          await sendMail({
-            to: user.email,
+          const mailResult = await sendMail({
+            to: delivery.email,
             subject: `[Vérification] ${title}`,
             html: emailHtml,
             attachments: mailAttachments,
           });
-          console.log('[ADMIN MSG] Email envoyé à', user.email);
+          if (mailResult?.skipped) {
+            emailChannel = {
+              sent: false,
+              skipped: true,
+              reason: 'smtp_not_configured',
+            };
+            console.warn(
+              '[ADMIN MSG] Email non envoyé — SMTP_HOST / SMTP_USER / SMTP_PASS manquants dans .env'
+            );
+          } else {
+            emailChannel = { sent: true, to: delivery.email };
+            console.log('[ADMIN MSG] Email envoyé à', delivery.email);
+          }
         } else {
-          console.warn('[ADMIN MSG] Aucun email disponible pour le destinataire, email non envoyé');
+          emailChannel = { sent: false, reason: 'no_delivery_email' };
+          console.warn('[ADMIN MSG] Aucun e-mail dans le champ compose, email non envoyé');
         }
       } catch (emailError) {
+        emailChannel = { sent: false, error: emailError?.message || String(emailError) };
         console.error('[ADMIN MSG] Erreur envoi email:', emailError?.message || emailError);
       }
+    }
+
+    let whatsappChannel = { sent: false, skipped: !sendWhatsappFlag };
+    if (sendWhatsappFlag && normalizedType === 'verification') {
+      const targetPhone = delivery.phone;
+      console.log('[ADMIN][WA] ─── compose /admin-message → WhatsApp ───', {
+        source: 'dashboard/messages/compose',
+        articleId: articleId || null,
+        sendWhatsapp: sendWhatsappFlag,
+        userId: notificationUser._id?.toString(),
+        userUid: notificationUser.uid,
+        accountEmail: user.email,
+        accountTelephone: user.telephone,
+        composePhone: recipient.phone,
+        composeEmail: recipient.idOrEmail,
+        composeName: recipient.name,
+        targetPhoneBrut: targetPhone,
+        pdfUrlPresent: Boolean(pdfUrlDelivery),
+        pdfUrlHost: pdfUrlDelivery
+          ? (() => {
+              try {
+                return new URL(pdfUrlDelivery).host;
+              } catch {
+                return '(url invalide)';
+              }
+            })()
+          : null,
+        vehicleTitle: title,
+        recipientName: delivery.name,
+      });
+      if (!targetPhone || digitsOnly(targetPhone).length < 8) {
+        console.error('[ADMIN][WA] numéro compose absent ou trop court', {
+          targetPhone,
+          composePhone: recipient.phone,
+        });
+        return res.status(400).json({
+          message:
+            'Numéro WhatsApp du destinataire introuvable. Vérifiez le téléphone de l\'acheteur.',
+        });
+      }
+      try {
+        const waPdfName = articleId
+          ? `verification-${String(articleId)}.pdf`
+          : undefined;
+        const waRes = await sendWhatsAppVerificationDocument({
+          phone: targetPhone,
+          pdfUrl: pdfUrlDelivery || pdfUrlClean,
+          recipientName: delivery.name,
+          vehicleTitle: articleId
+            ? `${title} (réf. ${String(articleId)})`
+            : title,
+          filename: waPdfName,
+        });
+        whatsappChannel = { sent: true, ...waRes };
+        console.log('[ADMIN][WA] synthèse compose', {
+          sent: true,
+          messageId: waRes.messageId,
+          messageStatus: waRes.messageStatus,
+          recipientWaId: waRes.recipientWaId,
+          from: waRes.senderDisplay,
+          pdfProbeOk: waRes.pdfProbeOk,
+          targetPhoneDigits: digitsOnly(targetPhone),
+        });
+      } catch (waErr) {
+        console.error('[ADMIN][WA] échec compose', formatMetaError(waErr));
+        const waMessages = {
+          whatsapp_not_configured:
+            'WhatsApp non configuré (WHATSAPP_TOKEN / PHONE_NUMBER_ID).',
+          invalid_pdf_url:
+            'URL du PDF invalide pour WhatsApp (HTTPS public requis). Réessayez l’envoi après génération du PDF.',
+          pdf_not_public:
+            'PDF inaccessible pour Meta. Ré-uploadez le rapport depuis le compose.',
+        };
+        whatsappChannel = {
+          sent: false,
+          error: waMessages[waErr.code] || waErr.message,
+          code: waErr.code,
+          probe: waErr.probe,
+          details: formatMetaError(waErr),
+        };
+      }
+    }
+
+    if (sendWhatsappFlag && normalizedType === 'verification') {
+      console.log('[ADMIN][WA] réponse HTTP channels.whatsapp', whatsappChannel);
     }
 
     res.status(201).json({
       message: 'Message enregistré',
       notification,
-      channels: { email: sendEmailFlag, notification: sendNotificationFlag },
+      channels: {
+        email: sendEmailFlag ? emailChannel : { sent: false, skipped: true },
+        notification: sendNotificationFlag,
+        whatsapp: whatsappChannel,
+      },
     });
   } catch (error) {
     console.error('[ADMIN MSG] Erreur création:', error, error?.message, error?.stack);
@@ -1005,6 +1225,54 @@ exports.getUnreadCount = async (req, res) => {
 };
 
 // Route de test pour envoyer une notification
+/**
+ * Upload PDF rapport vérification (serveur Tranoo + API secret Cloudinary).
+ * Utilisé par le dashboard compose avant envoi WhatsApp.
+ */
+exports.uploadVerificationPdfHTTP = async (req, res) => {
+  try {
+    if (!req.file?.buffer?.length) {
+      return res.status(400).json({ message: 'Fichier PDF requis (champ formulaire « pdf »).' });
+    }
+    console.log('[ADMIN][PDF] upload depuis compose', {
+      bytes: req.file.size,
+      filename: req.file.originalname,
+    });
+    const result = await uploadVerificationPdfBuffer(
+      req.file.buffer,
+      req.file.originalname || 'rapport-verification-tranoo.pdf'
+    );
+    console.log('[ADMIN][PDF] URL utilisable Meta/WhatsApp', {
+      signed: result.signed,
+      pdfUrl: result.pdfUrl,
+    });
+    return res.json({
+      message: 'PDF prêt pour envoi WhatsApp',
+      pdfUrl: result.pdfUrl,
+      secure_url: result.secure_url,
+      signed: result.signed,
+      delivery: result.delivery || 'tranoo_proxy',
+      cloudinaryCdnOk: result.cloudinaryCdnOk,
+    });
+  } catch (e) {
+    console.error('[ADMIN][PDF] échec upload', e?.message || e);
+    if (e.code === 'cloudinary_not_configured') {
+      return res.status(503).json({
+        message:
+          'Cloudinary non configuré sur api.tranoo (CLOUDINARY_CLOUD_NAME, API_KEY, API_SECRET dans .env).',
+      });
+    }
+    if (e.code === 'pdf_not_public') {
+      return res.status(400).json({
+        message:
+          'Le PDF proxy Tranoo est inaccessible (PUBLIC_API_BASE_URL ?). En prod : PUBLIC_API_BASE_URL=https://api.tranoo.store',
+        probe: e.probe,
+      });
+    }
+    return res.status(500).json({ message: e.message || 'Erreur upload PDF' });
+  }
+};
+
 exports.testNotification = async (req, res) => {
   try {
     const { recipientId, senderId, title, message, type } = req.body;
