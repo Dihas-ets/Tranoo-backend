@@ -11,7 +11,9 @@
     "test:referral": "node tests/referralSchema.test.js",
     "drop:referral-index": "node scripts/dropReferralCodeIndex.js",
     "migrate:referral-stats": "node scripts/backfillReferralStats.js",
-    "cleanup:vehicle-payments": "node scripts/cleanupVehiclePayments.js"
+    "cleanup:vehicle-payments": "node scripts/cleanupVehiclePayments.js",
+    "swagger:verify": "node scripts/verify_swagger_coverage.js",
+    "swagger:count": "node -e \"const s=require('./src/config/swagger'); console.log('paths:', Object.keys(s.paths).length)\""
   },
   "keywords": [],
   "author": "",
@@ -38,6 +40,8 @@
     "node-fetch": "^2.7.0",
     "nodemailer": "^7.0.10",
     "socket.io": "^4.8.1",
+    "swagger-jsdoc": "^6.3.0",
+    "swagger-ui-express": "^5.0.1",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

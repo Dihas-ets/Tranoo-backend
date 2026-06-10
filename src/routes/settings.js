@@ -3,7 +3,6 @@ const router = express.Router();
 const settingsController = require('../controllers/settingsController');
 const auth = require('../middlewares/auth');
 
-// Récupérer les paramètres de l'utilisateur
 router.get('/', auth, settingsController.getSettings);
 
 // Mettre à jour les paramètres de l'utilisateur

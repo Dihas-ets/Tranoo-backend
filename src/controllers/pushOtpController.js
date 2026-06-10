@@ -21,6 +21,7 @@ const {
   authAppLabel,
   findUserByPhoneAndApp,
 } = require('../utils/authAppPhone');
+const { ErrorCodes, sendError, sendSuccess } = require('../utils/apiResponse');
 
 // Store temporaire pour les codes OTP (en production, utiliser Redis)
 const otpStore = new Map();
@@ -202,17 +203,11 @@ exports.requestPasswordReset = async (req, res) => {
       nationalNumber,
     });
     if (!phoneDigits || phoneDigits.length < 8) {
-      return res.status(400).json({
-        success: false,
-        message: 'Numéro invalide. Vérifiez l\'indicatif pays et le numéro saisi.',
-      });
+      return sendError(res, 400, ErrorCodes.INVALID_PHONE);
     }
 
     if (!normalizeAppParam(app)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Application requise (tranoo ou tranoo_pro).',
-      });
+      return sendError(res, 400, ErrorCodes.APP_REQUIRED);
     }
 
     const { user, error, authApp, candidates } = await findUserByPhoneAndApp(
@@ -221,10 +216,7 @@ exports.requestPasswordReset = async (req, res) => {
     );
 
     if (error === 'ambiguous') {
-      return res.status(409).json({
-        success: false,
-        message:
-          'Plusieurs comptes Pro partagent ce numéro. Contactez le support pour corriger vos données.',
+      return sendError(res, 409, ErrorCodes.ACCOUNT_AMBIGUOUS, {
         authApp,
         roles: (candidates || []).map((u) => u.role),
       });
@@ -232,8 +224,7 @@ exports.requestPasswordReset = async (req, res) => {
 
     if (error === 'not_found' || !user?.telephone) {
       const appName = authApp === 'tranoo_pro' ? 'Tranoo Pro' : 'Tranoo';
-      return res.status(404).json({
-        success: false,
+      return sendError(res, 404, ErrorCodes.ACCOUNT_NOT_FOUND, {
         message: `Aucun compte ${appName} trouvé pour ce numéro WhatsApp.`,
       });
     }
@@ -302,17 +293,12 @@ exports.requestPasswordReset = async (req, res) => {
 
     if (!waOk && !fcmOk) {
       if (waErr?.code === 'whatsapp_not_configured') {
-        return res.status(503).json({
-          success: false,
+        return sendError(res, 503, ErrorCodes.OTP_SEND_FAILED, {
           message:
             'Envoi indisponible. Autorisez les notifications sur cet appareil ou contactez le support.',
         });
       }
-      return res.status(503).json({
-        success: false,
-        message:
-          "Impossible d'envoyer le code (WhatsApp et notification). Vérifiez le numéro, autorisez les notifications, ou réessayez.",
-      });
+      return sendError(res, 503, ErrorCodes.OTP_SEND_FAILED);
     }
 
     const channelLabel =
@@ -377,8 +363,7 @@ exports.requestPasswordReset = async (req, res) => {
       userMessage = `Code envoyé sur WhatsApp au ${sentToMasked} (numéro enregistré sur votre compte).`;
     }
 
-    return res.json({
-      success: true,
+    return sendSuccess(res, {
       message: userMessage,
       requestId: requestDoc._id,
       deviceId: sessionKey,
@@ -390,7 +375,7 @@ exports.requestPasswordReset = async (req, res) => {
     });
   } catch (error) {
     console.error('[RESET] Erreur requestPasswordReset:', error);
-    return res.status(500).json({ success: false, message: 'Erreur. Réessayez.' });
+    return sendError(res, 500, ErrorCodes.INTERNAL_ERROR);
   }
 };
 
@@ -398,7 +383,7 @@ exports.verifyPasswordResetOtp = async (req, res) => {
   try {
     const { requestId, deviceId, code } = req.body || {};
     if (!requestId || !deviceId || !code) {
-      return res.status(400).json({ success: false, message: 'Champs requis manquants.' });
+      return sendError(res, 400, ErrorCodes.MISSING_FIELDS);
     }
 
     console.log('[RESET] vérification OTP', {
@@ -408,17 +393,17 @@ exports.verifyPasswordResetOtp = async (req, res) => {
 
     const requestDoc = await PasswordResetRequest.findById(requestId);
     if (!requestDoc) {
-      return res.status(400).json({ success: false, message: 'Code invalide ou expiré.' });
+      return sendError(res, 400, ErrorCodes.OTP_INVALID_OR_EXPIRED);
     }
 
     if (String(requestDoc.deviceId) !== String(deviceId).trim()) {
       requestDoc.audit.attempts.push({ ok: false, reason: 'device_mismatch' });
       await requestDoc.save();
-      return res.status(403).json({ success: false, message: 'Ce téléphone ne correspond pas à la demande.' });
+      return sendError(res, 403, ErrorCodes.DEVICE_MISMATCH);
     }
 
     if (requestDoc.status !== 'pending') {
-      return res.status(400).json({ success: false, message: 'Demande invalide.' });
+      return sendError(res, 400, ErrorCodes.REQUEST_INVALID);
     }
 
     if (Date.now() > new Date(requestDoc.expiresAt).getTime()) {
@@ -430,14 +415,14 @@ exports.verifyPasswordResetOtp = async (req, res) => {
         expiresAt: requestDoc.expiresAt,
         now: new Date().toISOString(),
       });
-      return res.status(400).json({ success: false, message: 'Code expiré. Redemandez un code.' });
+      return sendError(res, 400, ErrorCodes.OTP_EXPIRED);
     }
 
     if (requestDoc.attempts >= OTP_MAX_ATTEMPTS) {
       requestDoc.status = 'locked';
       requestDoc.audit.attempts.push({ ok: false, reason: 'locked' });
       await requestDoc.save();
-      return res.status(429).json({ success: false, message: 'Trop de tentatives. Redemandez un code.' });
+      return sendError(res, 429, ErrorCodes.OTP_LOCKED);
     }
 
     const ok = requestDoc.otpHash === hashOtp(String(code).trim());
@@ -446,7 +431,7 @@ exports.verifyPasswordResetOtp = async (req, res) => {
       requestDoc.audit.attempts.push({ ok: false, reason: 'bad_code' });
       if (requestDoc.attempts >= OTP_MAX_ATTEMPTS) requestDoc.status = 'locked';
       await requestDoc.save();
-      return res.status(400).json({ success: false, message: 'Code incorrect.' });
+      return sendError(res, 400, ErrorCodes.OTP_INCORRECT);
     }
 
     requestDoc.status = 'verified';
@@ -460,10 +445,10 @@ exports.verifyPasswordResetOtp = async (req, res) => {
       passwordStepExpiresAt: requestDoc.expiresAt,
     });
 
-    return res.json({ success: true, message: 'Code vérifié.' });
+    return sendSuccess(res, { message: 'Code vérifié.' });
   } catch (error) {
     console.error('[RESET] Erreur verifyPasswordResetOtp:', error);
-    return res.status(500).json({ success: false, message: "Erreur. Réessayez." });
+    return sendError(res, 500, ErrorCodes.INTERNAL_ERROR);
   }
 };
 
@@ -471,44 +456,40 @@ exports.resetPasswordWithOtp = async (req, res) => {
   try {
     const { requestId, deviceId, newPassword } = req.body || {};
     if (!requestId || !deviceId || !newPassword) {
-      return res.status(400).json({ success: false, message: 'Champs requis manquants.' });
+      return sendError(res, 400, ErrorCodes.MISSING_FIELDS);
     }
 
     if (String(newPassword).length < authConfig.PASSWORD_MIN_LENGTH) {
-      return res.status(400).json({
-        success: false,
+      return sendError(res, 400, ErrorCodes.PASSWORD_TOO_SHORT, {
         message: `Le mot de passe doit contenir au moins ${authConfig.PASSWORD_MIN_LENGTH} caractères.`,
       });
     }
 
     const requestDoc = await PasswordResetRequest.findById(requestId);
     if (!requestDoc) {
-      return res.status(400).json({ success: false, message: 'Demande invalide.' });
+      return sendError(res, 400, ErrorCodes.REQUEST_INVALID);
     }
 
     if (String(requestDoc.deviceId) !== String(deviceId).trim()) {
-      return res.status(403).json({ success: false, message: 'Ce téléphone ne correspond pas à la demande.' });
+      return sendError(res, 403, ErrorCodes.DEVICE_MISMATCH);
     }
 
     if (requestDoc.status !== 'verified') {
-      return res.status(400).json({ success: false, message: "Veuillez d'abord vérifier le code." });
+      return sendError(res, 400, ErrorCodes.VERIFY_FIRST);
     }
 
     if (Date.now() > new Date(requestDoc.expiresAt).getTime()) {
       requestDoc.status = 'expired';
       await requestDoc.save();
-      return res.status(400).json({ success: false, message: 'Code expiré. Redemandez un code.' });
+      return sendError(res, 400, ErrorCodes.OTP_EXPIRED);
     }
 
     const user = await User.findOne({ uid: requestDoc.userUid });
-    if (!user) return res.status(404).json({ success: false, message: 'Compte introuvable.' });
+    if (!user) return sendError(res, 404, ErrorCodes.ACCOUNT_NOT_FOUND);
 
     const updatedUids = await applyPasswordToUserAccounts(user, newPassword);
     if (!updatedUids.length) {
-      return res.status(500).json({
-        success: false,
-        message: 'Impossible de mettre à jour le mot de passe. Contactez le support.',
-      });
+      return sendError(res, 500, ErrorCodes.PASSWORD_UPDATE_FAILED);
     }
 
     // Marquer OTP utilisé + device trusted
@@ -544,10 +525,10 @@ exports.resetPasswordWithOtp = async (req, res) => {
       }
     }
 
-    return res.json({ success: true, message: 'Mot de passe réinitialisé.' });
+    return sendSuccess(res, { message: 'Mot de passe réinitialisé.' });
   } catch (error) {
     console.error('[RESET] Erreur resetPasswordWithOtp:', error);
-    return res.status(500).json({ success: false, message: "Erreur. Réessayez." });
+    return sendError(res, 500, ErrorCodes.INTERNAL_ERROR);
   }
 };
 

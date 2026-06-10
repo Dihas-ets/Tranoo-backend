@@ -20,6 +20,7 @@
 const admin = require('firebase-admin');
 const User = require('../models/User');
 const AuthEvent = require('../models/AuthEvent');
+const { ErrorCodes, sendError } = require('../utils/apiResponse');
 
 const DASHBOARD_ADMIN_KEYS = new Set([
   'admin',
@@ -58,7 +59,7 @@ module.exports = async function (req, res, next) {
       '[AUTH] Header authorization:',
       authHeader ? 'Présent mais invalide' : 'Absent',
     );
-    return res.status(401).json({ message: 'Token manquant ou invalide' });
+    return sendError(res, 401, ErrorCodes.TOKEN_MISSING);
   }
 
   const idToken = authHeader.split('Bearer ')[1];
@@ -97,10 +98,7 @@ module.exports = async function (req, res, next) {
     // Si l'utilisateur n'existe toujours pas en base, on refuse l'accès.
     if (!user) {
       console.error('[AUTH] ❌ Utilisateur introuvable dans MongoDB pour uid:', uid);
-      return res.status(401).json({
-        message: 'Utilisateur non trouvé. Veuillez vous reconnecter.',
-        code: 'USER_NOT_FOUND',
-      });
+      return sendError(res, 401, ErrorCodes.USER_NOT_FOUND);
     } else {
       console.log('[AUTH] ✅ Utilisateur trouvé dans MongoDB');
       console.log('[AUTH] MongoDB _id:', user._id);
@@ -111,9 +109,7 @@ module.exports = async function (req, res, next) {
       if (user.isBlocked) {
         console.error('[AUTH] ❌ Utilisateur bloqué');
         console.error('[AUTH] Date blocage:', user.blockedAt);
-        return res.status(403).json({
-          message:
-            "Votre compte a été bloqué. Contactez l'administration.",
+        return sendError(res, 403, ErrorCodes.ACCOUNT_BLOCKED, {
           blocked: true,
           blockedAt: user.blockedAt,
         });
@@ -197,17 +193,11 @@ module.exports = async function (req, res, next) {
           console.log('[AUTH] ===== FIN AUTHENTIFICATION =====');
           return next();
         }
-        return res.status(401).json({
-          message: 'Session web requise. Veuillez vous reconnecter.',
-          code: 'SESSION_REQUIRED',
-        });
+        return sendError(res, 401, ErrorCodes.SESSION_REQUIRED);
       }
 
       if (webSessionId !== currentSessionId) {
-        return res.status(401).json({
-          message: 'Votre session a été ouverte ailleurs. Reconnexion requise.',
-          code: 'SESSION_REVOKED',
-        });
+        return sendError(res, 401, ErrorCodes.SESSION_REVOKED);
       }
 
       if (!lastActivityAt || now - lastActivityAt > idleMs) {
@@ -218,10 +208,7 @@ module.exports = async function (req, res, next) {
           clientInfo: null,
         };
         await user.save();
-        return res.status(401).json({
-          message: 'Session expirée après inactivité. Veuillez vous reconnecter.',
-          code: 'SESSION_INACTIVE',
-        });
+        return sendError(res, 401, ErrorCodes.SESSION_INACTIVE);
       }
 
       // Throttle de mise à jour pour éviter trop d'écritures
@@ -243,10 +230,8 @@ module.exports = async function (req, res, next) {
     if (error.stack) {
       console.error('[AUTH] Stack trace:', error.stack);
     }
-    return res.status(401).json({
-      message: 'Token invalide',
+    return sendError(res, 401, ErrorCodes.TOKEN_INVALID, {
       error: error.message,
-      code: error.code,
     });
   }
 };
