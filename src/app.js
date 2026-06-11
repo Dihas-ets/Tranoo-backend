@@ -452,6 +452,13 @@ try {
   console.warn('Geo Benin routes non chargées:', e.message);
 }
 
+try {
+  const geoRoutes = require('./routes/geo');
+  app.use('/api/geo', geoRoutes);
+} catch (e) {
+  console.warn('Geo routes non chargées:', e.message);
+}
+
 
 
 // Wallet routes (dynamique)

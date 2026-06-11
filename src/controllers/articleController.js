@@ -141,7 +141,18 @@ exports.createArticle = async (req, res) => {
       source = 'tranoo';
     }
     // Publication directe en ligne (validation admin retirée)
-    const normalizedLieu = (req.body.lieu || req.body.localisation || '').toString();
+    const { normalizeArticleLocation } = require('../services/locationGeocode');
+    const lieuRaw = (req.body.lieu || req.body.localisation || '').toString().trim();
+    let lieuFields = {};
+    if (lieuRaw) {
+      const norm = await normalizeArticleLocation(lieuRaw);
+      lieuFields = {
+        lieu: norm.lieu || lieuRaw,
+        localisation: norm.localisation || lieuRaw,
+        ...(norm.pays ? { pays: norm.pays } : {}),
+      };
+    }
+    const normalizedLieu = lieuFields.localisation || lieuRaw;
     if ((req.body.type || '').toString().toLowerCase() === 'piece') {
       console.log(
         '[ARTICLE_CREATE][PIECE] fournisseur payload=%j',
@@ -150,8 +161,9 @@ exports.createArticle = async (req, res) => {
     }
     const article = new Article({
       ...req.body,
-      lieu: req.body.lieu ?? normalizedLieu,
-      localisation: req.body.localisation ?? normalizedLieu,
+      ...lieuFields,
+      lieu: lieuFields.lieu ?? req.body.lieu ?? normalizedLieu,
+      localisation: lieuFields.localisation ?? req.body.localisation ?? normalizedLieu,
       vendeur: vendeurId,
       statut: 'en_ligne',
       source,
@@ -372,7 +384,17 @@ exports.updateArticle = async (req, res) => {
     if (req.user.role !== 'admin' && article.vendeur.toString() !== req.user._id.toString()) {
       return res.status(403).json({ message: 'Non autorisé à modifier cet article' });
     }
-    const normalizedLieu = (req.body.lieu || req.body.localisation || '').toString();
+    const { normalizeArticleLocation } = require('../services/locationGeocode');
+    const lieuRaw = (req.body.lieu || req.body.localisation || '').toString().trim();
+    let lieuFields = {};
+    if (lieuRaw) {
+      const norm = await normalizeArticleLocation(lieuRaw);
+      lieuFields = {
+        lieu: norm.lieu || lieuRaw,
+        localisation: norm.localisation || lieuRaw,
+        ...(norm.pays ? { pays: norm.pays } : {}),
+      };
+    }
     if ((article.type || '').toString().toLowerCase() === 'piece') {
       console.log(
         '[ARTICLE_UPDATE][PIECE] incoming fournisseur payload=%j',
@@ -381,12 +403,7 @@ exports.updateArticle = async (req, res) => {
     }
     Object.assign(article, {
       ...req.body,
-      ...(normalizedLieu
-        ? {
-            lieu: req.body.lieu ?? normalizedLieu,
-            localisation: req.body.localisation ?? normalizedLieu,
-          }
-        : {}),
+      ...(lieuRaw ? lieuFields : {}),
     });
     // Correction : Forcer le champ source à 'tranoo' si entreprise=TRANOO
     if (req.body.entreprise && req.body.entreprise.trim().toUpperCase() === 'TRANOO') {

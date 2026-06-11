@@ -25,6 +25,7 @@ const articleSchema = new mongoose.Schema({
   dedouanement: Boolean, // Dédouanement (true = Oui, false = Non)
   lieu: String,        // Localisation (ancienne version, garde pour compatibilité)
   localisation: String, // Alias compat (apps)
+  pays: String,        // Pays déduit (saisie ou géocodage)
   // Informations détaillées sur le fournisseur (pour le parcours livreur)
   fournisseur: {
     nom: String,
