@@ -249,6 +249,14 @@ const userSchema = new mongoose.Schema({
   adresse: { type: String },
   ville: { type: String },
   photo: { type: String },
+  transitaireGallery: [
+    {
+      type: { type: String, enum: ['image', 'video'], required: true },
+      url: { type: String, required: true },
+      createdAt: { type: Date, default: Date.now },
+    },
+  ],
+  transitaireDescription: { type: String, default: null, maxlength: 500 },
   password: { type: String },
   typeAdmin: {
     type: String,

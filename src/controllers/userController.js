@@ -6,6 +6,7 @@ const {
   assertPhoneNotTaken,
   phoneConflictMessage,
 } = require('../utils/authAppPhone');
+const { t, resolveLocale } = require('../utils/i18n');
 const Article = require('../models/Article');
 const cloudinary = require('cloudinary').v2;
 const admin = require('firebase-admin');
@@ -691,9 +692,12 @@ exports.updateMe = async (req, res) => {
       'vendeurType',
       'adresse',
       'ville',
+      'pays',
       'latitude',
       'longitude',
       'fournisseurProfil',
+      'transitaireGallery',
+      'transitaireDescription',
     ];
     const updates = {};
     allowedFields.forEach((field) => {
@@ -705,6 +709,66 @@ exports.updateMe = async (req, res) => {
     }
 
     const user = req.user;
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'transitaireDescription')) {
+      const locale = resolveLocale(req);
+      if (user.role !== 'transitaire') {
+        return res.status(400).json({
+          message: t('galleryTransitaireOnly', locale),
+          messageKey: 'galleryTransitaireOnly',
+        });
+      }
+      const raw = updates.transitaireDescription;
+      const desc = typeof raw === 'string' ? raw.trim() : '';
+      if (desc.length > 500) {
+        return res.status(400).json({
+          message: 'Description trop longue (max 500 caractères)',
+        });
+      }
+      updates.transitaireDescription = desc.length > 0 ? desc : null;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'transitaireGallery')) {
+      const locale = resolveLocale(req);
+      if (user.role !== 'transitaire') {
+        return res.status(400).json({
+          message: t('galleryTransitaireOnly', locale),
+          messageKey: 'galleryTransitaireOnly',
+        });
+      }
+      const rawGallery = updates.transitaireGallery;
+      if (!Array.isArray(rawGallery)) {
+        return res.status(400).json({
+          message: t('galleryMustBeArray', locale),
+          messageKey: 'galleryMustBeArray',
+        });
+      }
+      if (rawGallery.length > 20) {
+        return res.status(400).json({
+          message: t('galleryMaxItems', locale),
+          messageKey: 'galleryMaxItems',
+        });
+      }
+      const gallery = [];
+      for (const item of rawGallery) {
+        if (!item || typeof item !== 'object') {
+          return res.status(400).json({
+            message: t('galleryInvalidItem', locale),
+            messageKey: 'galleryInvalidItem',
+          });
+        }
+        const type = item.type;
+        const url = typeof item.url === 'string' ? item.url.trim() : '';
+        if (!['image', 'video'].includes(type) || !url) {
+          return res.status(400).json({
+            message: t('galleryItemTypeUrl', locale),
+            messageKey: 'galleryItemTypeUrl',
+          });
+        }
+        gallery.push({ type, url });
+      }
+      updates.transitaireGallery = gallery;
+    }
 
     if (req.body.latitude != null && req.body.longitude != null) {
       const lat = Number(req.body.latitude);
@@ -761,30 +825,58 @@ exports.updateMe = async (req, res) => {
     }
 
     const emailChanged = updates.email && updates.email !== user.email;
-    Object.assign(user, updates);
+    const galleryOnly =
+      Object.keys(updates).length === 1 &&
+      Object.prototype.hasOwnProperty.call(updates, 'transitaireGallery');
+
+    if (galleryOnly) {
+      await User.findByIdAndUpdate(user._id, {
+        $set: { transitaireGallery: updates.transitaireGallery },
+      });
+      const fresh = await User.findById(user._id);
+      return res.json({ message: 'Profil mis à jour', user: fresh });
+    }
+
+    const setPayload = { ...updates };
+    if (user.location) {
+      setPayload.location = user.location;
+      setPayload.lastLocationAt = user.lastLocationAt;
+    }
+    if (user.fournisseurProfil != null) {
+      setPayload.fournisseurProfil = user.fournisseurProfil;
+    }
+
+    let fresh;
     try {
-      await user.save();
+      fresh = await User.findByIdAndUpdate(
+        user._id,
+        { $set: setPayload },
+        { new: true, runValidators: true }
+      );
     } catch (saveErr) {
       const msg = phoneConflictMessage(saveErr);
       if (msg) return res.status(409).json({ message: msg });
       throw saveErr;
+    }
+    if (!fresh) {
+      return res.status(404).json({ message: 'Utilisateur introuvable' });
     }
 
     // Synchroniser l'email avec Firebase si modifié
     if (emailChanged) {
       try {
         console.log('[updateMe] Firebase email update attempt', {
-          uid: user.uid,
+          uid: fresh.uid,
           oldEmail: req.user.email,
-          newEmail: user.email,
+          newEmail: fresh.email,
         });
-        await admin.auth().updateUser(user.uid, { email: user.email });
-        console.log('[updateMe] Firebase email update success', { uid: user.uid });
+        await admin.auth().updateUser(fresh.uid, { email: fresh.email });
+        console.log('[updateMe] Firebase email update success', { uid: fresh.uid });
       } catch (err) {
         console.error('[updateMe] Firebase email update failed', {
-          uid: user.uid,
+          uid: fresh.uid,
           oldEmail: req.user.email,
-          newEmail: user.email,
+          newEmail: fresh.email,
           code: err?.errorInfo?.code || err.code,
           message: err?.errorInfo?.message || err.message,
         });
@@ -796,11 +888,12 @@ exports.updateMe = async (req, res) => {
       }
     }
 
-    const statut = await computeUserStatut(user);
-    const userObj = user.toObject();
+    const statut = await computeUserStatut(fresh);
+    const userObj = fresh.toObject();
     userObj.statut = statut;
     res.json({ message: 'Profil mis à jour', user: userObj });
   } catch (error) {
+    console.error('[updateMe] Erreur:', error);
     res.status(500).json({ message: 'Erreur lors de la mise à jour du profil', error: error.message });
   }
 };
