@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 
 // Modèle Article unique pour voitures et pièces détachées
 const articleSchema = new mongoose.Schema({
-  type: { type: String, enum: ['voiture', 'piece'], required: true }, // Type d'article
+  type: { type: String, enum: ['voiture', 'piece', 'moto'], required: true }, // Type d'article
   titre: { type: String, required: true }, // Titre ou nom
   description: String, // Description
   prix: Number, // Prix de vente
@@ -39,6 +39,20 @@ const articleSchema = new mongoose.Schema({
     latitude: Number,
     longitude: Number,
   },
+  // Champs spécifiques moto
+  typeMoto: String,        // Scooter, Routière, Sportive, Trail, Cross, Tricycle
+  puissance: String,
+  transmission: String,    // Manuelle, Semi-automatique, Automatique
+  demarrage: String,       // Électrique, Kick, Les deux
+  refroidissement: String, // Air, Liquide
+  capaciteReservoir: String,
+  autonomie: String,       // si électrique
+  disponibilite: String,   // En stock, Sur commande
+  garantieConstructeur: Boolean,
+  dureeGarantie: String,
+  kilometrage: String,
+  equipements: [String],   // ABS, LED, GPS intégré, etc.
+  devise: String,
   // Champs spécifiques pièce
   categorie: String,   // Catégorie de pièce (frein, moteur, electricité, etc.)
   typeMoteur: String,  // Type de moteur (Essence, Gazoil, etc.)

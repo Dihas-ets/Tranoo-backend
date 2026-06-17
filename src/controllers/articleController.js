@@ -58,7 +58,8 @@ async function notifyBuyerAlertProposal(article, sellerId) {
   try {
     const notificationController = require('./notificationController');
     const isPiece = (article.type || '').toString().toLowerCase() === 'piece';
-    const detailPath = isPiece ? 'mastervac' : 'cars_info';
+    const isMoto = (article.type || '').toString().toLowerCase() === 'moto';
+    const detailPath = isPiece ? 'mastervac' : (isMoto ? 'moto_info' : 'cars_info');
     await notificationController.createNotification(
       article.alertContext.buyerId,
       sellerId,
@@ -539,7 +540,8 @@ exports.updateStatut = async (req, res) => {
       try {
         const notificationController = require('./notificationController');
         const isPiece = (article.type || '').toString().toLowerCase() === 'piece';
-        const label = isPiece ? 'pièce' : 'véhicule';
+        const isMoto = (article.type || '').toString().toLowerCase() === 'moto';
+        const label = isPiece ? 'pièce' : (isMoto ? 'moto' : 'véhicule');
         await notificationController.createNotification(
           article.vendeur,
           req.user._id,

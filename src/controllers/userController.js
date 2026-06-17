@@ -795,7 +795,7 @@ exports.updateMe = async (req, res) => {
         return res.status(400).json({ message: 'vendeurType réservé aux vendeurs' });
       }
       const v = updates.vendeurType;
-      const allowed = [null, 'mixte', 'vehicules', 'pieces'];
+      const allowed = [null, 'mixte', 'vehicules', 'pieces', 'motos'];
       if (!allowed.includes(v)) {
         return res.status(400).json({ message: 'vendeurType invalide' });
       }

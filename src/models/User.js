@@ -292,7 +292,7 @@ const userSchema = new mongoose.Schema({
   // null => compatibilité anciens vendeurs (considérés comme mixte)
   vendeurType: {
     type: String,
-    enum: ['mixte', 'vehicules', 'pieces', null],
+    enum: ['mixte', 'vehicules', 'pieces', 'motos', null],
     default: null,
   },
   statutContrat: {
