@@ -308,23 +308,37 @@ exports.createContact = async (req, res) => {
 
     // Notifier le chauffeur (notification in-app + push FCM)
     try {
+      const buyerName = `${user.prenoms || ''} ${user.nom || ''}`.trim();
+      const tricycleI18n = {
+        titleKey: 'tricycle.newRequest.title',
+        messageKey: 'tricycle.newRequest.message',
+        params: { buyerName },
+      };
+      const { buildNotificationContent, formatTemplate, resolveUserLocale } =
+        require('../utils/notificationI18n');
+      const { title, message } = buildNotificationContent(tricycleI18n);
       await notificationController.createNotification(
         chauffeur._id,
         user._id,
-        'Nouvelle demande Tricycle',
-        `${user.prenoms} ${user.nom} souhaite vous contacter pour un déplacement en tricycle.`,
+        title,
+        message,
         'tricycle',
         contact._id,
-        'TricycleContact'
+        'TricycleContact',
+        {},
+        tricycleI18n
       );
 
       if (chauffeur.fcmToken) {
         try {
+          const locale = resolveUserLocale(chauffeur);
+          const pushTitle = formatTemplate(tricycleI18n.titleKey, locale, tricycleI18n.params);
+          const pushBody = formatTemplate(tricycleI18n.messageKey, locale, tricycleI18n.params);
           await admin.messaging().send({
             token: chauffeur.fcmToken,
             notification: {
-              title: 'Nouvelle demande Tricycle',
-              body: `${user.prenoms} ${user.nom} souhaite vous contacter pour un déplacement en tricycle.`,
+              title: pushTitle,
+              body: pushBody,
             },
             android: {
               priority: 'high',
@@ -445,24 +459,35 @@ exports.acceptContact = async (req, res) => {
 
     // Notifier l'utilisateur (notification in-app + push FCM)
     try {
+      const acceptedI18n = {
+        titleKey: 'tricycle.accepted.title',
+        messageKey: 'tricycle.accepted.message',
+        params: {},
+      };
+      const { buildNotificationContent, formatTemplate, resolveUserLocale } =
+        require('../utils/notificationI18n');
+      const { title, message } = buildNotificationContent(acceptedI18n);
       await notificationController.createNotification(
         contact.user,
         me._id,
-        'Demande Tricycle acceptée',
-        'Le chauffeur a accepté votre demande. Vous pouvez maintenant échanger librement.',
+        title,
+        message,
         'tricycle',
         contact._id,
-        'TricycleContact'
+        'TricycleContact',
+        {},
+        acceptedI18n
       );
 
-      const user = await User.findById(contact.user).select('fcmToken prenoms nom');
+      const user = await User.findById(contact.user).select('fcmToken prenoms nom langue');
       if (user && user.fcmToken) {
         try {
+          const locale = resolveUserLocale(user);
           await admin.messaging().send({
             token: user.fcmToken,
             notification: {
-              title: 'Demande Tricycle acceptée',
-              body: 'Le chauffeur a accepté votre demande. Vous pouvez maintenant échanger librement.',
+              title: formatTemplate(acceptedI18n.titleKey, locale, {}),
+              body: formatTemplate(acceptedI18n.messageKey, locale, {}),
             },
             android: {
               priority: 'high',
@@ -549,25 +574,35 @@ exports.closeContact = async (req, res) => {
 
     if (closedByBuyer && contact.chauffeur) {
       try {
+        const cancelledI18n = {
+          titleKey: 'tricycle.cancelled.title',
+          messageKey: 'tricycle.cancelled.message',
+          params: {},
+        };
+        const { buildNotificationContent, formatTemplate, resolveUserLocale } =
+          require('../utils/notificationI18n');
+        const { title, message } = buildNotificationContent(cancelledI18n);
         await notificationController.createNotification(
           contact.chauffeur._id,
           contact.user?._id || contact.user,
-          'Demande Tricycle annulée',
-          `${contact.user?.prenoms ?? ''} ${contact.user?.nom ?? 'L\'acheteur'}`.trim() +
-            ' a annulé sa demande de tricycle.',
+          title,
+          message,
           'tricycle',
           contact._id,
-          'TricycleContact'
+          'TricycleContact',
+          {},
+          cancelledI18n
         );
 
-        const chauffeur = await User.findById(contact.chauffeur).select('fcmToken prenoms nom');
+        const chauffeur = await User.findById(contact.chauffeur).select('fcmToken prenoms nom langue');
         if (chauffeur && chauffeur.fcmToken) {
           try {
+            const locale = resolveUserLocale(chauffeur);
             await admin.messaging().send({
               token: chauffeur.fcmToken,
               notification: {
-                title: 'Demande Tricycle annulée',
-                body: 'L’acheteur a annulé sa demande de tricycle.',
+                title: formatTemplate(cancelledI18n.titleKey, locale, {}),
+                body: formatTemplate(cancelledI18n.messageKey, locale, {}),
               },
               android: {
                 priority: 'high',
@@ -593,24 +628,35 @@ exports.closeContact = async (req, res) => {
 
     if (closedByChauffeur && contact.user) {
       try {
+        const rejectedI18n = {
+          titleKey: 'tricycle.rejected.title',
+          messageKey: 'tricycle.rejected.message',
+          params: {},
+        };
+        const { buildNotificationContent, formatTemplate, resolveUserLocale } =
+          require('../utils/notificationI18n');
+        const { title, message } = buildNotificationContent(rejectedI18n);
         await notificationController.createNotification(
           contact.user?._id || contact.user,
           contact.chauffeur?._id || contact.chauffeur,
-          'Demande Tricycle rejetée',
-          'Le chauffeur a rejeté votre demande de tricycle.',
+          title,
+          message,
           'tricycle',
           contact._id,
-          'TricycleContact'
+          'TricycleContact',
+          {},
+          rejectedI18n
         );
 
-        const buyer = await User.findById(contact.user).select('fcmToken prenoms nom');
+        const buyer = await User.findById(contact.user).select('fcmToken prenoms nom langue');
         if (buyer && buyer.fcmToken) {
           try {
+            const locale = resolveUserLocale(buyer);
             await admin.messaging().send({
               token: buyer.fcmToken,
               notification: {
-                title: 'Demande Tricycle rejetée',
-                body: 'Le chauffeur a rejeté votre demande de tricycle.',
+                title: formatTemplate(rejectedI18n.titleKey, locale, {}),
+                body: formatTemplate(rejectedI18n.messageKey, locale, {}),
               },
               android: {
                 priority: 'high',

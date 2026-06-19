@@ -19,6 +19,18 @@ const notificationSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+  titleKey: {
+    type: String,
+    default: null,
+  },
+  messageKey: {
+    type: String,
+    default: null,
+  },
+  i18nParams: {
+    type: mongoose.Schema.Types.Mixed,
+    default: null,
+  },
   type: {
     type: String,
     enum: [

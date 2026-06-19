@@ -27,6 +27,31 @@ const MESSAGES_FR = {
   [ErrorCodes.PASSWORD_TOO_SHORT]: 'Mot de passe trop court.',
   [ErrorCodes.PASSWORD_UPDATE_FAILED]:
     'Impossible de mettre à jour le mot de passe. Contactez le support.',
+  [ErrorCodes.NOT_AUTHENTICATED]: 'Utilisateur non authentifié',
+  [ErrorCodes.FORBIDDEN]: 'Accès refusé',
+  [ErrorCodes.ACCESS_DENIED]: 'Accès refusé',
+  [ErrorCodes.NOT_FOUND]: 'Ressource introuvable',
+  [ErrorCodes.NO_UPDATE_DATA]: 'Aucune donnée à mettre à jour',
+  [ErrorCodes.DESCRIPTION_TOO_LONG]: 'Description trop longue (max 500 caractères)',
+  [ErrorCodes.USER_INCOMPLETE]:
+    'Informations utilisateur incomplètes (uid/firebase ou _id manquant)',
+  [ErrorCodes.VENDEUR_TYPE_SELLERS_ONLY]: 'vendeurType réservé aux vendeurs',
+  [ErrorCodes.VENDEUR_TYPE_INVALID]: 'vendeurType invalide',
+  [ErrorCodes.PHONE_ALREADY_USED]: 'Ce numéro est déjà utilisé pour cette application.',
+  [ErrorCodes.PHONE_AMBIGUOUS]:
+    'Ce numéro est associé à plusieurs comptes. Contactez le support.',
+  [ErrorCodes.PROFILE_UPDATE_FAILED]: 'Erreur lors de la mise à jour du profil',
+  [ErrorCodes.FIREBASE_EMAIL_SYNC_FAILED]:
+    'Email mis à jour en base mais pas dans Firebase',
+  [ErrorCodes.GALLERY_TRANSITAIRE_ONLY]: 'transitaireGallery réservé aux transitaires',
+  [ErrorCodes.GALLERY_MUST_BE_ARRAY]: 'transitaireGallery doit être un tableau',
+  [ErrorCodes.GALLERY_MAX_ITEMS]: 'Maximum 20 éléments dans la galerie',
+  [ErrorCodes.GALLERY_INVALID_ITEM]: 'Élément de galerie invalide',
+  [ErrorCodes.GALLERY_ITEM_TYPE_URL]:
+    'Chaque élément doit avoir un type (image|video) et une url',
+  [ErrorCodes.FCM_TOKEN_REQUIRED]: 'Token FCM requis',
+  [ErrorCodes.ARTICLE_ID_REQUIRED]: 'articleId requis',
+  [ErrorCodes.FILE_REQUIRED]: 'Aucun fichier envoyé',
   [ErrorCodes.INTERNAL_ERROR]: 'Erreur. Réessayez.',
   [ErrorCodes.VALIDATION_ERROR]: 'Données invalides.',
 };
@@ -51,6 +76,26 @@ function sendError(res, status, code, extra = {}) {
 
 /**
  * @param {import('express').Response} res
+ * @param {unknown} err
+ * @returns {import('express').Response | null}
+ */
+function sendPhoneConflict(res, err) {
+  if (err?.code === 'phone_ambiguous') {
+    return sendError(res, 409, ErrorCodes.PHONE_AMBIGUOUS);
+  }
+  if (
+    err?.code === 'phone_taken' ||
+    (err?.code === 11000 && err?.keyPattern?.telephoneCanonical)
+  ) {
+    return sendError(res, 409, ErrorCodes.PHONE_ALREADY_USED, {
+      message: err?.message || MESSAGES_FR[ErrorCodes.PHONE_ALREADY_USED],
+    });
+  }
+  return null;
+}
+
+/**
+ * @param {import('express').Response} res
  * @param {Record<string, unknown>} [data]
  * @param {number} [status]
  */
@@ -62,5 +107,6 @@ module.exports = {
   ErrorCodes,
   MESSAGES_FR,
   sendError,
+  sendPhoneConflict,
   sendSuccess,
 };

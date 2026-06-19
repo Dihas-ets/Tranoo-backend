@@ -60,11 +60,18 @@ async function notifyBuyerAlertProposal(article, sellerId) {
     const isPiece = (article.type || '').toString().toLowerCase() === 'piece';
     const isMoto = (article.type || '').toString().toLowerCase() === 'moto';
     const detailPath = isPiece ? 'mastervac' : (isMoto ? 'moto_info' : 'cars_info');
+    const i18n = {
+      titleKey: 'alert.proposal.title',
+      messageKey: 'alert.proposal.message',
+      params: { articleTitle: article.titre || '' },
+    };
+    const { buildNotificationContent } = require('../utils/notificationI18n');
+    const { title, message } = buildNotificationContent(i18n);
     await notificationController.createNotification(
       article.alertContext.buyerId,
       sellerId,
-      'Une proposition correspond a votre alerte',
-      `Votre alerte a recu une nouvelle proposition: "${article.titre}".`,
+      title,
+      message,
       'proposition_alerte',
       article._id,
       'Article',
@@ -83,6 +90,7 @@ async function notifyBuyerAlertProposal(article, sellerId) {
           ? article.alertContext.sourceNotificationId.toString()
           : null,
       },
+      i18n
     );
   } catch (buyerNotifError) {
     console.error('[ARTICLE] Erreur notification proposition alerte:', buyerNotifError);
@@ -541,12 +549,23 @@ exports.updateStatut = async (req, res) => {
         const notificationController = require('./notificationController');
         const isPiece = (article.type || '').toString().toLowerCase() === 'piece';
         const isMoto = (article.type || '').toString().toLowerCase() === 'moto';
-        const label = isPiece ? 'pièce' : (isMoto ? 'moto' : 'véhicule');
+        const articleType = isPiece ? 'piece' : isMoto ? 'moto' : 'vehicle';
+        const i18n = {
+          titleKey: 'article.rejected.title',
+          messageKey: 'article.rejected.message',
+          params: {
+            articleType,
+            articleTitle: article.titre || '',
+            motifRejet: raison,
+          },
+        };
+        const { buildNotificationContent } = require('../utils/notificationI18n');
+        const { title, message } = buildNotificationContent(i18n);
         await notificationController.createNotification(
           article.vendeur,
           req.user._id,
-          'Annonce rejetée',
-          `Votre ${label} "${article.titre}" a été rejetée. Motif : ${raison}`,
+          title,
+          message,
           'general',
           article._id,
           'Article',
@@ -557,7 +576,8 @@ exports.updateStatut = async (req, res) => {
             articleType: article.type || '',
             targetPath: isPiece ? 'mastervac' : 'cars_info',
             targetArticleId: article._id.toString(),
-          }
+          },
+          i18n
         );
       } catch (notifError) {
         console.error('[ARTICLE] Erreur notification vendeur rejet:', notifError);

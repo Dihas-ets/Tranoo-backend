@@ -4,9 +4,8 @@ const bcrypt = require('bcryptjs');
 const {
   prepareUserPhoneFields,
   assertPhoneNotTaken,
-  phoneConflictMessage,
 } = require('../utils/authAppPhone');
-const { t, resolveLocale } = require('../utils/i18n');
+const { ErrorCodes, sendError, sendPhoneConflict } = require('../utils/apiResponse');
 const Article = require('../models/Article');
 const cloudinary = require('cloudinary').v2;
 const admin = require('firebase-admin');
@@ -241,7 +240,7 @@ exports.deleteMyAccount = async (req, res) => {
     const mongoUser = req.user;
     if (!mongoUser) {
       console.error('[DELETE_MY_ACCOUNT] req.user manquant');
-      return res.status(401).json({ message: 'Utilisateur non authentifié' });
+      return sendError(res, 401, ErrorCodes.NOT_AUTHENTICATED);
     }
 
     const userId = mongoUser._id;
@@ -253,9 +252,7 @@ exports.deleteMyAccount = async (req, res) => {
 
     if (!userId || !firebaseUid) {
       console.error('[DELETE_MY_ACCOUNT] _id ou firebaseUid manquant');
-      return res.status(400).json({
-        message: 'Informations utilisateur incomplètes (uid/firebase ou _id manquant)',
-      });
+      return sendError(res, 400, ErrorCodes.USER_INCOMPLETE);
     }
 
     // Best-effort: supprimer les données liées à l'utilisateur
@@ -567,7 +564,7 @@ exports.getAcheteursWithAchats = async (_req, res) => {
 
 exports.uploadProfilePhoto = async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ message: 'Aucun fichier envoyé' });
+    if (!req.file) return sendError(res, 400, ErrorCodes.FILE_REQUIRED);
     // Upload sur Cloudinary
     const result = await cloudinary.uploader.upload(req.file.path, {
       folder: 'tranoo/profiles',
@@ -600,7 +597,7 @@ exports.updateFcmToken = async (req, res) => {
   try {
     const { fcmToken, deviceId } = req.body;
     if (!fcmToken) {
-      return res.status(400).json({ message: 'Token FCM requis' });
+      return sendError(res, 400, ErrorCodes.FCM_TOKEN_REQUIRED);
     }
     req.user.fcmToken = fcmToken;
     await req.user.save();
@@ -641,7 +638,7 @@ exports.updateFcmToken = async (req, res) => {
 exports.addFavorite = async (req, res) => {
   try {
     const { articleId } = req.body;
-    if (!articleId) return res.status(400).json({ message: 'articleId requis' });
+    if (!articleId) return sendError(res, 400, ErrorCodes.ARTICLE_ID_REQUIRED);
     const user = req.user;
     if (!user.favoris) user.favoris = [];
     const exists = user.favoris.find((id) => id.toString() === articleId);
@@ -659,7 +656,7 @@ exports.addFavorite = async (req, res) => {
 exports.removeFavorite = async (req, res) => {
   try {
     const { articleId } = req.body;
-    if (!articleId) return res.status(400).json({ message: 'articleId requis' });
+    if (!articleId) return sendError(res, 400, ErrorCodes.ARTICLE_ID_REQUIRED);
     const user = req.user;
     user.favoris = (user.favoris || []).filter((id) => id.toString() !== articleId);
     await user.save();
@@ -705,65 +702,43 @@ exports.updateMe = async (req, res) => {
     });
 
     if (Object.keys(updates).length === 0) {
-      return res.status(400).json({ message: 'Aucune donnée à mettre à jour' });
+      return sendError(res, 400, ErrorCodes.NO_UPDATE_DATA);
     }
 
     const user = req.user;
 
     if (Object.prototype.hasOwnProperty.call(updates, 'transitaireDescription')) {
-      const locale = resolveLocale(req);
       if (user.role !== 'transitaire') {
-        return res.status(400).json({
-          message: t('galleryTransitaireOnly', locale),
-          messageKey: 'galleryTransitaireOnly',
-        });
+        return sendError(res, 400, ErrorCodes.GALLERY_TRANSITAIRE_ONLY);
       }
       const raw = updates.transitaireDescription;
       const desc = typeof raw === 'string' ? raw.trim() : '';
       if (desc.length > 500) {
-        return res.status(400).json({
-          message: 'Description trop longue (max 500 caractères)',
-        });
+        return sendError(res, 400, ErrorCodes.DESCRIPTION_TOO_LONG);
       }
       updates.transitaireDescription = desc.length > 0 ? desc : null;
     }
 
     if (Object.prototype.hasOwnProperty.call(updates, 'transitaireGallery')) {
-      const locale = resolveLocale(req);
       if (user.role !== 'transitaire') {
-        return res.status(400).json({
-          message: t('galleryTransitaireOnly', locale),
-          messageKey: 'galleryTransitaireOnly',
-        });
+        return sendError(res, 400, ErrorCodes.GALLERY_TRANSITAIRE_ONLY);
       }
       const rawGallery = updates.transitaireGallery;
       if (!Array.isArray(rawGallery)) {
-        return res.status(400).json({
-          message: t('galleryMustBeArray', locale),
-          messageKey: 'galleryMustBeArray',
-        });
+        return sendError(res, 400, ErrorCodes.GALLERY_MUST_BE_ARRAY);
       }
       if (rawGallery.length > 20) {
-        return res.status(400).json({
-          message: t('galleryMaxItems', locale),
-          messageKey: 'galleryMaxItems',
-        });
+        return sendError(res, 400, ErrorCodes.GALLERY_MAX_ITEMS);
       }
       const gallery = [];
       for (const item of rawGallery) {
         if (!item || typeof item !== 'object') {
-          return res.status(400).json({
-            message: t('galleryInvalidItem', locale),
-            messageKey: 'galleryInvalidItem',
-          });
+          return sendError(res, 400, ErrorCodes.GALLERY_INVALID_ITEM);
         }
         const type = item.type;
         const url = typeof item.url === 'string' ? item.url.trim() : '';
         if (!['image', 'video'].includes(type) || !url) {
-          return res.status(400).json({
-            message: t('galleryItemTypeUrl', locale),
-            messageKey: 'galleryItemTypeUrl',
-          });
+          return sendError(res, 400, ErrorCodes.GALLERY_ITEM_TYPE_URL);
         }
         gallery.push({ type, url });
       }
@@ -792,12 +767,12 @@ exports.updateMe = async (req, res) => {
     // Validation vendeurType
     if (Object.prototype.hasOwnProperty.call(updates, 'vendeurType')) {
       if (user.role !== 'vendeur') {
-        return res.status(400).json({ message: 'vendeurType réservé aux vendeurs' });
+        return sendError(res, 400, ErrorCodes.VENDEUR_TYPE_SELLERS_ONLY);
       }
       const v = updates.vendeurType;
       const allowed = [null, 'mixte', 'vehicules', 'pieces', 'motos'];
       if (!allowed.includes(v)) {
-        return res.status(400).json({ message: 'vendeurType invalide' });
+        return sendError(res, 400, ErrorCodes.VENDEUR_TYPE_INVALID);
       }
     }
     if (updates.telephone) {
@@ -818,8 +793,8 @@ exports.updateMe = async (req, res) => {
             : { ...(user.fournisseurProfil || {}) };
         user.fournisseurProfil = { ...prevFp, telephone: user.telephone };
       } catch (phoneErr) {
-        const msg = phoneConflictMessage(phoneErr);
-        if (msg) return res.status(409).json({ message: msg });
+        const conflict = sendPhoneConflict(res, phoneErr);
+        if (conflict) return conflict;
         throw phoneErr;
       }
     }
@@ -854,12 +829,12 @@ exports.updateMe = async (req, res) => {
         { new: true, runValidators: true }
       );
     } catch (saveErr) {
-      const msg = phoneConflictMessage(saveErr);
-      if (msg) return res.status(409).json({ message: msg });
+      const conflict = sendPhoneConflict(res, saveErr);
+      if (conflict) return conflict;
       throw saveErr;
     }
     if (!fresh) {
-      return res.status(404).json({ message: 'Utilisateur introuvable' });
+      return sendError(res, 404, ErrorCodes.USER_NOT_FOUND);
     }
 
     // Synchroniser l'email avec Firebase si modifié
@@ -880,8 +855,7 @@ exports.updateMe = async (req, res) => {
           code: err?.errorInfo?.code || err.code,
           message: err?.errorInfo?.message || err.message,
         });
-        return res.status(500).json({
-          message: 'Email mis à jour en base mais pas dans Firebase',
+        return sendError(res, 500, ErrorCodes.FIREBASE_EMAIL_SYNC_FAILED, {
           errorCode: err?.errorInfo?.code || err.code,
           error: err?.errorInfo?.message || err.message,
         });
@@ -894,7 +868,9 @@ exports.updateMe = async (req, res) => {
     res.json({ message: 'Profil mis à jour', user: userObj });
   } catch (error) {
     console.error('[updateMe] Erreur:', error);
-    res.status(500).json({ message: 'Erreur lors de la mise à jour du profil', error: error.message });
+    return sendError(res, 500, ErrorCodes.PROFILE_UPDATE_FAILED, {
+      error: error.message,
+    });
   }
 };
 

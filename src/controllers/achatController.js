@@ -64,14 +64,24 @@ exports.createAchat = async (req, res) => {
       const adminRoles = ['admin', 'superAdmin', 'principal', 'gestionnaire'];
       const admins = await User.find({ role: { $in: adminRoles } }).select('_id');
       for (const adminUser of admins) {
+        const i18n = {
+          titleKey: 'purchase.validated.title',
+          messageKey: 'purchase.validated.message',
+          params: {},
+        };
+        const { buildNotificationContent } = require('../utils/notificationI18n');
+        const defaults = buildNotificationContent(i18n);
+        const useCustom = Boolean(title || message);
         await notificationController.createNotification(
           adminUser._id,
           acheteur,
-          title || 'Achat validé',
-          message || 'Un achat a été validé',
+          title || defaults.title,
+          message || defaults.message,
           'paiement',
           achat._id,
-          'Achat'
+          'Achat',
+          {},
+          useCustom ? null : i18n
         );
       }
     } catch (e) {

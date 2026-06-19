@@ -42,14 +42,28 @@ exports.createOrGetRoom = async (req, res) => {
           
           // Envoyer notification au vendeur si c'est un transitaire qui initie
           if (transitaire && vendeur) {
+            const senderName =
+              `${transitaire.prenoms || ''} ${transitaire.nom || ''}`.trim();
+            const i18n = {
+              titleKey: 'chat.new.title',
+              messageKey: 'chat.new.message',
+              params: {
+                senderName,
+                articleTitle: articleData.titre || '',
+              },
+            };
+            const { buildNotificationContent } = require('../utils/notificationI18n');
+            const { title, message } = buildNotificationContent(i18n);
             await notificationController.createNotification(
               vendeur._id,
               transitaire._id,
-              'Nouvelle discussion',
-              `${transitaire.prenoms} ${transitaire.nom} a initié une discussion concernant votre article "${articleData.titre}"`,
+              title,
+              message,
               'chat',
               room._id,
-              'ChatRoom'
+              'ChatRoom',
+              {},
+              i18n
             );
           }
         }

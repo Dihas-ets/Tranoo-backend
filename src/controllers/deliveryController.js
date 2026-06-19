@@ -565,14 +565,21 @@ exports.notifyDelivery = async (req, res) => {
       );
 
       // Livreur: notification de balance (type paiement)
+      const amount = String(delivery.gainLivreur ?? '');
       await notificationController.createNotification(
         delivery.livreur,
         'system',
-        'Balance mise à jour',
-        `Votre balance a été créditée de ${delivery.gainLivreur} XOF pour une livraison livrée.`,
+        '',
+        '',
         'paiement',
         delivery._id,
-        'Delivery'
+        'Delivery',
+        { amount },
+        {
+          titleKey: 'payment.balanceUpdated.title',
+          messageKey: 'payment.balanceDelivered.message',
+          params: { amount },
+        }
       );
     } catch (e) {
       console.error('Erreur notif notifyDelivery:', e.message);
@@ -699,22 +706,35 @@ exports.notifyRefusal = async (req, res) => {
       await notificationController.createNotification(
         delivery.acheteur,
         'system',
-        'Colis refusé - Rappel des conditions',
-        "Le colis a été refusé. Conformément aux conditions, les frais de livraison restent dus, seuls les frais du colis peuvent être remboursés.",
+        '',
+        '',
         'delivery',
         delivery._id,
-        'Delivery'
+        'Delivery',
+        {},
+        {
+          titleKey: 'delivery.refusedReminder.title',
+          messageKey: 'delivery.refusedReminder.message',
+          params: {},
+        }
       );
 
       // Livreur - balance
+      const amount = String(delivery.gainLivreur ?? '');
       await notificationController.createNotification(
         delivery.livreur,
         'system',
-        'Balance mise à jour',
-        `Votre balance a été créditée de ${delivery.gainLivreur} XOF pour une livraison refusée (frais de livraison).`,
+        '',
+        '',
         'paiement',
         delivery._id,
-        'Delivery'
+        'Delivery',
+        { amount },
+        {
+          titleKey: 'payment.balanceUpdated.title',
+          messageKey: 'payment.balanceRefused.message',
+          params: { amount },
+        }
       );
     } catch (e) {
       console.error('Erreur notif notifyRefusal:', e.message);
@@ -830,14 +850,21 @@ exports.confirmDelivery = async (req, res) => {
         );
       }
 
+      const amount = String(delivery.gainLivreur ?? '');
       await notificationController.createNotification(
         delivery.livreur,
         'system',
-        'Balance mise à jour',
-        `Votre balance a été créditée de ${delivery.gainLivreur} XOF après confirmation de livraison par l’acheteur.`,
+        '',
+        '',
         'paiement',
         delivery._id,
-        'Delivery'
+        'Delivery',
+        { amount },
+        {
+          titleKey: 'payment.balanceUpdated.title',
+          messageKey: 'payment.balanceConfirmed.message',
+          params: { amount },
+        }
       );
     } catch (e) {
       console.error('Erreur notif confirmDelivery:', e.message);

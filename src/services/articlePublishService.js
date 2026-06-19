@@ -1,17 +1,20 @@
 const User = require('../models/User');
 const { initAutoViewsSchedule } = require('../utils/articleViews');
+const { buildNotificationContent } = require('../utils/notificationI18n');
 
 // Comptes dashboard : role Mongo = "admin" (sous-types dans typeAdmin)
 const ADMIN_ROLES = ['admin'];
 
 function buildArticleMeta(article) {
-  const isPiece = (article.type || '').toString().toLowerCase() === 'piece';
-  const typeLabel = isPiece ? 'pièce' : 'véhicule';
+  const rawType = (article.type || '').toString().toLowerCase();
+  const isPiece = rawType === 'piece';
+  const isMoto = rawType === 'moto';
+  const typeLabel = isPiece ? 'pièce' : isMoto ? 'moto' : 'véhicule';
   const prix =
     article.prix != null && article.prix !== ''
       ? ` — ${Number(article.prix).toLocaleString('fr-FR')} FCFA`
       : '';
-  const detailPath = isPiece ? 'mastervac' : 'cars_info';
+  const detailPath = isPiece ? 'mastervac' : isMoto ? 'moto_info' : 'cars_info';
   const thumb =
     Array.isArray(article.photos) && article.photos.length > 0
       ? article.photos[0]
@@ -20,7 +23,9 @@ function buildArticleMeta(article) {
   return {
     isPiece,
     typeLabel,
+    articleType: isPiece ? 'piece' : isMoto ? 'moto' : 'vehicle',
     prix,
+    priceSuffix: prix,
     detailPath,
     thumb,
     titre: article.titre || 'Nouvelle annonce',
@@ -40,9 +45,14 @@ async function notifyUsersInBatches(users, notifyFn) {
  */
 async function notifyBuyersNewArticle(article, sellerId) {
   const notificationController = require('../controllers/notificationController');
-  const { typeLabel, prix, detailPath, thumb, titre } = buildArticleMeta(article);
-  const title = `Nouveau ${typeLabel} disponible`;
-  const message = `${titre}${prix}`;
+  const { articleType, priceSuffix, detailPath, thumb, titre } =
+    buildArticleMeta(article);
+  const i18n = {
+    titleKey: 'newArticle.buyer.title',
+    messageKey: 'newArticle.buyer.message',
+    params: { articleType, articleTitle: titre, priceSuffix },
+  };
+  const { title, message } = buildNotificationContent(i18n);
 
   const buyers = await User.find({
     _id: { $ne: sellerId },
@@ -69,7 +79,8 @@ async function notifyBuyersNewArticle(article, sellerId) {
         targetPath: detailPath,
         articleTitle: titre,
         thumbnailUrl: thumb,
-      }
+      },
+      i18n
     )
   );
 
@@ -83,9 +94,14 @@ async function notifyBuyersNewArticle(article, sellerId) {
  */
 async function notifySellerArticlePublished(article, sellerId) {
   const notificationController = require('../controllers/notificationController');
-  const { typeLabel, prix, detailPath, thumb, titre } = buildArticleMeta(article);
-  const title = 'Article publié';
-  const message = `Votre ${typeLabel} « ${titre} » est maintenant en ligne${prix}.`;
+  const { articleType, priceSuffix, detailPath, thumb, titre } =
+    buildArticleMeta(article);
+  const i18n = {
+    titleKey: 'newArticle.seller.title',
+    messageKey: 'newArticle.seller.message',
+    params: { articleType, articleTitle: titre, priceSuffix },
+  };
+  const { title, message } = buildNotificationContent(i18n);
 
   await notificationController.createNotification(
     sellerId,
@@ -103,7 +119,8 @@ async function notifySellerArticlePublished(article, sellerId) {
       targetPath: detailPath,
       articleTitle: titre,
       thumbnailUrl: thumb,
-    }
+    },
+    i18n
   );
 
   console.log(
@@ -116,9 +133,14 @@ async function notifySellerArticlePublished(article, sellerId) {
  */
 async function notifyAdminsNewArticle(article, sellerId) {
   const notificationController = require('../controllers/notificationController');
-  const { typeLabel, prix, detailPath, thumb, titre } = buildArticleMeta(article);
-  const title = `Nouvel article ${typeLabel}`;
-  const message = `Un vendeur a publié: « ${titre} »${prix}`;
+  const { articleType, priceSuffix, detailPath, thumb, titre } =
+    buildArticleMeta(article);
+  const i18n = {
+    titleKey: 'newArticle.admin.title',
+    messageKey: 'newArticle.admin.message',
+    params: { articleType, articleTitle: titre, priceSuffix },
+  };
+  const { title, message } = buildNotificationContent(i18n);
 
   const admins = await User.find({
     isBlocked: { $ne: true },
@@ -144,7 +166,8 @@ async function notifyAdminsNewArticle(article, sellerId) {
         targetPath: detailPath,
         articleTitle: titre,
         thumbnailUrl: thumb,
-      }
+      },
+      i18n
     )
   );
 

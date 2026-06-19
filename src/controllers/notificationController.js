@@ -19,6 +19,12 @@ const {
   uploadVerificationPdfBuffer,
   resolvePdfUrlForDelivery,
 } = require('../utils/cloudinaryPdf');
+const {
+  buildNotificationContent,
+  localizedPushTexts,
+  resolveUserLocale,
+  formatTemplate,
+} = require('../utils/notificationI18n');
 
 async function resolveVerificationBuyerUser(articleId) {
   if (!articleId) return null;
@@ -68,14 +74,23 @@ exports.createNotification = async (
   type = 'general',
   relatedId = null,
   relatedModel = null,
-  extraData = {}
+  extraData = {},
+  i18n = null
 ) => {
   try {
+    const i18nPayload =
+      i18n && i18n.titleKey && i18n.messageKey
+        ? buildNotificationContent(i18n)
+        : null;
+
     const notification = new Notification({
       recipient: recipientId,
       sender: senderId,
-      title,
-      message,
+      title: i18nPayload?.title ?? title,
+      message: i18nPayload?.message ?? message,
+      titleKey: i18nPayload?.titleKey ?? null,
+      messageKey: i18nPayload?.messageKey ?? null,
+      i18nParams: i18nPayload?.i18nParams ?? null,
       type,
       relatedId,
       relatedModel,
@@ -88,6 +103,12 @@ exports.createNotification = async (
     const recipient = await User.findById(recipientId);
     if (recipient && recipient.fcmToken) {
       try {
+        const locale = resolveUserLocale(recipient);
+        const pushTexts =
+          i18nPayload != null
+            ? localizedPushTexts(i18nPayload, locale)
+            : { title: String(title ?? ''), body: String(message ?? '') };
+
         const fcmSafeData = {};
         if (extraData && typeof extraData === 'object') {
           Object.entries(extraData).forEach(([k, v]) => {
@@ -114,8 +135,17 @@ exports.createNotification = async (
             relatedModel !== undefined && relatedModel !== null
               ? String(relatedModel)
               : '',
-          title: String(title ?? ''),
-          message: String(message ?? ''),
+          title: pushTexts.title,
+          message: pushTexts.body,
+          ...(i18nPayload?.titleKey
+            ? { titleKey: String(i18nPayload.titleKey) }
+            : {}),
+          ...(i18nPayload?.messageKey
+            ? { messageKey: String(i18nPayload.messageKey) }
+            : {}),
+          ...(i18nPayload?.i18nParams
+            ? { i18nParams: JSON.stringify(i18nPayload.i18nParams) }
+            : {}),
           ...fcmSafeData,
         };
         const urgentTypes = ['alerte', 'proposition_alerte'];
@@ -138,8 +168,8 @@ exports.createNotification = async (
         };
         if (!isAlertePush) {
           fcmMessage.notification = {
-            title: title,
-            body: message,
+            title: pushTexts.title,
+            body: pushTexts.body,
           };
         }
         const resp = await admin.messaging().send(fcmMessage);
@@ -167,54 +197,35 @@ exports.createNotification = async (
 // type d'événement peut être: 'created', 'assigned', 'picked_up', 'arrived', 'delivered', 'refused', 'return'
 exports.createDeliveryNotification = async (recipientId, senderId, deliveryId, eventType, _extra = {}) => {
   try {
-    let title = 'Mise à jour livraison';
-    let message = 'Votre livraison a été mise à jour.';
-
-    switch (eventType) {
-      case 'created':
-        title = 'Nouvelle livraison disponible';
-        message = 'Une nouvelle livraison est disponible pour prise en charge.';
-        break;
-      case 'assigned':
-        title = 'Livraison assignée';
-        message = 'Une livraison vous a été assignée.';
-        break;
-      case 'picked_up':
-        title = 'Colis récupéré';
-        message = 'Le colis a été récupéré par le livreur.';
-        break;
-      case 'arrived':
-        title = 'Livreur arrivé';
-        message = 'Votre livreur est arrivé. Choisissez de payer ou de retourner le colis.';
-        break;
-      case 'delivered':
-        title = 'Colis livré';
-        message = 'Le colis a été livré.';
-        break;
-      case 'refused':
-        title = 'Colis refusé';
-        message = 'Le colis a été refusé par le client.';
-        break;
-      case 'return':
-        title = 'Retour de pièce signalé';
-        message = 'Le chauffeur a signalé un retour de pièce par l\'acheteur pour cette livraison.';
-        break;
-      default:
-        break;
-    }
+    const keyMap = {
+      created: ['delivery.created.title', 'delivery.created.message'],
+      assigned: ['delivery.assigned.title', 'delivery.assigned.message'],
+      picked_up: ['delivery.picked_up.title', 'delivery.picked_up.message'],
+      arrived: ['delivery.arrived.title', 'delivery.arrived.message'],
+      delivered: ['delivery.delivered.title', 'delivery.delivered.message'],
+      refused: ['delivery.refused.title', 'delivery.refused.message'],
+      return: ['delivery.return.title', 'delivery.return.message'],
+    };
+    const keys = keyMap[eventType] || ['delivery.updated.title', 'delivery.updated.message'];
+    const i18n = {
+      titleKey: keys[0],
+      messageKey: keys[1],
+      params: {},
+    };
 
     return await exports.createNotification(
       recipientId,
       senderId,
-      title,
-      message,
+      '',
+      '',
       'delivery',
       deliveryId,
       'Delivery',
       {
         eventType: eventType,
         ...(typeof _extra === 'object' && _extra ? _extra : {})
-      }
+      },
+      i18n
     );
   } catch (error) {
     console.error('[DELIVERY NOTIF] Erreur création:', error);
@@ -235,10 +246,17 @@ exports.createVerificationNotification = async (acheteurId, articleId, verificat
     const notification = new Notification({
       recipient: acheteurId,
       sender: 'system', // Système ou admin
-      title: articleTitle ? `Vérification: ${articleTitle}` : 'Vérification terminée',
+      title: articleTitle
+        ? formatTemplate('verification.ready.title', 'fr', { articleTitle })
+        : formatTemplate('verification.ready.titleFallback', 'fr'),
       message: articleTitle
-        ? `Votre article "${articleTitle}" a été vérifié. Décidez maintenant de votre achat.`
-        : 'Votre article a été vérifié. Décidez maintenant de votre achat.',
+        ? formatTemplate('verification.ready.message', 'fr', { articleTitle })
+        : formatTemplate('verification.ready.messageFallback', 'fr'),
+      titleKey: articleTitle ? 'verification.ready.title' : 'verification.ready.titleFallback',
+      messageKey: articleTitle
+        ? 'verification.ready.message'
+        : 'verification.ready.messageFallback',
+      i18nParams: articleTitle ? { articleTitle } : {},
       type: 'verification',
       relatedId: articleId,
       relatedModel: 'Article',
@@ -269,19 +287,30 @@ exports.createVerificationNotification = async (acheteurId, articleId, verificat
     const recipient = await User.findById(acheteurId);
     if (recipient && recipient.fcmToken) {
       try {
+        const locale = resolveUserLocale(recipient);
+        const titleKey = articleTitle
+          ? 'verification.ready.title'
+          : 'verification.ready.titleFallback';
+        const messageKey = articleTitle
+          ? 'verification.ready.message'
+          : 'verification.ready.messageFallback';
+        const params = articleTitle ? { articleTitle } : {};
+        const pushTitle = formatTemplate(titleKey, locale, params);
+        const pushBody = formatTemplate(messageKey, locale, params);
         await admin.messaging().send({
           token: recipient.fcmToken,
           notification: {
-            title: articleTitle ? `Vérification: ${articleTitle}` : 'Vérification terminée',
-            body: articleTitle
-              ? `Votre article "${articleTitle}" a été vérifié. Décidez maintenant de votre achat.`
-              : 'Votre article a été vérifié. Décidez maintenant de votre achat.'
+            title: pushTitle,
+            body: pushBody,
           },
           data: {
             type: 'verification',
             notificationId: notification._id.toString(),
             articleId: articleId.toString(),
             articleTitle: articleTitle,
+            titleKey,
+            messageKey,
+            i18nParams: JSON.stringify(params),
             action: 'verification_ready'
           }
         });
@@ -331,7 +360,7 @@ exports.handleVerificationAction = async (notificationId, action, userId) => {
         const buyerLabel = buyer
           ? `${buyer.prenoms || ''} ${buyer.nom || ''}`.trim() || buyer.email || buyer.telephone
           : 'Utilisateur';
-        const actionLabel = action === 'approve' ? 'validé' : 'rejeté';
+        const actionLabel = action === 'approve' ? 'approved' : 'rejected';
         const admins = await User.find({
           $or: [
             { role: { $in: ['admin', 'superAdmin', 'principal', 'gestionnaire'] } },
@@ -342,8 +371,8 @@ exports.handleVerificationAction = async (notificationId, action, userId) => {
           await exports.createNotification(
             adminUser._id,
             userId,
-            `Vérification ${actionLabel}${articleTitle ? ` — ${articleTitle}` : ''}`,
-            `${buyerLabel} a ${actionLabel} la demande liée à l'article ${articleTitle || articleIdStr}.`,
+            '',
+            '',
             'verification_result',
             notification.verificationData.articleId,
             'Article',
@@ -353,6 +382,17 @@ exports.handleVerificationAction = async (notificationId, action, userId) => {
               articleTitle,
               targetArticleId: articleIdStr,
               buyerName: buyerLabel,
+            },
+            {
+              titleKey: 'verification.resultAdmin.title',
+              messageKey: 'verification.resultAdmin.message',
+              params: {
+                action: action === 'approve' ? 'approve' : 'reject',
+                actionLabel,
+                articleTitle: articleTitle || articleIdStr,
+                articleSuffix: articleTitle ? ` — ${articleTitle}` : '',
+                buyerName: buyerLabel,
+              },
             }
           );
         }
@@ -1037,6 +1077,14 @@ exports.createVehicleSearchRequestHTTP = async (req, res) => {
 
     const title = 'Nouvelle alerte véhicule';
     const message = `Un acheteur recherche ${cleanQuantity} vehicule(s). Caracteristiques: ${details}`;
+    const i18n = {
+      titleKey: 'alert.vehicle.title',
+      messageKey: 'alert.vehicle.message',
+      params: {
+        quantity: String(cleanQuantity),
+        details,
+      },
+    };
 
     await Promise.all(
       vendeurs.map((vendeur) =>
@@ -1068,7 +1116,8 @@ exports.createVehicleSearchRequestHTTP = async (req, res) => {
             thumbnailUrl: cleanPhotos.length > 0 ? cleanPhotos[0] : '',
             // Important: données acheteur conservées pour le workflow interne,
             // mais le message/sender vendeur restent anonymisés.
-          }
+          },
+          i18n
         )
       )
     );
@@ -1161,6 +1210,17 @@ exports.createPieceSearchRequestHTTP = async (req, res) => {
     const title = 'Nouvelle alerte pièce';
     const message =
       `Un acheteur recherche ${cleanQuantity} piece(s): ${cleanPieceName} pour ${cleanMarque} ${cleanModele}. ${details}`;
+    const pieceI18n = {
+      titleKey: 'alert.piece.title',
+      messageKey: 'alert.piece.message',
+      params: {
+        quantity: String(cleanQuantity),
+        pieceName: cleanPieceName,
+        marque: cleanMarque,
+        modele: cleanModele,
+        details,
+      },
+    };
 
     await Promise.all(
       vendeurs.map((vendeur) =>
@@ -1191,7 +1251,8 @@ exports.createPieceSearchRequestHTTP = async (req, res) => {
             thumbnailUrl: cleanPhotos.length > 0 ? cleanPhotos[0] : '',
             // Important: données acheteur conservées pour le workflow interne,
             // mais le message/sender vendeur restent anonymisés.
-          }
+          },
+          pieceI18n
         )
       )
     );
