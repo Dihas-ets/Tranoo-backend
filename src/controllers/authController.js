@@ -9,6 +9,11 @@ const {
   assertPhoneNotTaken,
   phoneConflictMessage,
 } = require('../utils/authAppPhone');
+const { ErrorCodes, sendError, sendPhoneConflict } = require('../utils/apiResponse');
+const {
+  normalizeVendeurType,
+  isVendeurTypeValidationError,
+} = require('../utils/vendeurType');
 // In-memory OTP store (replace with Redis/DB in production)
 
 // Contrôleur pour l'inscription d'un utilisateur (mobile ou admin)
@@ -406,9 +411,15 @@ exports.register = async (req, res) => {
       ['acheteur', 'vendeur', 'livreur', 'chauffeur', 'transitaire'].includes(role) &&
       !resolvedAuthApp
     ) {
-      return res.status(400).json({
-        message: 'Application requise (tranoo ou tranoo_pro).',
-      });
+      return sendError(res, 400, ErrorCodes.APP_REQUIRED);
+    }
+
+    let resolvedVendeurType = null;
+    if (role === 'vendeur') {
+      resolvedVendeurType = normalizeVendeurType(vendeurType);
+      if (vendeurType != null && String(vendeurType).trim() !== '' && resolvedVendeurType === undefined) {
+        return sendError(res, 400, ErrorCodes.VENDEUR_TYPE_INVALID);
+      }
     }
 
     user = new User({
@@ -418,7 +429,7 @@ exports.register = async (req, res) => {
       email: userEmail,
       authApp: resolvedAuthApp,
       role,
-      vendeurType: role === 'vendeur' ? (vendeurType || null) : null,
+      vendeurType: role === 'vendeur' ? resolvedVendeurType : null,
       pays,
       maison,
       entreprise,
@@ -484,9 +495,10 @@ exports.register = async (req, res) => {
       console.log('[REGISTER] MongoDB _id:', user._id);
       console.log('[REGISTER] authApp:', user.authApp, 'telephone:', user.telephone);
     } catch (saveError) {
-      const msg = phoneConflictMessage(saveError);
-      if (msg) {
-        return res.status(409).json({ message: msg });
+      const conflict = sendPhoneConflict(res, saveError);
+      if (conflict) return conflict;
+      if (isVendeurTypeValidationError(saveError)) {
+        return sendError(res, 400, ErrorCodes.VENDEUR_TYPE_INVALID);
       }
       console.error('[REGISTER] ❌ Erreur sauvegarde MongoDB:', saveError.message);
       console.error('[REGISTER] Détails erreur:', saveError);

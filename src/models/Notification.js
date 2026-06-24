@@ -46,6 +46,9 @@ const notificationSchema = new mongoose.Schema({
       'verification_result',
       'delivery', // notifications liées aux livraisons
       'tricycle', // notifications liées aux contacts tricycle
+      'transit_transfer', // véhicule transféré au transitaire
+      'transit_selection', // acheteur a choisi le transitaire
+      'transit_rejected', // transitaire a refusé la mission
     ],
     default: 'general'
   },

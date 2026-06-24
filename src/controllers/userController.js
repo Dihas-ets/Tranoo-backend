@@ -6,6 +6,10 @@ const {
   assertPhoneNotTaken,
 } = require('../utils/authAppPhone');
 const { ErrorCodes, sendError, sendPhoneConflict } = require('../utils/apiResponse');
+const {
+  normalizeVendeurType,
+  isVendeurTypeValidationError,
+} = require('../utils/vendeurType');
 const Article = require('../models/Article');
 const cloudinary = require('cloudinary').v2;
 const admin = require('firebase-admin');
@@ -769,11 +773,11 @@ exports.updateMe = async (req, res) => {
       if (user.role !== 'vendeur') {
         return sendError(res, 400, ErrorCodes.VENDEUR_TYPE_SELLERS_ONLY);
       }
-      const v = updates.vendeurType;
-      const allowed = [null, 'mixte', 'vehicules', 'pieces', 'motos'];
-      if (!allowed.includes(v)) {
+      const normalized = normalizeVendeurType(updates.vendeurType);
+      if (normalized === undefined) {
         return sendError(res, 400, ErrorCodes.VENDEUR_TYPE_INVALID);
       }
+      updates.vendeurType = normalized;
     }
     if (updates.telephone) {
       try {
@@ -831,6 +835,9 @@ exports.updateMe = async (req, res) => {
     } catch (saveErr) {
       const conflict = sendPhoneConflict(res, saveErr);
       if (conflict) return conflict;
+      if (isVendeurTypeValidationError(saveErr)) {
+        return sendError(res, 400, ErrorCodes.VENDEUR_TYPE_INVALID);
+      }
       throw saveErr;
     }
     if (!fresh) {
@@ -1008,6 +1015,7 @@ exports.getAllTransitaires = async (_req, res) => {
   try {
     const transitaires = await User.find({ role: 'transitaire' });
     const Subscription = require('../models/Subscription');
+    const { attachRatingStats } = require('../utils/transitaireRating');
     
     const transitairesWithStatut = await Promise.all(transitaires.map(async (u) => {
       const statut = await computeUserStatut(u);
@@ -1025,6 +1033,8 @@ exports.getAllTransitaires = async (_req, res) => {
         userObj.subscriptionExpiresAt = sub.expiresAt;
         userObj.subscriptionActivatedAt = sub.activatedAt;
       }
+
+      await attachRatingStats(userObj);
       
       return userObj;
     }));

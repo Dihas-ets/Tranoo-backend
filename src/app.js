@@ -538,6 +538,22 @@ try {
   console.warn('Subscription pricing routes non chargées:', e.message);
 }
 
+// Transitaire subscription pricing routes
+try {
+  const transitaireSubscriptionPricingRoutes = require('./routes/transitaireSubscriptionPricing');
+  app.use('/api/admin/transitaire-subscription-pricing', transitaireSubscriptionPricingRoutes);
+} catch (e) {
+  console.warn('Transitaire subscription pricing routes non chargées:', e.message);
+}
+
+// Avis transitaires
+try {
+  const transitaireReviewRoutes = require('./routes/transitaireReview');
+  app.use('/api/transitaire-reviews', authMiddleware, transitaireReviewRoutes);
+} catch (e) {
+  console.warn('Transitaire review routes non chargées:', e.message);
+}
+
 // Verification pricing routes (véhicule — Tranoo)
 try {
   const verificationPricingRoutes = require('./routes/verificationPricing');
@@ -632,6 +648,15 @@ try {
   app.use('/api/views', viewsRoutes);
 } catch (e) {
   console.warn('Views routes non chargées:', e.message);
+}
+
+// Transit missions (parcours acheteur → transitaire)
+try {
+  const transitMissionRoutes = require('./routes/transitMission');
+  app.use('/api/transit-missions', transitMissionRoutes);
+  app.use('/api/transit', transitMissionRoutes);
+} catch (e) {
+  console.warn('Transit mission routes non chargées:', e.message);
 }
 
 // Obsolète: Routes propositions transitaires (désactivées)

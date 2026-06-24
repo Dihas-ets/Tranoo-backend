@@ -1,8 +1,24 @@
 const Subscription = require('../models/Subscription');
 const SubscriptionPricing = require('../models/SubscriptionPricing');
+const TransitaireSubscriptionPricing = require('../models/TransitaireSubscriptionPricing');
 const User = require('../models/User');
 const Article = require('../models/Article');
 const Payment = require('../models/Payment');
+
+async function getMonthlyPricingForUser(user) {
+  if (user?.role === 'transitaire') {
+    const pricing =
+      (await TransitaireSubscriptionPricing.findOne({
+        key: 'TRANSITAIRE_SUBSCRIPTION_PRICING_SINGLETON',
+      }).lean()) || {};
+    return Number(pricing.prixMensuel ?? 5000);
+  }
+  const pricing =
+    (await SubscriptionPricing.findOne({
+      key: 'SUBSCRIPTION_PRICING_SINGLETON',
+    }).lean()) || {};
+  return Number(pricing.prixMensuel ?? 0);
+}
 
 async function hasSellerPieceAccess(userId) {
   const user = await User.findById(userId).lean();
@@ -139,17 +155,19 @@ exports.getMySubscription = async (req, res) => {
     const pricing =
       (await SubscriptionPricing.findOne({
         key: 'SUBSCRIPTION_PRICING_SINGLETON',
-      }).lean()) || { prixMensuel: 0, freeTrialDays: 45 };
+      }).lean()) || {};
+    const user = await User.findById(userId).lean();
+    const resolvedMonthlyPrice = await getMonthlyPricingForUser(user);
     console.log(
-      '[SUBSCRIPTION_ME] user=%s pricingDoc=%j',
+      '[SUBSCRIPTION_ME] user=%s pricingDoc=%j resolvedMonthlyPrice=%s',
       userId?.toString?.() || userId,
-      pricing
+      pricing,
+      resolvedMonthlyPrice
     );
     const accessAllowed = await hasSellerPieceAccess(userId);
     await syncSellerPieceVisibility(userId, accessAllowed);
 
     if (!sub) {
-      const resolvedMonthlyPrice = Number(pricing.prixMensuel ?? 0);
       console.log(
         '[SUBSCRIPTION_ME] no sub => resolvedMonthlyPrice=%s',
         resolvedMonthlyPrice
@@ -167,11 +185,11 @@ exports.getMySubscription = async (req, res) => {
           act <= now ||
           (act > now && exp > now))
     );
-    const resolvedMonthlyPrice = Number(pricing.prixMensuel ?? 0);
+    const resolvedMonthlyPriceActive = await getMonthlyPricingForUser(user);
     console.log(
       '[SUBSCRIPTION_ME] activeOrExpired=%s resolvedMonthlyPrice=%s months=%s expiresAt=%s',
       hasSubscription,
-      resolvedMonthlyPrice,
+      resolvedMonthlyPriceActive,
       sub.months || 1,
       sub.expiresAt
     );
@@ -181,7 +199,7 @@ exports.getMySubscription = async (req, res) => {
       expiresAt: sub.expiresAt,
       plan: sub.plan,
       months: sub.months || 1,
-      monthlyPrice: resolvedMonthlyPrice,
+      monthlyPrice: resolvedMonthlyPriceActive,
       status: hasSubscription ? 'active' : 'expired',
     });
   } catch (e) {

@@ -376,3 +376,102 @@ exports.getDashboardFinance = async (req, res) => {
     return res.status(500).json({ message: 'Erreur stats finance dashboard', error: error.message });
   }
 };
+
+exports.getAdminNavBadges = async (req, res) => {
+  try {
+    const adminRoles = [
+      'admin',
+      'superAdmin',
+      'principal',
+      'moderateur',
+      'gestionnaire',
+      'responsablePaiement',
+      'responsableService',
+      'responsablePartenaires',
+      'analyste',
+      'marketing',
+    ];
+    const role = String(req.user?.role || req.user?.typeAdmin || '');
+    if (!adminRoles.includes(role)) {
+      return res.status(403).json({ message: 'Accès réservé aux administrateurs' });
+    }
+
+    const Notification = require('../models/Notification');
+    const Publicite = require('../models/Publicite');
+    const Invoice = require('../models/Invoice');
+    const DemandeChauffeur = require('../models/DemandeChauffeur');
+    const userId = req.user._id;
+
+    const notifFilter = {
+      recipient: userId,
+      isRead: false,
+      $or: [
+        { 'data.audience': 'admin' },
+        { type: { $in: ['verification', 'verification_result'] } },
+      ],
+    };
+
+    const [
+      notifications,
+      articlesPending,
+      tranooArticles,
+      annonces,
+      paiements,
+      documents,
+      chauffeursDemandes,
+      livreursDemandes,
+    ] = await Promise.all([
+      Notification.countDocuments(notifFilter),
+      Article.countDocuments({ statut: 'en_attente', source: { $ne: 'tranoo' } }),
+      Article.countDocuments({ statut: 'en_attente', source: 'tranoo' }),
+      Publicite.countDocuments({ statut: 'en_attente' }),
+      Payment.countDocuments({ status: 'pending' }),
+      Invoice.countDocuments({ isRead: { $ne: true } }),
+      DemandeChauffeur.countDocuments({ statut: 'en_attente' }),
+      User.countDocuments({ role: 'livreur', subscriptionStatus: 'pending' }).catch(
+        () => 0,
+      ),
+    ]);
+
+    const users = chauffeursDemandes + livreursDemandes;
+    const messagerie = await Notification.countDocuments({
+      recipient: userId,
+      isRead: false,
+      type: 'general',
+      'data.audience': 'admin',
+      'data.category': 'message',
+    }).catch(() => 0);
+
+    const badges = {
+      notifications,
+      articles: articlesPending,
+      tranoo: tranooArticles,
+      annonces,
+      paiements,
+      retraits: 0,
+      messagerie,
+      documents,
+      users,
+      parametres: 0,
+      dashboard:
+        notifications +
+        articlesPending +
+        tranooArticles +
+        annonces +
+        paiements +
+        documents +
+        users +
+        messagerie,
+      parrainage: 0,
+    };
+
+    badges.total = Object.entries(badges)
+      .filter(([k]) => k !== 'total' && k !== 'dashboard')
+      .reduce((sum, [, v]) => sum + (Number(v) || 0), 0);
+
+    return res.json(badges);
+  } catch (error) {
+    console.error('[getAdminNavBadges]', error);
+    return res.status(500).json({ message: 'Erreur badges navigation admin' });
+  }
+};

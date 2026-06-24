@@ -75,7 +75,8 @@ exports.createNotification = async (
   relatedId = null,
   relatedModel = null,
   extraData = {},
-  i18n = null
+  i18n = null,
+  notificationActions = null,
 ) => {
   try {
     const i18nPayload =
@@ -94,7 +95,10 @@ exports.createNotification = async (
       type,
       relatedId,
       relatedModel,
-      data: extraData && typeof extraData === 'object' ? extraData : {}
+      data: extraData && typeof extraData === 'object' ? extraData : {},
+      ...(Array.isArray(notificationActions) && notificationActions.length > 0
+        ? { actions: notificationActions }
+        : {}),
     });
 
     await notification.save();
@@ -347,6 +351,21 @@ exports.handleVerificationAction = async (notificationId, action, userId) => {
     notification.status = action === 'approve' ? 'approved' : 'rejected';
     notification.isRead = true;
     await notification.save();
+
+    if (action === 'approve' && notification.verificationData?.articleId) {
+      try {
+        const transitMissionController = require('./transitMissionController');
+        await transitMissionController.transfererByArticleAndAcheteur(
+          notification.verificationData.articleId,
+          userId,
+        );
+      } catch (transferErr) {
+        console.warn(
+          '[VERIFICATION] Transfert transitaire:',
+          transferErr?.message || transferErr,
+        );
+      }
+    }
 
     // Notifier le dashboard admin (inbox scope=adminDashboard)
     if (notification.verificationData?.articleId) {
