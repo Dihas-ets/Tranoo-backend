@@ -30,6 +30,28 @@ const paymentMethodLabel = (method) => {
   return method;
 };
 
+const daysAgo = (days) => {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  return d;
+};
+
+/** Publicités en ligne (valide) + expirées — badge Annonces depuis dernière visite. */
+async function countPublicitesAnnoncesBadge(since) {
+  const Publicite = require('../models/Publicite');
+  const filter = { statut: { $in: ['valide', 'expire'] } };
+  if (since) filter.createdAt = { $gte: since };
+  return Publicite.countDocuments(filter);
+}
+
+function navSince(seen, key) {
+  const raw = seen?.[key];
+  if (raw) return new Date(raw);
+  const d = new Date();
+  d.setDate(d.getDate() - 7);
+  return d;
+}
+
 exports.getStats = async (_req, res) => {
   try {
     // Fonction utilitaire pour calculer le statut dynamique
@@ -399,8 +421,10 @@ exports.getAdminNavBadges = async (req, res) => {
     const Notification = require('../models/Notification');
     const Publicite = require('../models/Publicite');
     const Invoice = require('../models/Invoice');
-    const DemandeChauffeur = require('../models/DemandeChauffeur');
+    const Referral = require('../models/Referral');
     const userId = req.user._id;
+    const userDoc = await User.findById(userId).select('adminNavSeenAt').lean();
+    const seen = userDoc?.adminNavSeenAt || {};
 
     const notifFilter = {
       recipient: userId,
@@ -411,67 +435,173 @@ exports.getAdminNavBadges = async (req, res) => {
       ],
     };
 
+    const sinceDashboard = navSince(seen, 'dashboard');
+    const sinceArticles = navSince(seen, 'articles');
+    const sinceTranoo = navSince(seen, 'tranoo');
+    const sinceUsers = navSince(seen, 'users');
+    const sinceUsersVendeurs = navSince(seen, 'usersVendeurs');
+    const sinceAnnonces = navSince(seen, 'annonces');
+    const sincePaiements = navSince(seen, 'paiements');
+    const sinceParrainage = navSince(seen, 'parrainage');
+
+    const articleAppRecentFilter = {
+      source: { $ne: 'tranoo' },
+      type: { $in: ['voiture', 'piece'] },
+      statut: 'en_ligne',
+      dateCreation: { $gte: sinceArticles },
+    };
+    const articleTranooRecentFilter = {
+      source: 'tranoo',
+      statut: 'en_ligne',
+      dateCreation: { $gte: sinceTranoo },
+    };
+
     const [
       notifications,
-      articlesPending,
-      tranooArticles,
+      dashboardRecentArticles,
+      articlesApp,
+      articlesTranoo,
+      usersPubDemandes,
+      usersVendeursPubDemandes,
       annonces,
       paiements,
       documents,
-      chauffeursDemandes,
-      livreursDemandes,
+      parrainage,
+      messagerie,
     ] = await Promise.all([
       Notification.countDocuments(notifFilter),
-      Article.countDocuments({ statut: 'en_attente', source: { $ne: 'tranoo' } }),
-      Article.countDocuments({ statut: 'en_attente', source: 'tranoo' }),
-      Publicite.countDocuments({ statut: 'en_attente' }),
-      Payment.countDocuments({ status: 'pending' }),
+      Article.countDocuments({ dateCreation: { $gte: sinceDashboard } }),
+      Article.countDocuments(articleAppRecentFilter),
+      Article.countDocuments(articleTranooRecentFilter),
+      Publicite.countDocuments({
+        statut: 'en_attente',
+        createdAt: { $gte: sinceUsers },
+      }),
+      Publicite.countDocuments({
+        statut: 'en_attente',
+        createdAt: { $gte: sinceUsersVendeurs },
+      }),
+      countPublicitesAnnoncesBadge(sinceAnnonces),
+      Payment.countDocuments({
+        status: 'success',
+        createdAt: { $gte: sincePaiements },
+      }),
       Invoice.countDocuments({ isRead: { $ne: true } }),
-      DemandeChauffeur.countDocuments({ statut: 'en_attente' }),
-      User.countDocuments({ role: 'livreur', subscriptionStatus: 'pending' }).catch(
-        () => 0,
-      ),
+      Referral.countDocuments({ createdAt: { $gte: sinceParrainage } }),
+      Notification.countDocuments({
+        recipient: userId,
+        isRead: false,
+        type: 'general',
+        'data.audience': 'admin',
+        'data.category': 'message',
+      }).catch(() => 0),
     ]);
-
-    const users = chauffeursDemandes + livreursDemandes;
-    const messagerie = await Notification.countDocuments({
-      recipient: userId,
-      isRead: false,
-      type: 'general',
-      'data.audience': 'admin',
-      'data.category': 'message',
-    }).catch(() => 0);
 
     const badges = {
       notifications,
-      articles: articlesPending,
-      tranoo: tranooArticles,
+      dashboard: dashboardRecentArticles,
+      articles: articlesApp,
+      tranoo: articlesTranoo,
+      users: usersPubDemandes,
+      usersVendeurs: usersVendeursPubDemandes,
       annonces,
       paiements,
       retraits: 0,
       messagerie,
       documents,
-      users,
       parametres: 0,
-      dashboard:
-        notifications +
-        articlesPending +
-        tranooArticles +
-        annonces +
-        paiements +
-        documents +
-        users +
-        messagerie,
-      parrainage: 0,
+      parrainage,
     };
 
     badges.total = Object.entries(badges)
-      .filter(([k]) => k !== 'total' && k !== 'dashboard')
+      .filter(([k]) => k !== 'total' && k !== 'usersVendeurs')
       .reduce((sum, [, v]) => sum + (Number(v) || 0), 0);
 
     return res.json(badges);
   } catch (error) {
     console.error('[getAdminNavBadges]', error);
     return res.status(500).json({ message: 'Erreur badges navigation admin' });
+  }
+};
+
+/** Marque une ou plusieurs sections du dashboard comme vues (persisté en base). */
+exports.markAdminNavSeen = async (req, res) => {
+  try {
+    const adminRoles = [
+      'admin',
+      'superAdmin',
+      'principal',
+      'moderateur',
+      'gestionnaire',
+      'responsablePaiement',
+      'responsableService',
+      'responsablePartenaires',
+      'analyste',
+      'marketing',
+    ];
+    const role = String(req.user?.role || req.user?.typeAdmin || '');
+    if (!adminRoles.includes(role)) {
+      return res.status(403).json({ message: 'Accès réservé aux administrateurs' });
+    }
+
+    const sections = Array.isArray(req.body?.sections)
+      ? req.body.sections.map((s) => String(s))
+      : [];
+    if (sections.length === 0) {
+      return res.status(400).json({ message: 'sections requis' });
+    }
+
+    const Notification = require('../models/Notification');
+    const Invoice = require('../models/Invoice');
+    const userId = req.user._id;
+    const now = new Date();
+    const update = {};
+    for (const section of sections) {
+      update[`adminNavSeenAt.${section}`] = now;
+    }
+    await User.findByIdAndUpdate(userId, { $set: update });
+
+    const adminNotifFilter = {
+      recipient: userId,
+      isRead: false,
+      $or: [
+        { 'data.audience': 'admin' },
+        { type: { $in: ['verification', 'verification_result'] } },
+      ],
+    };
+
+    if (sections.includes('notifications')) {
+      await Notification.updateMany(adminNotifFilter, { isRead: true });
+    }
+    if (sections.includes('messagerie')) {
+      await Notification.updateMany(
+        {
+          recipient: userId,
+          isRead: false,
+          type: 'general',
+          'data.audience': 'admin',
+          'data.category': 'message',
+        },
+        { isRead: true },
+      );
+    }
+    if (sections.includes('documents')) {
+      await Invoice.updateMany({ isRead: { $ne: true } }, { isRead: true });
+    }
+
+    return res.json({ message: 'Sections marquées comme vues', at: now });
+  } catch (error) {
+    console.error('[markAdminNavSeen]', error);
+    return res.status(500).json({ message: 'Erreur marquage sections vues' });
+  }
+};
+
+exports.getLivreursStats = async (_req, res) => {
+  try {
+    const livreurs = await User.countDocuments({ role: 'livreur' });
+    return res.json({ livreurs });
+  } catch (error) {
+    console.error('[getLivreursStats]', error);
+    return res.status(500).json({ message: 'Erreur stats livreurs' });
   }
 };

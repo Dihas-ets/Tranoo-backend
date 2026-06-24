@@ -258,3 +258,87 @@ exports.listAdminDocuments = async (req, res) => {
     });
   }
 };
+
+function collectNotifAttachmentUrls(n) {
+  const urls = [];
+  if (Array.isArray(n.attachments?.images)) {
+    urls.push(...n.attachments.images.filter(Boolean));
+  }
+  if (n.attachments?.stampUrl) urls.push(n.attachments.stampUrl);
+  if (n.attachments?.signatureUrl) urls.push(n.attachments.signatureUrl);
+  return urls;
+}
+
+/** Suppression admin : retire la référence fichier (chat, achat, notification). */
+exports.deleteAdminDocuments = async (req, res) => {
+  try {
+    const ids = req.body?.ids;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ message: 'ids requis' });
+    }
+
+    let deleted = 0;
+    const errors = [];
+
+    for (const rawId of ids) {
+      const id = String(rawId || '');
+      try {
+        if (id.startsWith('achat-')) {
+          const achatId = id.slice(6);
+          const result = await Achat.updateOne(
+            { _id: achatId },
+            { $unset: { fichierUrl: '', fichierNom: '' } },
+          );
+          if (result.matchedCount) deleted += 1;
+          continue;
+        }
+
+        if (id.startsWith('notif-')) {
+          const match = id.match(/^notif-([a-f0-9]{24})-(\d+)$/i);
+          if (!match) continue;
+          const notifId = match[1];
+          const idx = parseInt(match[2], 10);
+          const notif = await Notification.findById(notifId);
+          if (!notif) continue;
+
+          const urls = collectNotifAttachmentUrls(notif);
+          const urlToRemove = urls[idx];
+          if (!urlToRemove) continue;
+
+          if (Array.isArray(notif.attachments?.images)) {
+            notif.attachments.images = notif.attachments.images.filter(
+              (u) => u !== urlToRemove,
+            );
+          }
+          if (notif.attachments?.stampUrl === urlToRemove) {
+            notif.attachments.stampUrl = undefined;
+          }
+          if (notif.attachments?.signatureUrl === urlToRemove) {
+            notif.attachments.signatureUrl = undefined;
+          }
+          await notif.save();
+          deleted += 1;
+          continue;
+        }
+
+        if (/^[a-f0-9]{24}$/i.test(id)) {
+          const result = await Message.updateOne(
+            { _id: id },
+            { $unset: { fileUrl: '' } },
+          );
+          if (result.matchedCount) deleted += 1;
+        }
+      } catch (itemErr) {
+        errors.push({ id, message: itemErr.message });
+      }
+    }
+
+    return res.json({ deleted, errors });
+  } catch (error) {
+    console.error('[deleteAdminDocuments]', error);
+    return res.status(500).json({
+      message: 'Erreur suppression documents',
+      error: error.message,
+    });
+  }
+};

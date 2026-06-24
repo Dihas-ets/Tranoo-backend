@@ -1074,6 +1074,24 @@ exports.getAllChauffeurs = async (_req, res) => {
   }
 };
 
+// Récupérer tous les livreurs
+exports.getAllLivreurs = async (_req, res) => {
+  try {
+    const livreurs = await User.find({ role: 'livreur' });
+    const results = await Promise.all(
+      livreurs.map(async (u) => {
+        const statut = await computeUserStatut(u);
+        const userObj = u.toObject();
+        userObj.statut = statut;
+        return userObj;
+      }),
+    );
+    res.json(results);
+  } catch (err) {
+    res.status(500).json({ message: 'Erreur lors de la récupération des livreurs' });
+  }
+};
+
 // Récupérer tous les administrateurs
 exports.getAllAdmins = async (_req, res) => {
   try {

@@ -11,4 +11,11 @@ router.get(
   documentController.listAdminDocuments
 );
 
+router.post(
+  '/bulk-delete',
+  auth,
+  role('superAdmin', 'principal', 'gestionnaire', 'admin'),
+  documentController.deleteAdminDocuments
+);
+
 module.exports = router;

@@ -282,6 +282,11 @@ const userSchema = new mongoose.Schema({
   devise: { type: String, default: 'XOF' },
   dateInscription: { type: Date, default: Date.now },
   dernierAcces: { type: Date },
+  /** Horodatage de dernière visite des sections du dashboard admin (badges nav). */
+  adminNavSeenAt: {
+    type: mongoose.Schema.Types.Mixed,
+    default: {},
+  },
   fcmToken: { type: String, default: null },
   role: {
     type: String,
