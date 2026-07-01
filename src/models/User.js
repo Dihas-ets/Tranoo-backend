@@ -363,6 +363,23 @@ const userSchema = new mongoose.Schema({
     enum: ['available', 'busy', 'offline'],
     default: 'offline',
   },
+  /** @deprecated Conservé pour compatibilité schéma — n'est plus utilisé pour contourner la vérification. */
+  transitaireVerifieAdmin: { type: Boolean, default: false },
+  transitaireVerification: {
+    statut: {
+      type: String,
+      enum: ['none', 'pending', 'pending_resubmit', 'approved', 'rejected'],
+      default: 'none',
+    },
+    carteRectoUrl: { type: String, default: null },
+    carteVersoUrl: { type: String, default: null },
+    entrepriseProvenanceNom: { type: String, default: null },
+    entrepriseProvenanceReference: { type: String, default: null },
+    submittedAt: { type: Date, default: null },
+    reviewedAt: { type: Date, default: null },
+    reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    rejectionMotif: { type: String, default: null },
+  },
 });
 
 // Index utiles

@@ -554,6 +554,14 @@ try {
   console.warn('Transitaire review routes non chargées:', e.message);
 }
 
+// Vérification compte transitaire (Tranoo Pro + admin)
+try {
+  const transitaireVerificationRoutes = require('./routes/transitaireVerification');
+  app.use('/api/transitaires/verification', transitaireVerificationRoutes);
+} catch (e) {
+  console.warn('Transitaire verification routes non chargées:', e.message);
+}
+
 // Verification pricing routes (véhicule — Tranoo)
 try {
   const verificationPricingRoutes = require('./routes/verificationPricing');

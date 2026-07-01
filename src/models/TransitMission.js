@@ -33,6 +33,7 @@ const transitMissionSchema = new mongoose.Schema(
     dateSelectionTransitaire: { type: Date, default: null },
     dateTransfer: { type: Date, default: null },
     dateTraite: { type: Date, default: null },
+    dateAnnulation: { type: Date, default: null },
     verificationApproved: { type: Boolean, default: false },
   },
   { timestamps: true },

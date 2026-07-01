@@ -23,6 +23,12 @@ const MISSION_POPULATE = [
 function formatMission(doc) {
   if (!doc) return null;
   const m = doc.toObject ? doc.toObject() : doc;
+  const hasActiveTransitaire =
+    m.transitaire != null &&
+    ['en_cours', 'transferer'].includes(m.statut || '');
+  m.canChangeTransitaire =
+    m.statut === 'parcours' && !m.transitaire && m.statut !== 'annule';
+  m.hasActiveTransitaire = hasActiveTransitaire;
   return m;
 }
 
@@ -65,13 +71,18 @@ exports.startParcours = async (req, res) => {
     let mission = await findMissionForBuyer(articleId, acheteurId);
 
     if (mission) {
+      if (mission.statut === 'annule') {
+        return res.status(400).json({
+          code: 'ACHAT_ANNULE',
+          message: 'Cet achat a été annulé',
+        });
+      }
       if (modeLivraison) mission.modeLivraison = modeLivraison;
       if (paysDestination !== undefined) mission.paysDestination = paysDestination;
       if (detailsSupplementaires !== undefined) {
         mission.detailsSupplementaires = detailsSupplementaires;
       }
       if (resolvedTitle) mission.articleTitre = resolvedTitle;
-      if (mission.statut === 'annule') mission.statut = 'parcours';
       await mission.save();
     } else {
       mission = await TransitMission.create({
@@ -130,6 +141,16 @@ exports.selectTransitaire = async (req, res) => {
       return res
         .status(400)
         .json({ message: 'Ce parcours est déjà terminé ou annulé' });
+    }
+    if (
+      mission.transitaire &&
+      ['en_cours', 'transferer'].includes(mission.statut)
+    ) {
+      return res.status(400).json({
+        code: 'TRANSITAIRE_ACTIF',
+        message:
+          'Un transitaire est déjà actif pour cet achat. Attendez son refus ou consultez l\'historique.',
+      });
     }
 
     mission.transitaire = transitaireId;
@@ -298,24 +319,34 @@ exports.rejeterAttribution = async (req, res) => {
     await mission.save();
 
     try {
+      const { buildNotificationContent } = require('../utils/notificationI18n');
+      const rejectedI18n = buildNotificationContent({
+        titleKey: 'transit.rejected.title',
+        messageKey: 'transit.rejected.message',
+        params: { articleTitle },
+      });
       await notificationController.createNotification(
         acheteurId,
         req.user._id,
-        'Transitaire indisponible',
-        `Le transitaire ne peut pas prendre en charge « ${articleTitle} ». Choisissez un autre transitaire.`,
+        rejectedI18n.title,
+        rejectedI18n.message,
         'transit_rejected',
         articleId,
         'Article',
         {
           missionId: String(mission._id),
           articleId: String(articleId),
-          action: 'choose_transitaire',
+          action: 'open_purchase_history',
         },
-        null,
+        {
+          titleKey: 'transit.rejected.title',
+          messageKey: 'transit.rejected.message',
+          params: { articleTitle },
+        },
         [
           {
-            label: 'Choisir un autre transitaire',
-            action: 'choose_transitaire',
+            label: 'Voir l\'historique',
+            action: 'open_purchase_history',
             color: 'primary',
           },
         ],
@@ -381,6 +412,77 @@ exports.getParcours = async (req, res) => {
   }
 };
 
+exports.listMesParcours = async (req, res) => {
+  try {
+    if (req.user.role !== 'acheteur') {
+      return res.status(403).json({ message: 'Réservé aux acheteurs' });
+    }
+    const missions = await TransitMission.find({ acheteur: req.user._id })
+      .sort({ updatedAt: -1 })
+      .populate(MISSION_POPULATE);
+    res.json(missions.map(formatMission));
+  } catch (error) {
+    console.error('[TRANSIT_MISSION] listMesParcours:', error);
+    res.status(500).json({
+      message: 'Erreur lors du chargement de l\'historique des achats',
+    });
+  }
+};
+
+exports.annulerApresVerificationRejetee = async (articleId, acheteurId) => {
+  const mission = await TransitMission.findOne({
+    article: articleId,
+    acheteur: acheteurId,
+    transitaire: { $ne: null },
+    statut: { $in: ['en_cours', 'transferer', 'parcours'] },
+  });
+  if (!mission) return null;
+
+  const transitaireId = mission.transitaire;
+  mission.statut = 'annule';
+  mission.dateAnnulation = new Date();
+  await mission.save();
+
+  try {
+    const { buildNotificationContent } = require('../utils/notificationI18n');
+    const articleTitle =
+      mission.articleTitre ||
+      (await Article.findById(articleId).select('titre marque').lean())?.titre ||
+      'Véhicule';
+    const cancelledI18n = buildNotificationContent({
+      titleKey: 'transit.purchaseCancelled.title',
+      messageKey: 'transit.purchaseCancelled.message',
+      params: { articleTitle },
+    });
+    await notificationController.createNotification(
+      transitaireId,
+      acheteurId,
+      cancelledI18n.title,
+      cancelledI18n.message,
+      'transit_purchase_cancelled',
+      articleId,
+      'Article',
+      {
+        missionId: String(mission._id),
+        articleId: String(articleId),
+        statut: 'annule',
+      },
+      {
+        titleKey: 'transit.purchaseCancelled.title',
+        messageKey: 'transit.purchaseCancelled.message',
+        params: { articleTitle },
+      },
+    );
+  } catch (notifErr) {
+    console.warn(
+      '[TRANSIT_MISSION] Notification annulation achat:',
+      notifErr.message,
+    );
+  }
+
+  return mission;
+};
+
 exports.listMesMissions = async (req, res) => {
   try {
     if (req.user.role !== 'transitaire') {
@@ -388,11 +490,11 @@ exports.listMesMissions = async (req, res) => {
     }
 
     const { statut } = req.query;
-    const allowed = ['en_cours', 'transferer', 'traite'];
+    const allowed = ['en_cours', 'transferer', 'traite', 'annule'];
     if (!statut || !allowed.includes(statut)) {
       return res
         .status(400)
-        .json({ message: 'statut requis: en_cours, transferer ou traite' });
+        .json({ message: 'statut requis: en_cours, transferer, traite ou annule' });
     }
 
     const missions = await TransitMission.find({
@@ -448,7 +550,7 @@ exports.listAcceptes = async (req, res) => {
 
     const missions = await TransitMission.find({
       transitaire: req.user._id,
-      statut: { $in: ['en_cours', 'transferer', 'traite'] },
+      statut: { $in: ['en_cours', 'transferer', 'traite', 'annule'] },
     })
       .sort({ updatedAt: -1 })
       .populate(MISSION_POPULATE);

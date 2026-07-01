@@ -49,6 +49,7 @@ const notificationSchema = new mongoose.Schema({
       'transit_transfer', // véhicule transféré au transitaire
       'transit_selection', // acheteur a choisi le transitaire
       'transit_rejected', // transitaire a refusé la mission
+      'transit_purchase_cancelled', // acheteur a annulé après vérification
     ],
     default: 'general'
   },

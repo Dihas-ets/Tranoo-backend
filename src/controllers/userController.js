@@ -1011,11 +1011,20 @@ exports.unblockUser = async (req, res) => {
 };
 
 // Récupérer tous les transitaires avec statut d'abonnement
-exports.getAllTransitaires = async (_req, res) => {
+exports.getAllTransitaires = async (req, res) => {
   try {
     const transitaires = await User.find({ role: 'transitaire' });
     const Subscription = require('../models/Subscription');
     const { attachRatingStats } = require('../utils/transitaireRating');
+    const { isTransitaireApproved } = require('./transitaireVerificationController');
+
+    const callerRole = String(req.user?.role || '');
+    const callerTypeAdmin = String(req.user?.typeAdmin || '');
+    const isAdminCaller =
+      callerRole === 'admin' ||
+      ['superAdmin', 'principal', 'gestionnaire', 'moderateur'].includes(
+        callerTypeAdmin,
+      );
     
     const transitairesWithStatut = await Promise.all(transitaires.map(async (u) => {
       const statut = await computeUserStatut(u);
@@ -1029,6 +1038,7 @@ exports.getAllTransitaires = async (_req, res) => {
       
       userObj.hasSubscription = hasActiveSubscription;
       userObj.subscriptionStatus = hasActiveSubscription ? 'active' : 'inactive';
+      userObj.isVerifiedTransitaire = isTransitaireApproved(u);
       if (sub) {
         userObj.subscriptionExpiresAt = sub.expiresAt;
         userObj.subscriptionActivatedAt = sub.activatedAt;
@@ -1038,8 +1048,12 @@ exports.getAllTransitaires = async (_req, res) => {
       
       return userObj;
     }));
+
+    const visibleForMarketplace = transitairesWithStatut.filter(
+      (u) => u.isVerifiedTransitaire && u.hasSubscription,
+    );
     
-    res.json(transitairesWithStatut);
+    res.json(isAdminCaller ? transitairesWithStatut : visibleForMarketplace);
   } catch (err) {
     res.status(500).json({ message: "Erreur lors de la récupération des transitaires" });
   }

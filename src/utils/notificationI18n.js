@@ -168,9 +168,9 @@ const templates = {
     ar: 'التحقق {actionTitleLabel}{articleSuffix}',
   },
   'verification.resultAdmin.message': {
-    fr: '{buyerName} a {actionLabel} la demande liée à l’article {articleTitle}.',
-    en: '{buyerName} {actionLabel} the request for item {articleTitle}.',
-    ar: '{buyerName} {actionLabel} الطلب المتعلق بالمنتج {articleTitle}.',
+    fr: '{buyerName} {actionLabel} la demande de vérification pour l’article « {articleTitle} ».',
+    en: '{buyerName} {actionLabel} the verification request for item "{articleTitle}".',
+    ar: '{buyerName} {actionLabel} طلب التحقق للمنتج « {articleTitle} ».',
   },
   'alert.vehicle.title': {
     fr: 'Nouvelle alerte véhicule',
@@ -271,6 +271,46 @@ const templates = {
     fr: 'Un achat a été validé',
     en: 'A purchase has been confirmed',
     ar: 'تم تأكيد عملية شراء',
+  },
+  'transitaireVerification.approved.title': {
+    fr: 'Vérification transitaire approuvée',
+    en: 'Forwarder verification approved',
+    ar: 'تمت الموافقة على التحقق من الوسيط',
+  },
+  'transitaireVerification.approved.message': {
+    fr: 'Votre compte transitaire a été vérifié. Souscrivez à un abonnement pour être visible sur Tranoo.',
+    en: 'Your forwarder account has been verified. Subscribe to appear on Tranoo.',
+    ar: 'تم التحقق من حساب الوسيط. اشترك ليظهر حسابك على Tranoo.',
+  },
+  'transitaireVerification.rejected.title': {
+    fr: 'Vérification transitaire refusée',
+    en: 'Forwarder verification rejected',
+    ar: 'تم رفض التحقق من الوسيط',
+  },
+  'transitaireVerification.rejected.message': {
+    fr: 'Votre demande a été rejetée : {rejectionMotif}. Corrigez et renvoyez votre dossier.',
+    en: 'Your request was rejected: {rejectionMotif}. Please fix and resubmit your file.',
+    ar: 'تم رفض طلبك: {rejectionMotif}. صحّح الملف وأعد إرساله.',
+  },
+  'transit.purchaseCancelled.title': {
+    fr: 'Achat annulé',
+    en: 'Purchase cancelled',
+    ar: 'تم إلغاء الشراء',
+  },
+  'transit.purchaseCancelled.message': {
+    fr: 'L\'acheteur a annulé l\'achat du véhicule « {articleTitle} » après vérification. La mission est clôturée.',
+    en: 'The buyer cancelled the purchase of "{articleTitle}" after verification. The mission is closed.',
+    ar: 'ألغى المشتري شراء « {articleTitle} » بعد التحقق. تم إغلاق المهمة.',
+  },
+  'transit.rejected.title': {
+    fr: 'Transitaire indisponible',
+    en: 'Forwarder unavailable',
+    ar: 'الوسيط غير متاح',
+  },
+  'transit.rejected.message': {
+    fr: 'Le transitaire ne peut pas prendre en charge « {articleTitle} ». Choisissez un autre transitaire depuis votre historique d\'achats.',
+    en: 'The forwarder cannot handle "{articleTitle}". Choose another forwarder from your purchase history.',
+    ar: 'لا يمكن للوسيط تولي « {articleTitle} ». اختر وسيطاً آخر من سجل مشترياتك.',
   },
 };
 

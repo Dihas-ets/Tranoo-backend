@@ -6,6 +6,7 @@ const transitMissionController = require('../controllers/transitMissionControlle
 router.post('/start', auth, transitMissionController.startParcours);
 router.post('/select-transitaire', auth, transitMissionController.selectTransitaire);
 router.post('/transferer', auth, transitMissionController.transfererMission);
+router.get('/mes-parcours', auth, transitMissionController.listMesParcours);
 router.get('/parcours/:articleId', auth, transitMissionController.getParcours);
 router.get('/mes-missions', auth, transitMissionController.listMesMissions);
 router.patch('/:id/marquer-traite', auth, transitMissionController.marquerTraite);

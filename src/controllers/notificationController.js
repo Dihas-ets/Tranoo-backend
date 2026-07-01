@@ -367,6 +367,21 @@ exports.handleVerificationAction = async (notificationId, action, userId) => {
       }
     }
 
+    if (action === 'reject' && notification.verificationData?.articleId) {
+      try {
+        const transitMissionController = require('./transitMissionController');
+        await transitMissionController.annulerApresVerificationRejetee(
+          notification.verificationData.articleId,
+          userId,
+        );
+      } catch (cancelErr) {
+        console.warn(
+          '[VERIFICATION] Annulation parcours transitaire:',
+          cancelErr?.message || cancelErr,
+        );
+      }
+    }
+
     // Notifier le dashboard admin (inbox scope=adminDashboard)
     if (notification.verificationData?.articleId) {
       try {
@@ -379,7 +394,6 @@ exports.handleVerificationAction = async (notificationId, action, userId) => {
         const buyerLabel = buyer
           ? `${buyer.prenoms || ''} ${buyer.nom || ''}`.trim() || buyer.email || buyer.telephone
           : 'Utilisateur';
-        const actionLabel = action === 'approve' ? 'approved' : 'rejected';
         const admins = await User.find({
           $or: [
             { role: { $in: ['admin', 'superAdmin', 'principal', 'gestionnaire'] } },
@@ -407,7 +421,6 @@ exports.handleVerificationAction = async (notificationId, action, userId) => {
               messageKey: 'verification.resultAdmin.message',
               params: {
                 action: action === 'approve' ? 'approve' : 'reject',
-                actionLabel,
                 articleTitle: articleTitle || articleIdStr,
                 articleSuffix: articleTitle ? ` — ${articleTitle}` : '',
                 buyerName: buyerLabel,
