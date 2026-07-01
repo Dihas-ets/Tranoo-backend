@@ -1,0 +1,67 @@
+const admin = require('firebase-admin');
+const User = require('../models/User');
+const { verifyTurnstileToken, isCaptchaEnabled } = require('../utils/turnstile');
+const { ErrorCodes, sendError } = require('../utils/apiResponse');
+const { ErrorCodes, sendError } = require('../utils/apiResponse');
+
+const ADMIN_ROLES = new Set([
+  'admin',
+  'superAdmin',
+  'principal',
+  'gestionnaire',
+]);
+
+async function shouldSkipCaptcha(req) {
+  if (!isCaptchaEnabled()) return true;
+
+  // Inscription mobile (tranoo / tranoo_pro) : CAPTCHA désactivé pour l'instant.
+  const authApp = String(req.body?.authApp || '').toLowerCase();
+  if (authApp === 'tranoo' || authApp === 'tranoo_pro') {
+    return true;
+  }
+
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return false;
+
+  try {
+    const token = authHeader.split('Bearer ')[1];
+    const decoded = await admin.auth().verifyIdToken(token);
+    const user = await User.findOne({ uid: decoded.uid }).select('role typeAdmin');
+    if (!user) return false;
+    return ADMIN_ROLES.has(user.role) || ADMIN_ROLES.has(user.typeAdmin);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Exige un captchaToken valide sur les inscriptions web publiques.
+ * Exempté : admins dashboard, inscriptions mobile (authApp tranoo/tranoo_pro).
+ */
+async function verifyCaptcha(req, res, next) {
+  try {
+    if (await shouldSkipCaptcha(req)) return next();
+
+    const token =
+      req.body?.captchaToken ||
+      req.headers['x-captcha-token'] ||
+      req.headers['x-turnstile-token'];
+
+    const remoteIp =
+      req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip;
+
+    const result = await verifyTurnstileToken(token, remoteIp);
+    if (result.skipped) return next();
+
+    if (!result.success) {
+      return sendError(res, 403, ErrorCodes.CAPTCHA_INVALID, {}, req);
+    }
+
+    return next();
+  } catch (error) {
+    console.error('[CAPTCHA] verifyCaptcha:', error);
+    return sendError(res, 500, ErrorCodes.CAPTCHA_ERROR, {}, req);
+  }
+}
+
+module.exports = verifyCaptcha;

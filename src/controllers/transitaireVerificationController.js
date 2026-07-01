@@ -6,6 +6,11 @@ const {
   internationalPhoneFromDigits,
   canonicalPhoneDigits,
 } = require('../utils/phoneNormalize');
+const {
+  ErrorCodes,
+  sendError,
+  sendSuccessMessage,
+} = require('../utils/apiResponse');
 
 const ADMIN_ROLES = new Set([
   'admin',
@@ -148,38 +153,29 @@ function buildAccessPayload(user, subscriptionInfo) {
 exports.getMyStatus = async (req, res) => {
   try {
     const user = await User.findById(req.user._id);
-    if (!user) return res.status(404).json({ message: 'Utilisateur introuvable' });
+    if (!user) return sendError(res, 404, ErrorCodes.USER_NOT_FOUND, {}, req);
     if (user.role !== 'transitaire') {
-      return res.status(403).json({ message: 'Réservé aux transitaires' });
+      return sendError(res, 403, ErrorCodes.TRANSITAIRE_ONLY, {}, req);
     }
     const subscriptionInfo = await hasActiveSubscription(user._id);
     res.json(buildAccessPayload(user, subscriptionInfo));
   } catch (error) {
-    res.status(500).json({
-      message: 'Erreur lors de la récupération du statut de vérification',
-      error: error.message,
-    });
+    return sendError(res, 500, ErrorCodes.TRANSITAIRE_VERIF_STATUS_FAILED, { error: error.message }, req);
   }
 };
 
 exports.submitVerification = async (req, res) => {
   try {
     const user = await User.findById(req.user._id);
-    if (!user) return res.status(404).json({ message: 'Utilisateur introuvable' });
+    if (!user) return sendError(res, 404, ErrorCodes.USER_NOT_FOUND, {}, req);
     if (user.role !== 'transitaire') {
-      return res.status(403).json({ message: 'Réservé aux transitaires' });
+      return sendError(res, 403, ErrorCodes.TRANSITAIRE_ONLY, {}, req);
     }
     if (isTransitaireApproved(user)) {
-      return res.status(400).json({
-        code: 'TRANSITAIRE_VERIF_ALREADY_VERIFIED',
-        message: 'Votre compte est déjà vérifié',
-      });
+      return sendError(res, 400, ErrorCodes.TRANSITAIRE_VERIF_ALREADY_VERIFIED, {}, req);
     }
     if (['pending', 'pending_resubmit'].includes(user.transitaireVerification?.statut)) {
-      return res.status(400).json({
-        code: 'TRANSITAIRE_VERIF_PENDING',
-        message: 'Une demande est déjà en cours d\'examen (délai 24h)',
-      });
+      return sendError(res, 400, ErrorCodes.TRANSITAIRE_VERIF_PENDING, {}, req);
     }
 
     const {
@@ -190,25 +186,22 @@ exports.submitVerification = async (req, res) => {
     } = req.body;
 
     if (!carteRectoUrl || !carteVersoUrl) {
-      return res.status(400).json({
-        code: 'TRANSITAIRE_VERIF_CARDS_REQUIRED',
-        message: 'Les photos recto et verso de la carte transitaire sont requises',
-      });
+      return sendError(res, 400, ErrorCodes.TRANSITAIRE_VERIF_CARDS_REQUIRED, {}, req);
     }
     if (!entrepriseProvenanceNom?.trim() || !entrepriseProvenanceReference?.trim()) {
-      return res.status(400).json({
-        code: 'TRANSITAIRE_VERIF_COMPANY_REQUIRED',
-        message: 'Le nom et le numéro de référence de l\'entreprise de provenance sont requis',
-      });
+      return sendError(res, 400, ErrorCodes.TRANSITAIRE_VERIF_COMPANY_REQUIRED, {}, req);
     }
     const referencePhone = canonicalPhoneDigits({
       telephone: String(entrepriseProvenanceReference).replace(/\s+/g, ''),
     });
     if (!/^\d{8,15}$/.test(referencePhone)) {
-      return res.status(400).json({
-        code: 'TRANSITAIRE_VERIF_REFERENCE_PHONE_INVALID',
-        message: 'Le numéro de référence doit être un numéro de téléphone valide',
-      });
+      return sendError(
+        res,
+        400,
+        ErrorCodes.TRANSITAIRE_VERIF_REFERENCE_PHONE_INVALID,
+        {},
+        req,
+      );
     }
 
     const prevStatut = user.transitaireVerification?.statut || 'none';
@@ -248,29 +241,27 @@ exports.submitVerification = async (req, res) => {
 
     const refreshed = await User.findById(user._id);
     if (!refreshed) {
-      return res.status(500).json({
-        message: 'Erreur lors de l\'enregistrement de la demande',
-      });
+      return sendError(res, 500, ErrorCodes.TRANSITAIRE_VERIF_SAVE_FAILED, {}, req);
     }
 
     const subscriptionInfo = await hasActiveSubscription(refreshed._id);
-    res.status(201).json({
-      message: 'Demande de vérification envoyée. Délai d\'examen : 24h.',
-      ...buildAccessPayload(refreshed, subscriptionInfo),
-    });
+    return sendSuccessMessage(
+      res,
+      ErrorCodes.TRANSITAIRE_VERIF_SUBMIT_SUCCESS,
+      buildAccessPayload(refreshed, subscriptionInfo),
+      201,
+      req,
+    );
   } catch (error) {
     console.error('[TRANSITAIRE_VERIF] submit error:', error);
-    res.status(500).json({
-      message: 'Erreur lors de l\'envoi de la demande de vérification',
-      error: error.message,
-    });
+    return sendError(res, 500, ErrorCodes.TRANSITAIRE_VERIF_SUBMIT_FAILED, { error: error.message }, req);
   }
 };
 
 exports.listDemandes = async (req, res) => {
   try {
     if (!isAdminUser(req.user)) {
-      return res.status(403).json({ message: 'Accès réservé aux administrateurs' });
+      return sendError(res, 403, ErrorCodes.FORBIDDEN, {}, req);
     }
     const { statut } = req.query;
     const filter = { role: 'transitaire' };
@@ -311,24 +302,21 @@ exports.listDemandes = async (req, res) => {
 
     res.json(list);
   } catch (error) {
-    res.status(500).json({
-      message: 'Erreur lors de la récupération des demandes',
-      error: error.message,
-    });
+    return sendError(res, 500, ErrorCodes.TRANSITAIRE_VERIF_LIST_FAILED, { error: error.message }, req);
   }
 };
 
 exports.getDemandeByUserId = async (req, res) => {
   try {
     if (!isAdminUser(req.user)) {
-      return res.status(403).json({ message: 'Accès réservé aux administrateurs' });
+      return sendError(res, 403, ErrorCodes.FORBIDDEN, {}, req);
     }
     const user = await User.findOne({
       _id: req.params.userId,
       role: 'transitaire',
     }).lean();
     if (!user) {
-      return res.status(404).json({ message: 'Transitaire introuvable' });
+      return sendError(res, 404, ErrorCodes.TRANSITAIRE_VERIF_NOT_FOUND, {}, req);
     }
     const subscriptionInfo = await hasActiveSubscription(user._id);
     res.json({
@@ -346,35 +334,27 @@ exports.getDemandeByUserId = async (req, res) => {
       verification: serializeVerification(user),
     });
   } catch (error) {
-    res.status(500).json({
-      message: 'Erreur lors de la récupération du détail',
-      error: error.message,
-    });
+    return sendError(res, 500, ErrorCodes.TRANSITAIRE_VERIF_DETAIL_FAILED, { error: error.message }, req);
   }
 };
 
 exports.approveDemande = async (req, res) => {
   try {
     if (!isAdminUser(req.user)) {
-      return res.status(403).json({ message: 'Accès réservé aux administrateurs' });
+      return sendError(res, 403, ErrorCodes.FORBIDDEN, {}, req);
     }
     const user = await User.findOne({
       _id: req.params.userId,
       role: 'transitaire',
     });
     if (!user) {
-      return res.status(404).json({ message: 'Transitaire introuvable' });
+      return sendError(res, 404, ErrorCodes.TRANSITAIRE_VERIF_NOT_FOUND, {}, req);
     }
     if (!['pending', 'pending_resubmit'].includes(user.transitaireVerification?.statut)) {
-      return res.status(400).json({
-        message: 'Seules les demandes en attente peuvent être validées',
-      });
+      return sendError(res, 400, ErrorCodes.TRANSITAIRE_VERIF_APPROVE_INVALID, {}, req);
     }
     if (!hasUploadedVerificationDocs(user)) {
-      return res.status(400).json({
-        code: 'TRANSITAIRE_VERIF_DOCS_MISSING',
-        message: 'Le dossier doit contenir les photos recto et verso de la carte',
-      });
+      return sendError(res, 400, ErrorCodes.TRANSITAIRE_VERIF_DOCS_MISSING, {}, req);
     }
 
     const refreshed = await applyVerificationReviewUpdate(user._id, {
@@ -384,7 +364,7 @@ exports.approveDemande = async (req, res) => {
       rejectionMotif: null,
     });
     if (!refreshed) {
-      return res.status(404).json({ message: 'Transitaire introuvable' });
+      return sendError(res, 404, ErrorCodes.TRANSITAIRE_VERIF_NOT_FOUND, {}, req);
     }
 
     await notifyVerificationDecision(
@@ -398,27 +378,27 @@ exports.approveDemande = async (req, res) => {
       { gate: 'subscription_required' },
     );
 
-    res.json({
-      message: 'Demande validée',
-      verification: serializeVerification(refreshed),
-    });
+    return sendSuccessMessage(
+      res,
+      ErrorCodes.TRANSITAIRE_VERIF_APPROVE_SUCCESS,
+      { verification: serializeVerification(refreshed) },
+      200,
+      req,
+    );
   } catch (error) {
     console.error('[TRANSITAIRE_VERIF] approve error:', error);
-    res.status(500).json({
-      message: 'Erreur lors de la validation',
-      error: error.message,
-    });
+    return sendError(res, 500, ErrorCodes.TRANSITAIRE_VERIF_APPROVE_FAILED, { error: error.message }, req);
   }
 };
 
 exports.rejectDemande = async (req, res) => {
   try {
     if (!isAdminUser(req.user)) {
-      return res.status(403).json({ message: 'Accès réservé aux administrateurs' });
+      return sendError(res, 403, ErrorCodes.FORBIDDEN, {}, req);
     }
     const motif = String(req.body?.motif || req.body?.rejectionMotif || '').trim();
     if (!motif) {
-      return res.status(400).json({ message: 'Le motif du rejet est obligatoire' });
+      return sendError(res, 400, ErrorCodes.TRANSITAIRE_VERIF_REJECT_MOTIF_REQUIRED, {}, req);
     }
 
     const user = await User.findOne({
@@ -426,12 +406,10 @@ exports.rejectDemande = async (req, res) => {
       role: 'transitaire',
     });
     if (!user) {
-      return res.status(404).json({ message: 'Transitaire introuvable' });
+      return sendError(res, 404, ErrorCodes.TRANSITAIRE_VERIF_NOT_FOUND, {}, req);
     }
     if (!['pending', 'pending_resubmit'].includes(user.transitaireVerification?.statut)) {
-      return res.status(400).json({
-        message: 'Seules les demandes en attente peuvent être rejetées',
-      });
+      return sendError(res, 400, ErrorCodes.TRANSITAIRE_VERIF_REJECT_INVALID, {}, req);
     }
 
     const refreshed = await applyVerificationReviewUpdate(user._id, {
@@ -441,7 +419,7 @@ exports.rejectDemande = async (req, res) => {
       rejectionMotif: motif,
     });
     if (!refreshed) {
-      return res.status(404).json({ message: 'Transitaire introuvable' });
+      return sendError(res, 404, ErrorCodes.TRANSITAIRE_VERIF_NOT_FOUND, {}, req);
     }
 
     await notifyVerificationDecision(
@@ -456,16 +434,16 @@ exports.rejectDemande = async (req, res) => {
       { gate: 'verification_rejected', rejectionMotif: motif },
     );
 
-    res.json({
-      message: 'Demande rejetée',
-      verification: serializeVerification(refreshed),
-    });
+    return sendSuccessMessage(
+      res,
+      ErrorCodes.TRANSITAIRE_VERIF_REJECT_SUCCESS,
+      { verification: serializeVerification(refreshed) },
+      200,
+      req,
+    );
   } catch (error) {
     console.error('[TRANSITAIRE_VERIF] reject error:', error);
-    res.status(500).json({
-      message: 'Erreur lors du rejet',
-      error: error.message,
-    });
+    return sendError(res, 500, ErrorCodes.TRANSITAIRE_VERIF_REJECT_FAILED, { error: error.message }, req);
   }
 };
 
