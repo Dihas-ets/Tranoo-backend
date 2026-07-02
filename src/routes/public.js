@@ -12,6 +12,9 @@ const publicVerificationPdfController = require('../controllers/publicVerificati
 // Endpoint public (sans auth): liste des articles (même logique que privé)
 router.get('/articles', articleController.getArticlesPublic);
 
+// Détail article (sans auth) — contact vendeur, médias, etc.
+router.get('/articles/:id', articleController.getArticleById);
+
 // Endpoint public (sans auth): liste des publicités visibles (statut valide)
 router.get('/publicites', publiciteController.getPublicitesPublic);
 

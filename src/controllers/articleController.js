@@ -274,9 +274,10 @@ exports.getArticles = async (req, res) => {
         if ((type || '').toString().toLowerCase() !== 'piece') {
           if (allowedSellerStatuts.has(requestedStatut)) {
             filter.statut = requestedStatut === 'rejete' ? 'rejeté' : requestedStatut;
-          } else {
+          } else if (requestedStatut) {
             filter.statut = 'en_ligne';
           }
+          // Sans statut explicite : tout le stock du vendeur (onglets côté app)
         } else if (allowedSellerStatuts.has(requestedStatut)) {
           filter.statut = requestedStatut === 'rejete' ? 'rejeté' : requestedStatut;
         }
