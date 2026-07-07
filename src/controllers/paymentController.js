@@ -79,6 +79,54 @@ function getBearerOnlyHeaders() {
   };
 }
 
+/** Réseaux Bénin : FeexPay attend 229 + 10 chiffres commençant par 01 (ex: 2290166000000). */
+const BENIN_RTP_NETWORKS = new Set(['mtn', 'moov', 'celtiis_bj', 'coris']);
+
+function normalizeFeexPayPhone(phoneNumber, network) {
+  const digits = String(phoneNumber ?? '').replace(/\D/g, '');
+  if (!digits) return phoneNumber;
+
+  const net = String(network || '').toLowerCase();
+  if (BENIN_RTP_NETWORKS.has(net)) {
+    let local = digits;
+    if (local.startsWith('00229')) local = local.slice(5);
+    else if (local.startsWith('229')) local = local.slice(3);
+    if (local.length === 8) local = `01${local}`;
+    if (local.length === 10 && local.startsWith('01')) {
+      return Number(`229${local}`);
+    }
+    if (local.length === 13 && local.startsWith('22901')) {
+      return Number(local);
+    }
+  }
+
+  if (/^\d+$/.test(digits)) return Number(digits);
+  return phoneNumber;
+}
+
+function extractFeexPayErrorMessage(error) {
+  const data = error?.response?.data;
+  if (!data) return error?.message || 'Erreur FeexPay';
+  if (typeof data === 'string' && data.trim()) return data.trim();
+  if (typeof data === 'object') {
+    if (data.message && typeof data.message === 'string' && data.message.trim()) {
+      return data.message.trim();
+    }
+    if (data.error) {
+      if (typeof data.error === 'string') return data.error;
+      if (typeof data.error === 'object' && data.error.message) {
+        return String(data.error.message);
+      }
+    }
+    if (Array.isArray(data.message)) return data.message.join(', ');
+  }
+  try {
+    return JSON.stringify(data);
+  } catch (_) {
+    return 'Erreur FeexPay';
+  }
+}
+
 const FEEXPAY_UUID_REGEX =
   /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$/;
 
@@ -203,14 +251,22 @@ exports.initRequestToPay = async (req, res) => {
     if (!network) {
       return res.status(400).json({ message: 'network requis' });
     }
+    const numericAmount = Number(amount);
+    if (!Number.isFinite(numericAmount) || numericAmount < 100) {
+      return res.status(400).json({
+        message: 'Le montant minimum FeexPay est de 100 XOF.',
+      });
+    }
 
     // URL d'initiation suivant le réseau
     const requestUrl = `${FEEXPAY_BASE_URL}/api/transactions/public/requesttopay/${network}`;
 
+    const normalizedPhone = normalizeFeexPayPhone(phoneNumber, network);
+
     const payload = {
       shop: FEEXPAY_SHOP_ID,
       amount: Number(amount),
-      phoneNumber,
+      phoneNumber: normalizedPhone,
       firstName,
       lastName,
       description,
@@ -269,11 +325,18 @@ exports.initRequestToPay = async (req, res) => {
       raw: data,
     });
   } catch (error) {
-    console.error('[initRequestToPay] error:', error.response?.data || error.message);
+    const feexMsg = extractFeexPayErrorMessage(error);
+    console.error('[initRequestToPay] error:', feexMsg, error.response?.data || error.message);
     if (error.response) {
       console.error('Détails erreur:', error.response.status, error.response.data);
     }
-    return res.status(500).json({ message: 'Erreur init RequestToPay', error: error.response?.data || error.message });
+    const status = error.response?.status;
+    const httpStatus =
+      status && status >= 400 && status < 500 ? status : status === 502 ? 502 : 400;
+    return res.status(httpStatus).json({
+      message: feexMsg,
+      details: error.response?.data || null,
+    });
   }
 };
 
