@@ -42,12 +42,12 @@ async function resolveClientLabel(payment) {
 
 /** API Payin / statuts publics (doc V2 : https://api-v2.feexpay.me) */
 const FEEXPAY_BASE_URL = process.env.FEEXPAY_BASE_URL || 'https://api-v2.feexpay.me';
-/** FeexLink (api-create / api-status) reste souvent sur l’hôte classique si non migré. */
+/** Migration complète V2 : FeexLink utilise aussi la base v2 par défaut. */
 const FEEXPAY_FEEXLINK_BASE_URL =
-  process.env.FEEXPAY_FEEXLINK_BASE_URL || 'https://api.feexpay.me';
+  process.env.FEEXPAY_FEEXLINK_BASE_URL || 'https://api-v2.feexpay.me';
 const FEEXPAY_SHOP_ID = process.env.FEEXPAY_SHOP_ID || '';
 const FEEXPAY_API_TOKEN = process.env.FEEXPAY_API_TOKEN || '';
-const FEEXPAY_MODE = process.env.FEEXPAY_MODE || 'SANDBOX';
+const FEEXPAY_MODE = process.env.FEEXPAY_MODE || 'LIVE';
 const FEEXLINK_DISABLED = String(process.env.FEEXLINK_DISABLED || 'true').toLowerCase() === 'true';
 const EXPIRE_SECONDS = Number(process.env.PAYMENT_EXPIRE_SECONDS || 900);
 const FEEXPAY_DISABLE_LOCAL_EXPIRY = String(process.env.FEEXPAY_DISABLE_LOCAL_EXPIRY || 'true').toLowerCase() === 'true';

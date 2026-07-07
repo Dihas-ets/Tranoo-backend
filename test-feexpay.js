@@ -1,7 +1,7 @@
 const axios = require('axios');
 
 const FEEXPAY_V2 = process.env.FEEXPAY_BASE_URL || 'https://api-v2.feexpay.me';
-const FEEXPAY_FEEXLINK = process.env.FEEXPAY_FEEXLINK_BASE_URL || 'https://api.feexpay.me';
+const FEEXPAY_FEEXLINK = process.env.FEEXPAY_FEEXLINK_BASE_URL || 'https://api-v2.feexpay.me';
 
 async function testFeexPayIntegration() {
   const FEEXPAY_API_TOKEN = process.env.FEEXPAY_API_TOKEN;
