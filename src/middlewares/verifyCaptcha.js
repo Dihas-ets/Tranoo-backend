@@ -10,12 +10,25 @@ const ADMIN_ROLES = new Set([
   'gestionnaire',
 ]);
 
+const MOBILE_REGISTER_ROLES = new Set([
+  'acheteur',
+  'vendeur',
+  'livreur',
+  'chauffeur',
+  'transitaire',
+]);
+
 async function shouldSkipCaptcha(req) {
   if (!isCaptchaEnabled()) return true;
 
-  // Inscription mobile (tranoo / tranoo_pro) : CAPTCHA désactivé pour l'instant.
+  // Inscription mobile (tranoo / tranoo_pro) : pas de CAPTCHA sur les apps.
   const authApp = String(req.body?.authApp || '').toLowerCase();
   if (authApp === 'tranoo' || authApp === 'tranoo_pro') {
+    return true;
+  }
+
+  const role = String(req.body?.role || '').toLowerCase();
+  if (MOBILE_REGISTER_ROLES.has(role)) {
     return true;
   }
 
