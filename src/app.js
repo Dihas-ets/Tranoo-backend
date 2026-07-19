@@ -570,6 +570,14 @@ try {
   console.warn('Verification pricing routes non chargées:', e.message);
 }
 
+// Gain Tranoo vendeurs (voiture / moto)
+try {
+  const sellerGainPricingRoutes = require('./routes/sellerGainPricing');
+  app.use('/api/admin/seller-gain-pricing', sellerGainPricingRoutes);
+} catch (e) {
+  console.warn('Seller gain pricing routes non chargées:', e.message);
+}
+
 // Documents partagés (admin dashboard)
 try {
   const adminDocumentsRoutes = require('./routes/adminDocuments');
