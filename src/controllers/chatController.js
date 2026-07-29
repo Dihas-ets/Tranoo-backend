@@ -22,12 +22,12 @@ exports.createOrGetRoom = async (req, res) => {
       // Créer la room si elle n'existe pas
       room = new ChatRoom({ participants: [user1, user2], article });
       await room.save();
-      
-      // Envoyer une notification au vendeur si c'est un transitaire qui crée la discussion
-    // La notification de création de discussion (chat.new) est désactivée :
-    // le vendeur et le transitaire reçoivent déjà un événement socket 'new-message'
-    // en temps réel lorsqu'un message est envoyé. La notif push en doublon
-    // est retirée pour ne pas encombrer le centre de notifications.
+      // Notifications de création de discussion retirées — les participants
+      // reçoivent déjà les messages en temps réel via le socket 'new-message'.
+    }
+    // Peupler les infos utiles pour le front
+    await room.populate('participants', 'nom prenoms email photo role');
+    await room.populate('article', 'titre photos');
     res.status(200).json(room);
   } catch (error) {
     console.error('[Chat] Erreur lors de la création/récupération de la room:', error);
