@@ -596,17 +596,44 @@ exports.updateStatut = async (req, res) => {
 exports.markAsSold = async (req, res) => {
   try {
     const { id } = req.params;
-    const { acheteurId } = req.body;
+    const { acheteurId } = req.body || {};
+
     const article = await Article.findById(id);
     if (!article) return res.status(404).json({ message: 'Article non trouvé' });
-    if (article.statutVente === 'vendu') return res.status(400).json({ message: 'Article déjà vendu' });
+    if (article.statutVente === 'vendu') {
+      return res.status(400).json({ message: 'Article déjà vendu' });
+    }
+
     article.statutVente = 'vendu';
-    article.acheteur = acheteurId;
+    // statut publication → 'vendu' pour masquer du catalogue public
+    article.statut = 'vendu';
     if (!article.dateAchat) article.dateAchat = new Date();
+
+    // acheteurId est optionnel (admin peut marquer vendu sans connaître l'acheteur)
+    if (acheteurId) {
+      const mongoose = require('mongoose');
+      if (mongoose.Types.ObjectId.isValid(String(acheteurId))) {
+        article.acheteur = acheteurId;
+      }
+    }
+
     await article.save();
+
+    // Émettre un event socket pour notifier en temps réel
+    try {
+      if (global.io) {
+        global.io.emit('article-sold', {
+          articleId: String(article._id),
+          statut: 'vendu',
+          statutVente: 'vendu',
+        });
+      }
+    } catch (_) {}
+
     res.json({ message: 'Article marqué comme vendu', article });
   } catch (error) {
-    res.status(500).json({ message: 'Erreur lors du marquage comme vendu', error });
+    console.error('[MARK_AS_SOLD] error:', error);
+    res.status(500).json({ message: 'Erreur lors du marquage comme vendu', error: error.message });
   }
 };
 

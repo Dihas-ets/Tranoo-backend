@@ -48,7 +48,11 @@ async function shouldSkipCaptcha(req) {
 
 /**
  * Exige un captchaToken valide sur les inscriptions web publiques.
- * Exempté : admins dashboard, inscriptions mobile (authApp tranoo/tranoo_pro).
+ * Exempté :
+ * - CAPTCHA_ENABLED=false
+ * - authApp = tranoo | tranoo_pro (apps mobiles — pas de CAPTCHA pour l'instant)
+ * - rôles mobiles (acheteur, vendeur, livreur, chauffeur, transitaire)
+ * - admins dashboard (Bearer + rôle admin)
  */
 async function verifyCaptcha(req, res, next) {
   try {

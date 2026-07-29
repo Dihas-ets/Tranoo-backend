@@ -354,6 +354,20 @@ exports.handleVerificationAction = async (notificationId, action, userId) => {
 
     if (action === 'approve' && notification.verificationData?.articleId) {
       try {
+        // Mettre à jour verificationStatut → 'accepte' sur l'article
+        await Article.findByIdAndUpdate(
+          notification.verificationData.articleId,
+          {
+            $set: {
+              verificationStatut: 'accepte',
+              verificationDate: new Date(),
+            },
+          },
+        );
+      } catch (e) {
+        console.warn('[VERIFICATION] Mise à jour verificationStatut accepte:', e?.message);
+      }
+      try {
         const transitMissionController = require('./transitMissionController');
         await transitMissionController.transfererByArticleAndAcheteur(
           notification.verificationData.articleId,
@@ -368,6 +382,20 @@ exports.handleVerificationAction = async (notificationId, action, userId) => {
     }
 
     if (action === 'reject' && notification.verificationData?.articleId) {
+      try {
+        // Mettre à jour verificationStatut → 'refuse' sur l'article
+        await Article.findByIdAndUpdate(
+          notification.verificationData.articleId,
+          {
+            $set: {
+              verificationStatut: 'refuse',
+              verificationDate: new Date(),
+            },
+          },
+        );
+      } catch (e) {
+        console.warn('[VERIFICATION] Mise à jour verificationStatut refuse:', e?.message);
+      }
       try {
         const transitMissionController = require('./transitMissionController');
         await transitMissionController.annulerApresVerificationRejetee(

@@ -119,6 +119,9 @@ exports.getStats = async (_req, res) => {
     const currentYear = new Date().getFullYear();
     const anneeActivite = currentYear - launchYear + 1;
 
+    // Articles vendus (statut = vendu)
+    const articlesVendus = await Article.countDocuments({ statut: 'vendu' });
+
     res.json({
       voitures: Number(voituresCount),
       pieces: Number(piecesCount),
@@ -132,7 +135,9 @@ exports.getStats = async (_req, res) => {
       vendeursInactifs: Number(vendeursInactifs),
       adminsActifs: Number(adminsActifs),
       adminsInactifs: Number(adminsInactifs),
-      annee: Number(anneeActivite)
+      annee: Number(anneeActivite),
+      ventes: Number(articlesVendus),
+      articlesVendus: Number(articlesVendus),
     });
   } catch (error) {
     res.status(500).json({ message: 'Erreur lors de la récupération des statistiques', error });

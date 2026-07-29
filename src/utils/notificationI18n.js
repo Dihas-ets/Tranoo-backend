@@ -142,6 +142,16 @@ const templates = {
     en: 'A seller published: "{articleTitle}"{priceSuffix}',
     ar: 'نشر بائع: « {articleTitle} »{priceSuffix}',
   },
+  'verification.vendor.request.title': {
+    fr: 'Demande de vérification — {articleTitle}',
+    en: 'Verification request — {articleTitle}',
+    ar: 'طلب تحقق — {articleTitle}',
+  },
+  'verification.vendor.request.message': {
+    fr: 'Bonjour {vendeurPrenom}, une demande de vérification a été reçue concernant votre véhicule « {articleTitle} ».',
+    en: 'Hello {vendeurPrenom}, a verification request has been received for your vehicle "{articleTitle}".',
+    ar: 'مرحباً {vendeurPrenom}، تم استلام طلب تحقق لمركبتك « {articleTitle} ».',
+  },
   'verification.ready.title': {
     fr: 'Vérification : {articleTitle}',
     en: 'Verification: {articleTitle}',

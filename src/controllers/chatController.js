@@ -24,56 +24,10 @@ exports.createOrGetRoom = async (req, res) => {
       await room.save();
       
       // Envoyer une notification au vendeur si c'est un transitaire qui crée la discussion
-      try {
-        const currentUser = await User.findById(user1);
-        const otherUser = await User.findById(user2);
-        const articleData = await Article.findById(article);
-        
-        if (currentUser && otherUser && articleData) {
-          // Déterminer qui est le vendeur et qui est le transitaire
-          let vendeur, transitaire;
-          if (currentUser.role === 'transitaire' && otherUser.role === 'vendeur') {
-            transitaire = currentUser;
-            vendeur = otherUser;
-          } else if (currentUser.role === 'vendeur' && otherUser.role === 'transitaire') {
-            vendeur = currentUser;
-            transitaire = otherUser;
-          }
-          
-          // Envoyer notification au vendeur si c'est un transitaire qui initie
-          if (transitaire && vendeur) {
-            const senderName =
-              `${transitaire.prenoms || ''} ${transitaire.nom || ''}`.trim();
-            const i18n = {
-              titleKey: 'chat.new.title',
-              messageKey: 'chat.new.message',
-              params: {
-                senderName,
-                articleTitle: articleData.titre || '',
-              },
-            };
-            const { buildNotificationContent } = require('../utils/notificationI18n');
-            const { title, message } = buildNotificationContent(i18n);
-            await notificationController.createNotification(
-              vendeur._id,
-              transitaire._id,
-              title,
-              message,
-              'chat',
-              room._id,
-              'ChatRoom',
-              {},
-              i18n
-            );
-          }
-        }
-      } catch (error) {
-        console.error('[Chat] Erreur lors de l\'envoi de notification:', error);
-      }
-    }
-    // Peupler les infos utiles pour le front
-    await room.populate('participants', 'nom prenoms email photo role');
-    await room.populate('article', 'titre photos');
+    // La notification de création de discussion (chat.new) est désactivée :
+    // le vendeur et le transitaire reçoivent déjà un événement socket 'new-message'
+    // en temps réel lorsqu'un message est envoyé. La notif push en doublon
+    // est retirée pour ne pas encombrer le centre de notifications.
     res.status(200).json(room);
   } catch (error) {
     console.error('[Chat] Erreur lors de la création/récupération de la room:', error);

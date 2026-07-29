@@ -97,6 +97,19 @@ const articleSchema = new mongoose.Schema({
     buyerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     requestType: { type: String, default: null },
   },
+  // Statut de vérification véhicule (demande payée depuis l'app)
+  verificationStatut: {
+    type: String,
+    enum: ['non_verifie', 'en_attente', 'verifie', 'accepte', 'refuse'],
+    default: 'non_verifie',
+    index: true,
+  },
+  verificationPaymentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Payment', default: null },
+  verificationDate: { type: Date, default: null },
+  verificationMotifRefus: { type: String, default: null },
+  // Nombre total de vérifications effectuées sur ce véhicule
+  verificationCount: { type: Number, default: 0 },
+
   // Statistiques de vues
   viewsReal: { type: Number, default: 0 },
   viewsAuto: { type: Number, default: 0 },

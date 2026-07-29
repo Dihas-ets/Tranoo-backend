@@ -39,6 +39,25 @@ function missionTransitaireId(mission) {
   return String(t);
 }
 
+/**
+ * Émet un event 'transit-mission-update' au transitaire concerné via Socket.io.
+ * Le transitaire reçoit l'update en temps réel pour rafraîchir sa liste.
+ */
+function emitTransitUpdate(mission) {
+  try {
+    if (!global.io || !global.userSockets) return;
+    const transitaireId = missionTransitaireId(mission);
+    if (!transitaireId) return;
+    const socketId = global.userSockets.get(transitaireId);
+    if (socketId) {
+      global.io.to(socketId).emit('transit-mission-update', {
+        missionId: String(mission._id),
+        statut: mission.statut,
+      });
+    }
+  } catch (_) {}
+}
+
 async function findMissionForBuyer(articleId, acheteurId) {
   return TransitMission.findOne({ article: articleId, acheteur: acheteurId });
 }
@@ -162,6 +181,9 @@ exports.selectTransitaire = async (req, res) => {
       MISSION_POPULATE,
     );
 
+    // Notif socket temps réel au transitaire
+    emitTransitUpdate(populated || mission);
+
     try {
       const articleTitle =
         populated?.articleTitre ||
@@ -234,6 +256,9 @@ exports.transfererMission = async (req, res) => {
       MISSION_POPULATE,
     );
 
+    // Notif socket temps réel au transitaire
+    emitTransitUpdate(populated || mission);
+
     try {
       const articleTitle =
         populated?.article?.titre || populated?.article?.marque || 'Véhicule';
@@ -271,6 +296,9 @@ exports.transfererByArticleAndAcheteur = async (articleId, acheteurId) => {
   mission.dateTransfer = new Date();
   mission.verificationApproved = true;
   await mission.save();
+
+  // Notif socket temps réel au transitaire
+  emitTransitUpdate(mission);
 
   try {
     const art = await Article.findById(articleId).select('titre marque').lean();
@@ -358,6 +386,7 @@ exports.rejeterAttribution = async (req, res) => {
     const populated = await TransitMission.findById(mission._id).populate(
       MISSION_POPULATE,
     );
+    // L'acheteur reçoit le refus (pas besoin de notif socket côté transitaire ici)
     res.json(formatMission(populated));
   } catch (error) {
     console.error('[TRANSIT_MISSION] rejeterAttribution:', error);
@@ -387,6 +416,8 @@ exports.marquerTraite = async (req, res) => {
     const populated = await TransitMission.findById(mission._id).populate(
       MISSION_POPULATE,
     );
+    // Le transitaire vient de traiter sa propre mission, on confirme le changement à tous ses clients connectés
+    emitTransitUpdate(populated || mission);
     res.json(formatMission(populated));
   } catch (error) {
     console.error('[TRANSIT_MISSION] marquerTraite:', error);
