@@ -81,6 +81,7 @@ exports.getAllUsers = async (req, res) => {
     const filter = role ? { role } : {};
     const total = await User.countDocuments(filter);
     const users = await User.find(filter)
+      .sort({ createdAt: -1 })
       .skip((page - 1) * limit)
       .limit(Number(limit));
     
@@ -502,7 +503,7 @@ exports.getPhoneByEmail = async (req, res) => {
 // Récupérer tous les vendeurs avec stats complètes
 exports.getAllVendeurs = async (_req, res) => {
   try {
-    const vendeurs = await User.find({ role: 'vendeur' });
+    const vendeurs = await User.find({ role: 'vendeur' }).sort({ createdAt: -1 });
     const results = await Promise.all(
       vendeurs.map(async (vendeur) => {
         const articlesCount = await Article.countDocuments({ vendeur: vendeur._id });
@@ -523,7 +524,7 @@ exports.getAllVendeurs = async (_req, res) => {
 // Récupérer la liste des vendeurs avec articlesCount et salesCount (legacy)
 exports.getVendeursStats = async (_req, res) => {
   try {
-    const vendeurs = await User.find({ role: 'vendeur' });
+    const vendeurs = await User.find({ role: 'vendeur' }).sort({ createdAt: -1 });
     const results = await Promise.all(
       vendeurs.map(async (vendeur) => {
         const articlesCount = await Article.countDocuments({ vendeur: vendeur._id });
@@ -935,7 +936,7 @@ exports.getChauffeurActivities = async (req, res) => {
 // Nouvelle route : liste de tous les acheteurs (même sans achat)
 exports.getAllAcheteurs = async (_req, res) => {
   try {
-    const acheteurs = await User.find({ role: 'acheteur' });
+    const acheteurs = await User.find({ role: 'acheteur' }).sort({ createdAt: -1 });
     const acheteursWithStatut = await Promise.all(acheteurs.map(async (u) => {
       const statut = await computeUserStatut(u);
       const userObj = u.toObject();
@@ -1013,7 +1014,7 @@ exports.unblockUser = async (req, res) => {
 // Récupérer tous les transitaires avec statut d'abonnement
 exports.getAllTransitaires = async (req, res) => {
   try {
-    const transitaires = await User.find({ role: 'transitaire' });
+    const transitaires = await User.find({ role: 'transitaire' }).sort({ createdAt: -1 });
     const Subscription = require('../models/Subscription');
     const { attachRatingStats } = require('../utils/transitaireRating');
     const { isTransitaireApproved } = require('./transitaireVerificationController');
@@ -1062,7 +1063,7 @@ exports.getAllTransitaires = async (req, res) => {
 // Récupérer tous les chauffeurs avec leurs activités
 exports.getAllChauffeurs = async (_req, res) => {
   try {
-    const chauffeurs = await User.find({ role: 'chauffeur' });
+    const chauffeurs = await User.find({ role: 'chauffeur' }).sort({ createdAt: -1 });
     
     const chauffeursWithActivities = await Promise.all(chauffeurs.map(async (u) => {
       const statut = await computeUserStatut(u);
@@ -1091,7 +1092,7 @@ exports.getAllChauffeurs = async (_req, res) => {
 // Récupérer tous les livreurs
 exports.getAllLivreurs = async (_req, res) => {
   try {
-    const livreurs = await User.find({ role: 'livreur' });
+    const livreurs = await User.find({ role: 'livreur' }).sort({ createdAt: -1 });
     const results = await Promise.all(
       livreurs.map(async (u) => {
         const statut = await computeUserStatut(u);
@@ -1109,7 +1110,7 @@ exports.getAllLivreurs = async (_req, res) => {
 // Récupérer tous les administrateurs
 exports.getAllAdmins = async (_req, res) => {
   try {
-    const admins = await User.find({ role: 'admin' });
+    const admins = await User.find({ role: 'admin' }).sort({ createdAt: -1 });
     
     const adminsWithStatut = await Promise.all(admins.map(async (u) => {
       const statut = await computeUserStatut(u);

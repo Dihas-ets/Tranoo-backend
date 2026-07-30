@@ -34,7 +34,9 @@ exports.getPublicites = async (req, res) => {
     if (vendeur) filter.vendeur = vendeur;
     if (statut) filter.statut = statut;
     if (typePub) filter.typePub = typePub;
-    const publicites = await Publicite.find(filter).populate('vendeur', 'nom prenoms email');
+    const publicites = await Publicite.find(filter)
+      .sort({ createdAt: -1 })
+      .populate('vendeur', 'nom prenoms email');
     res.json(publicites);
   } catch (error) {
     res.status(500).json({ message: 'Erreur lors de la récupération des demandes', error });
@@ -48,7 +50,9 @@ exports.getPublicitesPublic = async (req, res) => {
     const { typePub } = req.query;
     const filter = { statut: 'valide' };
     if (typePub) filter.typePub = typePub;
-    const publicites = await Publicite.find(filter).populate('vendeur', 'nom prenoms entreprise');
+    const publicites = await Publicite.find(filter)
+      .sort({ createdAt: -1 })
+      .populate('vendeur', 'nom prenoms entreprise');
     res.json(publicites);
   } catch (error) {
     res.status(500).json({ message: 'Erreur lors de la récupération des publicités publiques', error });
