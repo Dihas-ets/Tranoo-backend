@@ -57,7 +57,7 @@ const checkExpiredPublicites = cron.schedule('0 * * * *', async () => {
   scheduled: false
 });
 
-// Progression des vues automatiques (~50 vues sur 60 minutes)
+// Progression des vues automatiques (rythme et ticks décalés par article)
 const autoViewsCron = cron.schedule('* * * * *', async () => {
   try {
     await tickAutoViewsForArticles();

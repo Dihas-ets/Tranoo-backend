@@ -646,9 +646,24 @@ exports.createVerificationNotificationHTTP = async (req, res) => {
 async function sendFcmForNotification(user, notification, { title, message, type }) {
   if (!user?.fcmToken) return;
   try {
+    const extra = notification?.data && typeof notification.data === 'object'
+      ? notification.data
+      : {};
     const fcmData = {
       type: String(type ?? 'general'),
       notificationId: String(notification._id),
+      relatedId: notification?.relatedId ? String(notification.relatedId) : '',
+      relatedModel: notification?.relatedModel
+        ? String(notification.relatedModel)
+        : '',
+      action: extra.action ? String(extra.action) : '',
+      targetArticleId: extra.targetArticleId
+        ? String(extra.targetArticleId)
+        : notification?.relatedId
+          ? String(notification.relatedId)
+          : '',
+      targetType: extra.targetType ? String(extra.targetType) : '',
+      targetPath: extra.targetPath ? String(extra.targetPath) : '',
       title: String(title ?? ''),
       message: String(message ?? '').replace(/<[^>]+>/g, ' ').slice(0, 500),
     };

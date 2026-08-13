@@ -1343,6 +1343,7 @@ const catalog = {
   cannotOpenDocument: { en: 'Unable to open document', fr: "Impossible d'ouvrir le document", ar: 'تعذر فتح المستند' },
   featureNoLongerAvailable: { en: 'This feature is no longer available', fr: "Cette fonctionnalité n'est plus disponible", ar: 'هذه الميزة لم تعد متاحة' },
   articleNotFound: { en: 'Item not found', fr: 'Article introuvable', ar: 'المنتج غير موجود' },
+  articleNoLongerOnline: { en: 'This listing is no longer online.', fr: "Cette annonce n'est plus en ligne.", ar: 'هذا الإعلان لم يعد متاحاً.' },
   sessionExpiredReconnect: { en: 'Session expired. Sign in again.', fr: 'Session expirée. Reconnectez-vous.', ar: 'انتهت الجلسة. سجّل الدخول مجدداً.' },
   cannotLoadProposal: { en: 'Unable to load proposal.', fr: 'Impossible de charger la proposition.', ar: 'تعذر تحميل العرض.' },
   searchDetails: { en: 'Search details', fr: 'Détails de la recherche', ar: 'تفاصيل البحث' },

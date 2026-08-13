@@ -168,7 +168,11 @@ exports.updateStatut = async (req, res) => {
         data: {
           type: 'publicite',
           publiciteId: publicite._id.toString(),
-          statut: publicite.statut
+          statut: publicite.statut,
+          relatedId: publicite.article
+            ? String(publicite.article)
+            : publicite._id.toString(),
+          targetArticleId: publicite.article ? String(publicite.article) : '',
         }
       };
       try {

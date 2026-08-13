@@ -368,7 +368,11 @@ exports.getVerificationBuyer = async (req, res) => {
 // Détail d'un article
 exports.getArticleById = async (req, res) => {
   try {
-    const article = await Article.findById(req.params.id).populate('vendeur', 'nom prenoms email entreprise telephone');
+    const id = req.params.id;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(404).json({ message: 'Article non trouvé' });
+    }
+    const article = await Article.findById(id).populate('vendeur', 'nom prenoms email entreprise telephone uid');
     if (!article) return res.status(404).json({ message: 'Article non trouvé' });
     const f = article.fournisseur || {};
     console.log(
@@ -575,7 +579,7 @@ exports.updateStatut = async (req, res) => {
             motifRejet: raison,
             articleTitle: article.titre || '',
             articleType: article.type || '',
-            targetPath: isPiece ? 'mastervac' : 'cars_info',
+            targetPath: isPiece ? 'mastervac' : isMoto ? 'moto_info' : 'cars_info',
             targetArticleId: article._id.toString(),
           },
           i18n
