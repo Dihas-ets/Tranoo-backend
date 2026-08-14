@@ -884,6 +884,14 @@ exports.createAdminMessageHTTP = async (req, res) => {
       plainTextFromHtml(fragmentHtml) ||
       String(message).replace(/<[^>]+>/g, ' ').trim();
 
+    const recipientCompose = {
+      name: recipient.name ? String(recipient.name).trim() : undefined,
+      phone: recipient.phone ? String(recipient.phone).trim() : undefined,
+      idOrEmail: recipient.idOrEmail
+        ? String(recipient.idOrEmail).trim()
+        : undefined,
+    };
+
     if (normalizedType === 'verification') {
       notifDoc.message = plainMessage;
       notifDoc.data = {
@@ -894,6 +902,14 @@ exports.createAdminMessageHTTP = async (req, res) => {
         channelEmail: sendEmailFlag,
         channelNotification: sendNotificationFlag,
         channelWhatsapp: sendWhatsappFlag,
+        sentFromAdminDashboard: true,
+        recipientCompose,
+      };
+    } else {
+      notifDoc.data = {
+        ...(notifDoc.data && typeof notifDoc.data === 'object' ? notifDoc.data : {}),
+        sentFromAdminDashboard: true,
+        recipientCompose,
       };
     }
 
@@ -1074,6 +1090,161 @@ exports.createAdminMessageHTTP = async (req, res) => {
   } catch (error) {
     console.error('[ADMIN MSG] Erreur création:', error, error?.message, error?.stack);
     res.status(500).json({ message: 'Erreur lors de la création du message', details: error?.message });
+  }
+};
+
+const ADMIN_MESSAGE_TYPES = ['verification', 'general', 'alerte', 'promotion'];
+
+function normalizeHistoryTypeFilter(type) {
+  const raw = String(type || 'all').toLowerCase();
+  if (raw === 'all') return 'all';
+  if (raw === 'alert') return 'alerte';
+  if (raw === 'notification') return 'general';
+  return raw;
+}
+
+function formatHistoryRecipient(notif, recipientUser) {
+  const compose =
+    notif?.data?.recipientCompose &&
+    typeof notif.data.recipientCompose === 'object'
+      ? notif.data.recipientCompose
+      : null;
+  const r = recipientUser || null;
+  const nameFromUser = r
+    ? `${r.prenoms || ''} ${r.nom || ''}`.trim()
+    : '';
+  const name =
+    (compose?.name && String(compose.name).trim()) ||
+    nameFromUser ||
+    undefined;
+  const phone =
+    (compose?.phone && String(compose.phone).trim()) ||
+    (r?.telephone && String(r.telephone).trim()) ||
+    undefined;
+  const idOrEmail =
+    (compose?.idOrEmail && String(compose.idOrEmail).trim()) ||
+    (r?.email && String(r.email).trim()) ||
+    (r?._id ? String(r._id) : undefined);
+
+  return { name, phone, idOrEmail };
+}
+
+async function loadAdminSenderKeys() {
+  const admins = await User.find({
+    $or: [{ role: 'admin' }, { typeAdmin: { $ne: null } }],
+  })
+    .select('_id email')
+    .lean();
+  const adminIds = admins.map((a) => a._id);
+  const adminEmails = admins.map((a) => a.email).filter(Boolean);
+  return { adminIds, adminEmails };
+}
+
+/** Historique des messages envoyés depuis le dashboard admin. */
+exports.getAdminMessageHistory = async (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 10));
+    const search = (req.query.search || req.query.q || '').trim();
+    const typeFilter = normalizeHistoryTypeFilter(req.query.type);
+
+    const { adminIds, adminEmails } = await loadAdminSenderKeys();
+    if (!adminIds.length && !adminEmails.length) {
+      return res.json({
+        items: [],
+        page,
+        limit,
+        total: 0,
+        totalPages: 1,
+      });
+    }
+
+    const senderOr = [{ sender: { $in: adminIds } }];
+    if (adminEmails.length) {
+      senderOr.push({ sender: { $in: adminEmails } });
+    }
+
+    const match = {
+      $or: senderOr,
+      recipient: { $nin: adminIds },
+      type: { $in: ADMIN_MESSAGE_TYPES },
+    };
+    if (typeFilter !== 'all') {
+      match.type = typeFilter;
+    }
+
+    const pipeline = [
+      { $match: match },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'recipient',
+          foreignField: '_id',
+          as: 'recipientUser',
+        },
+      },
+      {
+        $unwind: {
+          path: '$recipientUser',
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+    ];
+
+    if (search) {
+      const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      pipeline.push({
+        $match: {
+          $or: [
+            { title: rx },
+            { message: rx },
+            { 'recipientUser.nom': rx },
+            { 'recipientUser.prenoms': rx },
+            { 'recipientUser.email': rx },
+            { 'recipientUser.telephone': rx },
+            { 'data.recipientCompose.name': rx },
+            { 'data.recipientCompose.phone': rx },
+            { 'data.recipientCompose.idOrEmail': rx },
+          ],
+        },
+      });
+    }
+
+    pipeline.push({ $sort: { createdAt: -1 } });
+
+    pipeline.push({
+      $facet: {
+        meta: [{ $count: 'total' }],
+        items: [{ $skip: (page - 1) * limit }, { $limit: limit }],
+      },
+    });
+
+    const [result] = await Notification.aggregate(pipeline);
+    const total = result?.meta?.[0]?.total || 0;
+    const rows = result?.items || [];
+
+    const items = rows.map((row) => ({
+      _id: String(row._id),
+      type: row.type,
+      title: row.title,
+      message: row.message,
+      createdAt: row.createdAt,
+      recipient: formatHistoryRecipient(row, row.recipientUser),
+    }));
+
+    return res.json({
+      items,
+      page,
+      limit,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+    });
+  } catch (error) {
+    console.error('[ADMIN MSG HISTORY]', error);
+    return res.status(500).json({
+      message: 'Erreur chargement historique messages',
+      details: error.message,
+    });
   }
 };
 

@@ -56,6 +56,13 @@ router.post(
   notificationController.createAdminMessageHTTP
 );
 
+// Historique des messages envoyés depuis le dashboard admin
+router.get(
+  '/admin-messages/history',
+  roleMiddleware('superAdmin', 'principal', 'gestionnaire', 'moderateur', 'marketing', 'responsableService', 'admin'),
+  notificationController.getAdminMessageHistory
+);
+
 // PDF vérification — upload serveur (API secret Cloudinary, URL accessible Meta/WhatsApp)
 router.post(
   '/verification-pdf',

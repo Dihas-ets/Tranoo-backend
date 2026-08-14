@@ -3,6 +3,7 @@ const Achat = require('../models/Achat');
 const Notification = require('../models/Notification');
 const ChatRoom = require('../models/ChatRoom');
 const User = require('../models/User');
+const axios = require('axios');
 
 function formatUserLabel(u) {
   if (u == null || u === '') return '—';
@@ -268,6 +269,122 @@ function collectNotifAttachmentUrls(n) {
   if (n.attachments?.signatureUrl) urls.push(n.attachments.signatureUrl);
   return urls;
 }
+
+function cloudinaryDownloadUrl(url, filename) {
+  if (!url || typeof url !== 'string') return url;
+  if (!url.includes('res.cloudinary.com')) return url;
+  if (url.includes('fl_attachment')) return url;
+  const safeName = String(filename || 'document')
+    .replace(/[^\w.\-() ]+/g, '_')
+    .slice(0, 120);
+  return url.replace(/\/upload\//, `/upload/fl_attachment:${safeName}/`);
+}
+
+/** Résout l'URL fichier à partir de l'id composite renvoyé par listAdminDocuments. */
+async function resolveDocumentFileById(rawId) {
+  const id = String(rawId || '');
+  if (!id) return null;
+
+  if (id.startsWith('achat-')) {
+    const achatId = id.slice(6);
+    const achat = await Achat.findById(achatId).lean();
+    if (!achat?.fichierUrl) return null;
+    return {
+      fileUrl: achat.fichierUrl,
+      title: achat.fichierNom || fileNameFromUrl(achat.fichierUrl),
+    };
+  }
+
+  if (id.startsWith('notif-')) {
+    const match = id.match(/^notif-([a-f0-9]{24})-(\d+)$/i);
+    if (!match) return null;
+    const notif = await Notification.findById(match[1]).lean();
+    if (!notif) return null;
+    const urls = collectNotifAttachmentUrls(notif);
+    const idx = parseInt(match[2], 10);
+    const fileUrl = urls[idx];
+    if (!fileUrl) return null;
+    return {
+      fileUrl,
+      title: notif.title || fileNameFromUrl(fileUrl),
+    };
+  }
+
+  if (/^[a-f0-9]{24}$/i.test(id)) {
+    const message = await Message.findById(id).lean();
+    if (!message?.fileUrl) return null;
+    return {
+      fileUrl: message.fileUrl,
+      title: (message.content || '').trim() || fileNameFromUrl(message.fileUrl),
+    };
+  }
+
+  return null;
+}
+
+/** Téléchargement proxy (évite redirection Cloudinary sans attachment). */
+exports.downloadAdminDocument = async (req, res) => {
+  try {
+    const docId = req.params.id;
+    const resolved = await resolveDocumentFileById(docId);
+    if (!resolved?.fileUrl) {
+      return res.status(404).json({ message: 'Document introuvable' });
+    }
+
+    const filename = fileNameFromUrl(resolved.fileUrl) || resolved.title || 'document';
+    const fetchUrl = cloudinaryDownloadUrl(resolved.fileUrl, filename);
+
+    const upstream = await axios.get(fetchUrl, {
+      responseType: 'stream',
+      timeout: 120000,
+      maxRedirects: 5,
+      validateStatus: (s) => s >= 200 && s < 400,
+    });
+
+    const contentType =
+      upstream.headers['content-type'] || 'application/octet-stream';
+    res.setHeader('Content-Type', contentType);
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${encodeURIComponent(filename)}"`,
+    );
+    if (upstream.headers['content-length']) {
+      res.setHeader('Content-Length', upstream.headers['content-length']);
+    }
+
+    upstream.data.on('error', (err) => {
+      console.error('[downloadAdminDocument] stream error', err);
+      if (!res.headersSent) {
+        res.status(502).json({ message: 'Erreur lecture fichier distant' });
+      } else {
+        res.end();
+      }
+    });
+
+    upstream.data.pipe(res);
+  } catch (error) {
+    console.error('[downloadAdminDocument]', error);
+    if (!res.headersSent) {
+      try {
+        const resolved = await resolveDocumentFileById(req.params.id);
+        if (resolved?.fileUrl) {
+          return res.redirect(302, resolved.fileUrl);
+        }
+      } catch (_) {
+        /* ignore */
+      }
+      const status = error?.response?.status === 404 ? 404 : 502;
+      return res.status(status).json({
+        message:
+          status === 404
+            ? 'Document introuvable'
+            : 'Impossible de télécharger le document',
+        error: error.message,
+      });
+    }
+    return res.end();
+  }
+};
 
 /** Suppression admin : retire la référence fichier (chat, achat, notification). */
 exports.deleteAdminDocuments = async (req, res) => {

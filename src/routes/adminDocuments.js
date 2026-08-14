@@ -11,6 +11,13 @@ router.get(
   documentController.listAdminDocuments
 );
 
+router.get(
+  '/:id/download',
+  auth,
+  role('superAdmin', 'principal', 'gestionnaire', 'admin'),
+  documentController.downloadAdminDocument
+);
+
 router.post(
   '/bulk-delete',
   auth,

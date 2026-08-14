@@ -6,7 +6,29 @@ const adminSdk = require('firebase-admin');
 // Créer une demande de pub
 exports.createPublicite = async (req, res) => {
   try {
-    const vendeurId = req.user && req.user._id ? req.user._id : req.body.vendeur;
+    const isAdmin =
+      req.user &&
+      (req.user.role === 'admin' ||
+        Boolean(req.user.typeAdmin) ||
+        ['superAdmin', 'principal', 'moderateur', 'gestionnaire', 'responsablePartenaires'].includes(
+          String(req.user.typeAdmin || '')
+        ));
+
+    // App vendeur : toujours le compte connecté.
+    // Dashboard admin : autoriser body.vendeur (vendeur choisi OU l'admin lui-même).
+    let vendeurId;
+    if (isAdmin && req.body.vendeur) {
+      vendeurId = req.body.vendeur;
+    } else if (req.user && req.user._id) {
+      vendeurId = req.user._id;
+    } else {
+      vendeurId = req.body.vendeur;
+    }
+
+    if (!vendeurId) {
+      return res.status(400).json({ message: 'vendeur requis' });
+    }
+
     const allowedSources = ['app', 'tranoo'];
     const source =
       typeof req.body.source === 'string' && allowedSources.includes(req.body.source)
