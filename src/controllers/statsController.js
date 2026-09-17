@@ -600,13 +600,3 @@ exports.markAdminNavSeen = async (req, res) => {
     return res.status(500).json({ message: 'Erreur marquage sections vues' });
   }
 };
-
-exports.getLivreursStats = async (_req, res) => {
-  try {
-    const livreurs = await User.countDocuments({ role: 'livreur' });
-    return res.json({ livreurs });
-  } catch (error) {
-    console.error('[getLivreursStats]', error);
-    return res.status(500).json({ message: 'Erreur stats livreurs' });
-  }
-};

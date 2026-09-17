@@ -3,8 +3,6 @@ const { op, authed, jsonBody, pathParam, queryParam, OK } = require('../helpers'
 const TAG_PUBLIC = 'Public (Landing)';
 const TAG_GEO = 'Géographie';
 const TAG_PROFILE = 'Profil & Session';
-const TAG_USERS = 'Utilisateurs';
-const TAG_LIV = 'Livraisons';
 const TAG_TRANS = 'Transitaires';
 const TAG_ADMIN_PRICE = 'Admin — Tarifs';
 const TAG_ADMIN_DOC = 'Admin — Documents';
@@ -46,17 +44,6 @@ module.exports = {
       responses: { 200: OK },
     }),
   },
-  '/api/protected/stats/livreurs': {
-    get: authed(TAG_PROFILE, 'Statistiques livreurs', {
-      responses: { 200: OK },
-    }),
-  },
-
-  '/api/users/livreurs/all': {
-    get: authed(TAG_USERS, 'Lister tous les livreurs', {
-      responses: { 200: OK },
-    }),
-  },
 
   '/api/admin/transitaire-subscription-pricing': {
     get: authed(TAG_ADMIN_PRICE, 'Tarifs abonnement transitaire', {
@@ -84,61 +71,61 @@ module.exports = {
   },
 
   '/api/transit-missions/start': {
-    post: authed(TAG_LIV, 'Démarrer un parcours transitaire', {
+    post: authed(TAG_TRANS, 'Démarrer un parcours transitaire', {
       requestBody: jsonBody(null),
       responses: { 200: OK },
     }),
   },
   '/api/transit-missions/select-transitaire': {
-    post: authed(TAG_LIV, 'Sélectionner un transitaire', {
+    post: authed(TAG_TRANS, 'Sélectionner un transitaire', {
       requestBody: jsonBody(null),
       responses: { 200: OK },
     }),
   },
   '/api/transit-missions/transferer': {
-    post: authed(TAG_LIV, 'Transférer une mission transitaire', {
+    post: authed(TAG_TRANS, 'Transférer une mission transitaire', {
       requestBody: jsonBody(null),
       responses: { 200: OK },
     }),
   },
   '/api/transit-missions/mes-parcours': {
-    get: authed(TAG_LIV, 'Mes parcours transitaire', {
+    get: authed(TAG_TRANS, 'Mes parcours transitaire', {
       responses: { 200: OK },
     }),
   },
   '/api/transit-missions/parcours/{articleId}': {
-    get: authed(TAG_LIV, 'Parcours d’un article', {
+    get: authed(TAG_TRANS, 'Parcours d’un article', {
       parameters: [pathParam('articleId', 'ID article')],
       responses: { 200: OK },
     }),
   },
   '/api/transit-missions/mes-missions': {
-    get: authed(TAG_LIV, 'Mes missions transitaires', {
+    get: authed(TAG_TRANS, 'Mes missions transitaires', {
       responses: { 200: OK },
     }),
   },
   '/api/transit-missions/acceptes': {
-    get: authed(TAG_LIV, 'Missions acceptées', {
+    get: authed(TAG_TRANS, 'Missions acceptées', {
       description: 'Route de compatibilité historique Flutter.',
       responses: { 200: OK },
     }),
   },
   '/api/transit-missions/{id}/marquer-traite': {
-    patch: authed(TAG_LIV, 'Marquer mission traitée', {
+    patch: authed(TAG_TRANS, 'Marquer mission traitée', {
       parameters: [pathParam('id', 'ID mission')],
       requestBody: jsonBody(null, { required: false }),
       responses: { 200: OK },
     }),
   },
   '/api/transit-missions/{id}/rejeter-attribution': {
-    patch: authed(TAG_LIV, 'Rejeter attribution mission', {
+    patch: authed(TAG_TRANS, 'Rejeter attribution mission', {
       parameters: [pathParam('id', 'ID mission')],
       requestBody: jsonBody(null, { required: false }),
       responses: { 200: OK },
     }),
   },
   '/api/transit-missions/{id}/details': {
-    patch: authed(TAG_LIV, 'Mettre à jour détails mission', {
+    patch: authed(TAG_TRANS, 'Mettre à jour détails mission', {
       parameters: [pathParam('id', 'ID mission')],
       requestBody: jsonBody(null),
       responses: { 200: OK },
@@ -146,53 +133,53 @@ module.exports = {
   },
 
   '/api/transit/start': {
-    post: authed(TAG_LIV, 'Démarrer un parcours transitaire (alias)', {
+    post: authed(TAG_TRANS, 'Démarrer un parcours transitaire (alias)', {
       description: 'Alias historique de `/api/transit-missions/start`.',
       requestBody: jsonBody(null),
       responses: { 200: OK },
     }),
   },
   '/api/transit/select-transitaire': {
-    post: authed(TAG_LIV, 'Sélectionner un transitaire (alias)', {
+    post: authed(TAG_TRANS, 'Sélectionner un transitaire (alias)', {
       description: 'Alias historique de `/api/transit-missions/select-transitaire`.',
       requestBody: jsonBody(null),
       responses: { 200: OK },
     }),
   },
   '/api/transit/transferer': {
-    post: authed(TAG_LIV, 'Transférer une mission (alias)', {
+    post: authed(TAG_TRANS, 'Transférer une mission (alias)', {
       description: 'Alias historique de `/api/transit-missions/transferer`.',
       requestBody: jsonBody(null),
       responses: { 200: OK },
     }),
   },
   '/api/transit/mes-parcours': {
-    get: authed(TAG_LIV, 'Mes parcours transitaire (alias)', {
+    get: authed(TAG_TRANS, 'Mes parcours transitaire (alias)', {
       description: 'Alias historique de `/api/transit-missions/mes-parcours`.',
       responses: { 200: OK },
     }),
   },
   '/api/transit/parcours/{articleId}': {
-    get: authed(TAG_LIV, 'Parcours d’un article (alias)', {
+    get: authed(TAG_TRANS, 'Parcours d’un article (alias)', {
       description: 'Alias historique de `/api/transit-missions/parcours/{articleId}`.',
       parameters: [pathParam('articleId', 'ID article')],
       responses: { 200: OK },
     }),
   },
   '/api/transit/mes-missions': {
-    get: authed(TAG_LIV, 'Mes missions transitaires (alias)', {
+    get: authed(TAG_TRANS, 'Mes missions transitaires (alias)', {
       description: 'Alias historique de `/api/transit-missions/mes-missions`.',
       responses: { 200: OK },
     }),
   },
   '/api/transit/acceptes': {
-    get: authed(TAG_LIV, 'Missions acceptées (alias)', {
+    get: authed(TAG_TRANS, 'Missions acceptées (alias)', {
       description: 'Alias historique de `/api/transit-missions/acceptes`.',
       responses: { 200: OK },
     }),
   },
   '/api/transit/{id}/marquer-traite': {
-    patch: authed(TAG_LIV, 'Marquer mission traitée (alias)', {
+    patch: authed(TAG_TRANS, 'Marquer mission traitée (alias)', {
       description: 'Alias historique de `/api/transit-missions/{id}/marquer-traite`.',
       parameters: [pathParam('id', 'ID mission')],
       requestBody: jsonBody(null, { required: false }),
@@ -200,7 +187,7 @@ module.exports = {
     }),
   },
   '/api/transit/{id}/rejeter-attribution': {
-    patch: authed(TAG_LIV, 'Rejeter attribution mission (alias)', {
+    patch: authed(TAG_TRANS, 'Rejeter attribution mission (alias)', {
       description:
         'Alias historique de `/api/transit-missions/{id}/rejeter-attribution`.',
       parameters: [pathParam('id', 'ID mission')],
@@ -209,7 +196,7 @@ module.exports = {
     }),
   },
   '/api/transit/{id}/details': {
-    patch: authed(TAG_LIV, 'Mettre à jour détails mission (alias)', {
+    patch: authed(TAG_TRANS, 'Mettre à jour détails mission (alias)', {
       description: 'Alias historique de `/api/transit-missions/{id}/details`.',
       parameters: [pathParam('id', 'ID mission')],
       requestBody: jsonBody(null),

@@ -1,6 +1,4 @@
 const Payment = require('../models/Payment');
-const Delivery = require('../models/Delivery');
-const LivreurBalance = require('../models/LivreurBalance');
 
 const VENDOR_DEBIT_TYPES = ['subscription', 'publicite', 'verification'];
 
@@ -89,14 +87,6 @@ exports.getMyWallet = async (req, res) => {
     const userId = req.user._id;
     const role = req.user.role;
 
-    if (role === 'livreur' && LivreurBalance && LivreurBalance.findOne) {
-      const b = await LivreurBalance.findOne({ livreur: userId }).lean();
-      return res.json({
-        balance: b?.balance || 0,
-        currency: req.user.devise || 'XOF',
-      });
-    }
-
     if (role === 'vendeur') {
       const balance = await computeVendorWalletBalance(userId);
       return res.json({ balance, currency: req.user.devise || 'XOF' });
@@ -144,35 +134,8 @@ exports.getMyWallet = async (req, res) => {
 exports.getMyTransactions = async (req, res) => {
   try {
     const userId = req.user._id;
-    const role = req.user.role;
     const transactions = [];
     const devise = req.user.devise || 'XOF';
-
-    if (role === 'livreur' && LivreurBalance && LivreurBalance.findOne) {
-      const b = await LivreurBalance.findOne({ livreur: userId }).lean();
-      const txs = Array.isArray(b?.transactions) ? b.transactions : [];
-      txs.sort((a, z) => new Date(z.createdAt || 0) - new Date(a.createdAt || 0));
-      for (const t of txs.slice(0, 50)) {
-        const isCredit =
-          String(t.type || '').toLowerCase() === 'gain' ||
-          String(t.type || '').toLowerCase() === 'ajustement';
-        const amount = Number(t.montant || 0);
-        const prettyAmount = Math.round(amount);
-        transactions.push({
-          id: t._id,
-          type: isCredit ? 'in' : 'out',
-          amount,
-          currency: devise,
-          label:
-            t.description ||
-            (isCredit
-              ? `Votre compte a été rechargé de ${prettyAmount} ${devise}`
-              : `Retrait de ${prettyAmount} ${devise}`),
-          date: t.createdAt || new Date(),
-        });
-      }
-      return res.json({ transactions });
-    }
 
     const keys = vendorUserKeys(userId);
     try {
@@ -260,45 +223,6 @@ exports.getMyWalletStats = async (req, res) => {
         }
       });
       return res.json(stats);
-    }
-
-    if (role === 'livreur' && Delivery && Delivery.aggregate) {
-      const [totals, weekByDay] = await Promise.all([
-        Delivery.aggregate([
-          { $match: { livreur: userId, statut: 'livré' } },
-          {
-            $group: {
-              _id: null,
-              totalOrders: { $sum: 1 },
-              totalKm: { $sum: { $ifNull: ['$distanceKm', 0] } },
-            },
-          },
-        ]),
-        Delivery.aggregate([
-          {
-            $match: {
-              livreur: userId,
-              statut: 'livré',
-              dateLivraison: { $gte: startOfWeek },
-            },
-          },
-          {
-            $group: {
-              _id: { $dayOfWeek: '$dateLivraison' },
-              count: { $sum: 1 },
-            },
-          },
-        ]),
-      ]);
-
-      if (totals && totals[0]) {
-        stats.totalOrders = totals[0].totalOrders || 0;
-        stats.totalKm = Math.round((totals[0].totalKm || 0) * 10) / 10;
-      }
-      (weekByDay || []).forEach((d) => {
-        const idx = (d._id - 2 + 7) % 7;
-        if (idx >= 0 && idx < 7) stats.weeklyData[idx] = d.count || 0;
-      });
     }
 
     res.json(stats);

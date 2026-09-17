@@ -514,14 +514,6 @@ try {
   console.warn('Invoice routes non chargées:', e.message);
 }
 
-// Delivery settings routes
-try {
-  const deliverySettingsRoutes = require('./routes/deliverySettings');
-  app.use('/api/admin/delivery-settings', deliverySettingsRoutes);
-} catch (e) {
-  console.warn('Delivery settings routes non chargées:', e.message);
-}
-
 // Pub pricing routes
 try {
   const pubPricingRoutes = require('./routes/pubPricing');
@@ -610,38 +602,6 @@ try {
   console.warn('Agents routes non chargées:', e.message);
 }
 
-// Livreur routes
-try {
-  const livreurRoutes = require('./routes/livreur');
-  app.use('/api/livreurs', livreurRoutes);
-} catch (e) {
-  console.warn('Livreur routes non chargées:', e.message);
-}
-
-// Livreur balance routes
-try {
-  const livreurBalanceRoutes = require('./routes/livreurBalance');
-  app.use('/api/livreurs/balance', livreurBalanceRoutes);
-} catch (e) {
-  console.warn('Livreur balance routes non chargées:', e.message);
-}
-
-// Delivery routes
-try {
-  const deliveryRoutes = require('./routes/delivery');
-  app.use('/api/deliveries', deliveryRoutes);
-} catch (e) {
-  console.warn('Delivery routes non chargées:', e.message);
-}
-
-// Delivery zones routes
-try {
-  const deliveryZoneRoutes = require('./routes/deliveryZone');
-  app.use('/api/delivery-zones', deliveryZoneRoutes);
-} catch (e) {
-  console.warn('Delivery zones routes non chargées:', e.message);
-}
-
 // Tricycle routes
 try {
   const tricycleRoutes = require('./routes/tricycle');
@@ -709,14 +669,6 @@ server.listen(PORT, () => {
     startCronJobs();
   } catch (e) {
     console.warn('Tâches automatiques publicités non démarrées:', e.message);
-  }
-
-  // Démarrer le worker de réoffre des livraisons (toutes les 60s)
-  try {
-    const deliveryController = require('./controllers/deliveryController');
-    deliveryController.startDeliveryOfferWorker();
-  } catch (e) {
-    console.warn('Worker réoffre livraisons non démarré:', e.message);
   }
 
 });

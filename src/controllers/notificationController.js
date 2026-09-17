@@ -197,46 +197,6 @@ exports.createNotification = async (
   }
 };
 
-// Créer une notification liée à une livraison
-// type d'événement peut être: 'created', 'assigned', 'picked_up', 'arrived', 'delivered', 'refused', 'return'
-exports.createDeliveryNotification = async (recipientId, senderId, deliveryId, eventType, _extra = {}) => {
-  try {
-    const keyMap = {
-      created: ['delivery.created.title', 'delivery.created.message'],
-      assigned: ['delivery.assigned.title', 'delivery.assigned.message'],
-      picked_up: ['delivery.picked_up.title', 'delivery.picked_up.message'],
-      arrived: ['delivery.arrived.title', 'delivery.arrived.message'],
-      delivered: ['delivery.delivered.title', 'delivery.delivered.message'],
-      refused: ['delivery.refused.title', 'delivery.refused.message'],
-      return: ['delivery.return.title', 'delivery.return.message'],
-    };
-    const keys = keyMap[eventType] || ['delivery.updated.title', 'delivery.updated.message'];
-    const i18n = {
-      titleKey: keys[0],
-      messageKey: keys[1],
-      params: {},
-    };
-
-    return await exports.createNotification(
-      recipientId,
-      senderId,
-      '',
-      '',
-      'delivery',
-      deliveryId,
-      'Delivery',
-      {
-        eventType: eventType,
-        ...(typeof _extra === 'object' && _extra ? _extra : {})
-      },
-      i18n
-    );
-  } catch (error) {
-    console.error('[DELIVERY NOTIF] Erreur création:', error);
-    throw error;
-  }
-};
-
 // Créer une notification de vérification avec actions
 exports.createVerificationNotification = async (acheteurId, articleId, verificationData) => {
   try {

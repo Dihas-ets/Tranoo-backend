@@ -126,14 +126,6 @@ module.exports = {
         paymentMethod: { type: 'string' },
       },
     },
-    DeliveryInput: {
-      type: 'object',
-      properties: {
-        orderId: { type: 'string' },
-        pickupAddress: { type: 'object', additionalProperties: true },
-        deliveryAddress: { type: 'object', additionalProperties: true },
-      },
-    },
     ChatMessage: {
       type: 'object',
       properties: {

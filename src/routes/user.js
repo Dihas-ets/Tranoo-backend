@@ -11,7 +11,6 @@ const {
   getAllVendeurs,
   getAllTransitaires,
   getAllChauffeurs,
-  getAllLivreurs,
   getAllAdmins
 } = require("../controllers/userController");
 
@@ -24,7 +23,6 @@ router.get("/acheteurs/all", getAllAcheteurs);
 router.get("/acheteurs/achats", getAcheteursWithAchats);
 router.get("/transitaires/all", getAllTransitaires);
 router.get("/chauffeurs/all", getAllChauffeurs);
-router.get("/livreurs/all", getAllLivreurs);
 router.get("/admins/all", getAllAdmins);
 // Création d'un utilisateur (chauffeur, admin, etc.)
 router.post('/', roleMiddleware('superAdmin', 'principal', 'gestionnaire'), userController.createUser);

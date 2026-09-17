@@ -14,6 +14,5 @@ router.get('/stats/dashboard-finance', statsController.getDashboardFinance);
 router.get('/stats/seller-marque', statsController.getSellerMarqueStats);
 router.get('/stats/nav-badges', statsController.getAdminNavBadges);
 router.post('/stats/nav-badges/mark-seen', statsController.markAdminNavSeen);
-router.get('/stats/livreurs', statsController.getLivreursStats);
 
 module.exports = router; 

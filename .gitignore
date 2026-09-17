@@ -36,6 +36,8 @@ out/
 # Build outputs
 dist/
 build/
+*.apk
+*-release.apk
 
 # IDE / OS
 .DS_Store

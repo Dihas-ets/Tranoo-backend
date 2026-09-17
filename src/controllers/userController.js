@@ -261,13 +261,12 @@ exports.deleteMyAccount = async (req, res) => {
     }
 
     // Best-effort: supprimer les données liées à l'utilisateur
-    const [Message, ChatRoom, Notification, Order, Delivery, PropositionTransit, Article, UserDevice] =
+    const [Message, ChatRoom, Notification, Order, PropositionTransit, Article, UserDevice] =
       await Promise.all([
         Promise.resolve(require('../models/Message')),
         Promise.resolve(require('../models/ChatRoom')),
         Promise.resolve(require('../models/Notification')),
         Promise.resolve(require('../models/Order')),
-        Promise.resolve(require('../models/Delivery')),
         Promise.resolve(require('../models/PropositionTransit')),
         Promise.resolve(require('../models/Article')),
         Promise.resolve(require('../models/UserDevice')),
@@ -280,14 +279,6 @@ exports.deleteMyAccount = async (req, res) => {
       ChatRoom.deleteMany({ participants: userId }),
       Notification.deleteMany({ recipient: userId }),
       Order.deleteMany({ userId }),
-      Delivery.deleteMany({
-        $or: [
-          { acheteur: userId },
-          { livreur: userId },
-          { 'fournisseur.userId': userId },
-          { 'pickups.fournisseur.userId': userId },
-        ],
-      }),
       PropositionTransit.deleteMany({ transitaire: userId }),
       Article.deleteMany({ vendeur: userId }),
       UserDevice.deleteMany({ userUid: firebaseUid }),
@@ -1086,24 +1077,6 @@ exports.getAllChauffeurs = async (_req, res) => {
     res.json(chauffeursWithActivities);
   } catch (err) {
     res.status(500).json({ message: "Erreur lors de la récupération des chauffeurs" });
-  }
-};
-
-// Récupérer tous les livreurs
-exports.getAllLivreurs = async (_req, res) => {
-  try {
-    const livreurs = await User.find({ role: 'livreur' }).sort({ createdAt: -1 });
-    const results = await Promise.all(
-      livreurs.map(async (u) => {
-        const statut = await computeUserStatut(u);
-        const userObj = u.toObject();
-        userObj.statut = statut;
-        return userObj;
-      }),
-    );
-    res.json(results);
-  } catch (err) {
-    res.status(500).json({ message: 'Erreur lors de la récupération des livreurs' });
   }
 };
 
