@@ -63,7 +63,7 @@ const notificationSchema = new mongoose.Schema({
   },
   relatedModel: {
     type: String,
-    enum: ['ChatRoom', 'Publicite', 'Article', 'User', 'Achat', 'Delivery', 'TricycleContact']
+    enum: ['ChatRoom', 'Publicite', 'Article', 'User', 'Achat', 'Delivery', 'TricycleContact'] // Delivery: legacy notifs historiques
   },
   // Données métier optionnelles (ex: alerte recherche acheteur -> vendeurs)
   data: {

@@ -36,14 +36,7 @@ const orderSchema = new mongoose.Schema({
   estimatedDelivery: { type: Date },
   actualDelivery: { type: Date },
   paymentId: { type: String }, // Pour les paiements en ligne
-  
-  // Nouveaux champs pour le système de livraison
-  deliveryId: { 
-    type: mongoose.Schema.Types.ObjectId, 
-    ref: 'Delivery',
-    default: null 
-  },
-  isDeliveryRequired: { type: Boolean, default: false }, // Si c'est une commande nécessitant livraison
+  isDeliveryRequired: { type: Boolean, default: false },
   conditionsRemboursement: {
     affichee: { type: Boolean, default: false }, // Si les conditions ont été affichées à l'acheteur
     dateAffichage: { type: Date }

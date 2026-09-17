@@ -139,7 +139,6 @@ const createOrder = async (req, res) => {
         status: order.status,
         total: order.total,
         estimatedDelivery: order.estimatedDelivery,
-        deliveryId: order.deliveryId || null,
         isDeliveryRequired: order.isDeliveryRequired,
       },
     });
