@@ -31,9 +31,16 @@ function adminLayawayCatalogFilter(extra = {}) {
 }
 
 function assertLayawayVehicle(article) {
-  if (!article || article.source !== 'layaway') {
+  if (!article) {
+    const err = new Error('Véhicule introuvable');
+    err.code = 'LAYAWAY_VEHICLE_NOT_FOUND';
+    err.status = 404;
+    throw err;
+  }
+  if (article.source !== 'layaway') {
     const err = new Error('Véhicule hors catalogue Layaway');
     err.code = 'LAYAWAY_VEHICLE_NOT_IN_CATALOG';
+    err.status = 400;
     throw err;
   }
   return article;

@@ -3,6 +3,7 @@ const router = express.Router();
 const authMiddleware = require('../middlewares/auth');
 const roleMiddleware = require('../middlewares/role');
 const layawayVehicleController = require('../controllers/layawayVehicleController');
+const layawayDossierController = require('../controllers/layawayDossierController');
 
 const adminOnly = [
   authMiddleware,
@@ -16,6 +17,8 @@ const adminOnly = [
     'responsableService',
   ),
 ];
+
+const buyerAuth = [authMiddleware];
 
 // --- Admin (section Layaway dashboard) ---
 router.get('/admin/vehicles', ...adminOnly, layawayVehicleController.listAdminVehicles);
@@ -42,5 +45,12 @@ router.patch(
 // --- Acheteur / public catalogue Layaway (PUBLIE uniquement) ---
 router.get('/vehicles', layawayVehicleController.listBuyerVehicles);
 router.get('/vehicles/:id', layawayVehicleController.getVehicle);
+
+// --- Dossiers Layaway (acheteur) ---
+router.post('/dossiers/preview', ...buyerAuth, layawayDossierController.previewDossier);
+router.post('/dossiers', ...buyerAuth, layawayDossierController.createDossier);
+router.get('/dossiers', ...buyerAuth, layawayDossierController.listMyDossiers);
+router.get('/dossiers/:id', ...buyerAuth, layawayDossierController.getMyDossier);
+router.get('/dossiers/:id/schedule', ...buyerAuth, layawayDossierController.getMySchedule);
 
 module.exports = router;

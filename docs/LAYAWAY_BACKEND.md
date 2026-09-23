@@ -210,7 +210,30 @@ Champ dédié `layawayPublicationStatus` (indépendant du `statut` pub classique
 | DELETE | `/api/layaway/admin/vehicles/:id` | Soft `RETIRE` si publié, hard si brouillon | Admin |
 | GET/PUT | `/api/admin/layaway-settings` | Paramètres métier | Admin dashboard |
 
-`POST /api/articles` **refuse** `source=layaway` (route dédiée obligatoire).
+#### API dossiers acheteur (création)
+
+| Méthode | Route | Rôle |
+|---------|-------|------|
+| POST | `/api/layaway/dossiers/preview` | Acheteur — calcul sans persistance |
+| POST | `/api/layaway/dossiers` | Acheteur — crée dossier + réserve véhicule |
+| GET | `/api/layaway/dossiers` | Acheteur — mes dossiers |
+| GET | `/api/layaway/dossiers/:id` | Acheteur — détail + échéancier |
+| GET | `/api/layaway/dossiers/:id/schedule` | Acheteur — échéancier seul |
+
+Body création / preview (choix uniquement) :
+
+```json
+{
+  "vehicleId": "...",
+  "customsCase": "WITH_CUSTOMS | WITHOUT_CUSTOMS",
+  "frequency": "DAILY | WEEKLY | MONTHLY",
+  "durationMonths": 12
+}
+```
+
+Le backend calcule et retourne `guarantee`, `schedule`, `firstPayment`.  
+Tout montant envoyé par le client (`totalAmount`, `guaranteeAmount`, …) est **rejeté**.  
+À la création : véhicule `PUBLIE` → `RESERVE`, dossier → `CONTRAT_EN_ATTENTE`.
 
 
 Toute liste non-Layaway doit exclure le canal :
