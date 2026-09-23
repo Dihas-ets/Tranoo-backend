@@ -258,6 +258,26 @@ Règles :
 - transition unique : `CONTRAT_EN_ATTENTE` → `CONTRAT_SIGNE` ;
 - document non modifiable après signature.
 
+#### Paiements (minimum dû + surplus autorisé)
+
+| Méthode | Route | Rôle |
+|---------|-------|------|
+| GET | `/api/layaway/dossiers/:id/payments/quote` | Min / max / preview allocation |
+| POST | `/api/layaway/dossiers/:id/payments` | Crée intent (`Payment` pending) |
+| GET | `/api/layaway/dossiers/:id/payments` | Historique paiements dossier |
+
+Règle montant :
+- **interdit** de payer moins que le minimum dû ;
+- **autorisé** de payer plus : le surplus complète les échéances suivantes dans l’ordre ;
+- 1er paiement (garantie non payée) : min = garantie + 1ʳᵉ échéance ;
+- suivants : min = reste de la prochaine échéance ouverte ;
+- max = garantie impayée + solde total de l’échéancier.
+
+Flux FeexPay :
+1. `POST .../payments` → `{ customId, amount }`
+2. `POST /api/payments/feexpay/requesttopay/:network` avec ce `customId` + `amount` (réutilise l’intent)
+3. Webhook success → allocation garantie / échéances → `ACTIF` (1er) ou MAJ échéancier ; idempotent
+
 
 Toute liste non-Layaway doit exclure le canal :
 

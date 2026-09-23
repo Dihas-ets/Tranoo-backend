@@ -296,22 +296,42 @@ exports.initRequestToPay = async (req, res) => {
       return res.status(502).json({ message: 'Réponse inattendue de FeexPay (pas d\'identifiant)', data });
     }
 
-    const payment = await Payment.create({
-      provider: 'feexpay',
-      transactionId: returnedId || null,
-      customId,
-      achat: achatId || undefined,
-      publicite: publiciteId || undefined,
-      user: req.user?._id,
-      amount: Number(amount),
-      currency,
-      status: mapStatus(immediateStatus) || 'pending',
-      method: network,
-      description,
-      type,
-      duree,
-      rawInitResponse: data,
-    });
+    // Réutilise un Payment pending existant (ex. intent Layaway) pour éviter les doublons
+    let payment = await Payment.findOne({ customId: String(customId), status: 'pending' });
+    if (payment) {
+      if (Number(payment.amount) !== Number(amount)) {
+        return res.status(400).json({
+          message: `Montant incohérent avec l'intent de paiement (${payment.amount} FCFA attendus)`,
+          code: 'PAYMENT_AMOUNT_MISMATCH',
+          expectedAmount: payment.amount,
+        });
+      }
+      payment.transactionId = returnedId || payment.transactionId;
+      payment.method = network;
+      payment.description = description || payment.description;
+      payment.rawInitResponse = data;
+      payment.status = mapStatus(immediateStatus) || payment.status;
+      if (achatId) payment.achat = achatId;
+      if (publiciteId) payment.publicite = publiciteId;
+      await payment.save();
+    } else {
+      payment = await Payment.create({
+        provider: 'feexpay',
+        transactionId: returnedId || null,
+        customId,
+        achat: achatId || undefined,
+        publicite: publiciteId || undefined,
+        user: req.user?._id,
+        amount: Number(amount),
+        currency,
+        status: mapStatus(immediateStatus) || 'pending',
+        method: network,
+        description,
+        type,
+        duree,
+        rawInitResponse: data,
+      });
+    }
 
     if (payment.status === 'success') {
       await handleSuccessfulPayment(payment);
@@ -714,6 +734,17 @@ async function resolvePayerUserLean(rawUserId) {
 
 async function handleSuccessfulPayment(payment) {
   try {
+    if (payment.type === 'layaway' || payment.layaway) {
+      try {
+        const LayawayPaymentService = require('../services/layaway/LayawayPaymentService');
+        const result = await LayawayPaymentService.applyConfirmedPayment(payment);
+        console.log('[LAYAWAY][PAYMENT_OK]', JSON.stringify(result));
+      } catch (layawayErr) {
+        console.error('[LAYAWAY][PAYMENT_OK] error:', layawayErr);
+        throw layawayErr;
+      }
+    }
+
     if (payment.achat) {
       const achat = await Achat.findById(payment.achat);
       if (achat && achat.article) {

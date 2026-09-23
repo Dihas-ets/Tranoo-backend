@@ -5,6 +5,7 @@ const roleMiddleware = require('../middlewares/role');
 const layawayVehicleController = require('../controllers/layawayVehicleController');
 const layawayDossierController = require('../controllers/layawayDossierController');
 const layawayContractController = require('../controllers/layawayContractController');
+const layawayPaymentController = require('../controllers/layawayPaymentController');
 
 const adminOnly = [
   authMiddleware,
@@ -63,6 +64,23 @@ router.post(
   '/dossiers/:id/contract/sign',
   ...buyerAuth,
   layawayContractController.signContract,
+);
+
+// --- Paiements (min = dû ; surplus → échéances suivantes) ---
+router.get(
+  '/dossiers/:id/payments/quote',
+  ...buyerAuth,
+  layawayPaymentController.quotePayment,
+);
+router.post(
+  '/dossiers/:id/payments',
+  ...buyerAuth,
+  layawayPaymentController.createPaymentIntent,
+);
+router.get(
+  '/dossiers/:id/payments',
+  ...buyerAuth,
+  layawayPaymentController.listPayments,
 );
 
 module.exports = router;

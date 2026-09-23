@@ -142,7 +142,51 @@ function run() {
     (err) => err.code === 'LAYAWAY_INVALID_FREQUENCY',
   );
 
-  console.log('Layaway schedule / guarantee / state-machine tests passed ✅');
+  // --- Allocation : refuse moins, accepte plus (surplus → échéances suivantes) ---
+  const Alloc = require('../src/services/layaway/LayawayPaymentAllocation');
+  const fakeLayaway = {
+    guarantee: { amount: 150_000, status: 'PENDING' },
+    pricing: { totalAmount: 300_000 },
+    schedule: {
+      installments: [
+        { sequence: 1, amount: 100_000, paidAmount: 0, remainingAmount: 100_000, status: 'PENDING' },
+        { sequence: 2, amount: 100_000, paidAmount: 0, remainingAmount: 100_000, status: 'PENDING' },
+        { sequence: 3, amount: 100_000, paidAmount: 0, remainingAmount: 100_000, status: 'PENDING' },
+      ],
+    },
+  };
+  const minFirst = Alloc.computeMinimumDue(fakeLayaway);
+  assert.strictEqual(minFirst.minimumAmount, 250_000); // 150k + 100k
+  assert.throws(
+    () => Alloc.resolvePayableAmount(fakeLayaway, 200_000),
+    (err) => err.code === 'LAYAWAY_AMOUNT_BELOW_MINIMUM',
+  );
+  const over = Alloc.resolvePayableAmount(fakeLayaway, 350_000);
+  assert.strictEqual(over.amount, 350_000);
+  const plan = Alloc.planAllocation(fakeLayaway, 350_000);
+  assert.strictEqual(plan.guaranteeAmount, 150_000);
+  assert.strictEqual(plan.installmentAmount, 200_000); // échéances 1 + 2
+  assert.deepStrictEqual(
+    plan.allocations.map((a) => [a.sequence, a.amount]),
+    [
+      [1, 100_000],
+      [2, 100_000],
+    ],
+  );
+  Alloc.applyAllocationToLayaway(fakeLayaway, plan);
+  assert.strictEqual(fakeLayaway.guarantee.status, 'PAID');
+  assert.strictEqual(fakeLayaway.schedule.installments[0].status, 'PAID');
+  assert.strictEqual(fakeLayaway.schedule.installments[1].status, 'PAID');
+  assert.strictEqual(fakeLayaway.schedule.installments[2].status, 'PENDING');
+  assert.strictEqual(fakeLayaway.aggregates.totalInstallmentsPaid, 200_000);
+  assert.strictEqual(fakeLayaway.aggregates.paidPercentage, 66.67);
+
+  // Paiement suivant : min = échéance 3 seule
+  const minNext = Alloc.computeMinimumDue(fakeLayaway);
+  assert.strictEqual(minNext.kind, 'INSTALLMENT');
+  assert.strictEqual(minNext.minimumAmount, 100_000);
+
+  console.log('Layaway schedule / guarantee / state-machine / allocation tests passed ✅');
 }
 
 try {
