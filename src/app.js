@@ -570,6 +570,22 @@ try {
   console.warn('Seller gain pricing routes non chargées:', e.message);
 }
 
+// Paramètres Layaway (paiement échelonné)
+try {
+  const layawaySettingsRoutes = require('./routes/layawaySettings');
+  app.use('/api/admin/layaway-settings', layawaySettingsRoutes);
+} catch (e) {
+  console.warn('Layaway settings routes non chargées:', e.message);
+}
+
+// Module Layaway (catalogue véhicules + futures routes dossiers)
+try {
+  const layawayRoutes = require('./routes/layaway');
+  app.use('/api/layaway', layawayRoutes);
+} catch (e) {
+  console.warn('Layaway routes non chargées:', e.message);
+}
+
 // Documents partagés (admin dashboard)
 try {
   const adminDocumentsRoutes = require('./routes/adminDocuments');

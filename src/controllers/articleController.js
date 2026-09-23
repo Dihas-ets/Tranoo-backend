@@ -36,12 +36,31 @@ function isAlertProposalArticle(articleOrBody) {
   return buyerId != null && String(buyerId).trim() !== '';
 }
 
+function applyLayawayCatalogExclusion(filter, req) {
+  const requestedSource =
+    filter.source === 'layaway' || filter.source?.$eq === 'layaway'
+      ? 'layaway'
+      : null;
+
+  if (requestedSource === 'layaway') {
+    // Canal Layaway explicite : les non-admins ne voient que PUBLIE
+    if (req?.user?.role !== 'admin') {
+      filter.layawayPublicationStatus = 'PUBLIE';
+    }
+    return;
+  }
+
+  filter.$and = filter.$and || [];
+  filter.$and.push({ source: { $ne: 'layaway' } });
+}
+
 function applyPublicCatalogFilter(filter, req) {
   const isSellerBrowsingOwnStock =
     req.user?.role === 'vendeur' &&
     filter.vendeur &&
     String(filter.vendeur) === String(req.user._id);
   if (req.user?.role === 'admin' || isSellerBrowsingOwnStock) {
+    applyLayawayCatalogExclusion(filter, req);
     return;
   }
   filter.$and = filter.$and || [];
@@ -51,6 +70,7 @@ function applyPublicCatalogFilter(filter, req) {
       { 'alertContext.buyerId': null },
     ],
   });
+  applyLayawayCatalogExclusion(filter, req);
 }
 
 async function notifyBuyerAlertProposal(article, sellerId) {
@@ -148,6 +168,14 @@ exports.createArticle = async (req, res) => {
     let source = req.body.source || 'app';
     if (req.body.entreprise && req.body.entreprise.trim().toUpperCase() === 'TRANOO') {
       source = 'tranoo';
+    }
+    // Canal Layaway réservé aux routes /api/admin/layaway/vehicles
+    if (source === 'layaway' || req.body.layawayPublicationStatus) {
+      return res.status(400).json({
+        message:
+          'Les véhicules Layaway doivent être créés via /api/admin/layaway/vehicles',
+        code: 'LAYAWAY_USE_DEDICATED_ROUTE',
+      });
     }
     // Publication directe en ligne (validation admin retirée)
     const { normalizeArticleLocation } = require('../services/locationGeocode');

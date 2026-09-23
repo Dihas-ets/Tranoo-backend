@@ -449,8 +449,9 @@ exports.getAdminNavBadges = async (req, res) => {
     const sincePaiements = navSince(seen, 'paiements');
     const sinceParrainage = navSince(seen, 'parrainage');
 
+    // Layaway a sa propre section : ne jamais le compter dans Articles ni Tranoo.
     const articleAppRecentFilter = {
-      source: { $ne: 'tranoo' },
+      source: { $nin: ['tranoo', 'layaway'] },
       type: { $in: ['voiture', 'piece'] },
       statut: 'en_ligne',
       dateCreation: { $gte: sinceArticles },

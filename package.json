@@ -9,6 +9,7 @@
     "start": "node src/app.js",
     "dev": "nodemon src/app.js",
     "test:referral": "node tests/referralSchema.test.js",
+    "test:layaway": "node tests/layawaySchedule.test.js",
     "drop:referral-index": "node scripts/dropReferralCodeIndex.js",
     "migrate:referral-stats": "node scripts/backfillReferralStats.js",
     "cleanup:vehicle-payments": "node scripts/cleanupVehiclePayments.js",

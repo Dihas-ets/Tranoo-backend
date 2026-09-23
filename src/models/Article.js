@@ -86,8 +86,26 @@ const articleSchema = new mongoose.Schema({
   chauffeur: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null }, // Ajout pour lier un chauffeur
   dateLivraison: { type: Date, default: null }, // Date de livraison (null = en cours)
   dateAchat: { type: Date, default: null }, // Date à laquelle l'acheteur est lié à l'article
-  // Source de l'article : 'tranoo' (Landing Page) ou 'app' (application principale)
-  source: { type: String, enum: ['tranoo', 'app'], default: 'app' },
+  // Source / canal catalogue :
+  // - 'tranoo' : stock Tranoo (dashboard Tranoo + landing)
+  // - 'app' : vendeurs / application
+  // - 'layaway' : stock paiement échelonné (section Layaway uniquement — jamais mélangé aux listes tranoo/app)
+  source: { type: String, enum: ['tranoo', 'app', 'layaway'], default: 'app', index: true },
+  // Cycle de vie publication dans le catalogue Layaway (ignoré si source !== 'layaway')
+  layawayPublicationStatus: {
+    type: String,
+    enum: ['BROUILLON', 'PUBLIE', 'RESERVE', 'ENGAGE', 'REMIS', 'RETIRE', 'INDISPONIBLE'],
+    default: null,
+    index: true,
+  },
+  // Devis Layaway figés côté véhicule (utilisés au moment de la création du dossier)
+  layawayPricing: {
+    quoteWithCustoms: { type: Number, default: null },
+    quoteWithoutCustoms: { type: Number, default: null },
+    currency: { type: String, default: 'XOF' },
+  },
+  layawayPublishedAt: { type: Date, default: null },
+  layawayWithdrawnAt: { type: Date, default: null },
   // Verrouillage automatique des pièces si abonnement vendeur inactif
   subscriptionLocked: { type: Boolean, default: false },
   subscriptionLockedAt: { type: Date, default: null },
