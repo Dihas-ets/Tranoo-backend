@@ -10,6 +10,7 @@ const {
   computeMinimumDue,
   computeMaximumPayable,
 } = require('./LayawayPaymentAllocation');
+const { resolveDelaysAfterPayment } = require('./DelayService');
 
 function payError(message, code, status = 400, meta) {
   const err = new Error(message);
@@ -174,6 +175,7 @@ async function applyConfirmedPayment(payment) {
   }
 
   if (result.allInstallmentsPaid) {
+    resolveDelaysAfterPayment(layaway, paidAt);
     if (layaway.status === 'ACTIF' || layaway.status === 'EN_RETARD') {
       transition(layaway.status, 'PAIEMENT_COMPLET');
       layaway.status = 'PAIEMENT_COMPLET';
@@ -187,6 +189,9 @@ async function applyConfirmedPayment(payment) {
       layaway.status = 'PAIEMENT_COMPLET';
       layaway.paymentCompletedAt = paidAt;
     }
+  } else {
+    // Rattrapage : clôture delays + EN_RETARD → ACTIF si plus d'OVERDUE
+    resolveDelaysAfterPayment(layaway, paidAt);
   }
 
   await layaway.save();

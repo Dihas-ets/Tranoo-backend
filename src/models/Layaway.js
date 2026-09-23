@@ -20,6 +20,26 @@ const installmentSchema = new mongoose.Schema(
   { _id: true },
 );
 
+/** Historique des retards (une entrée ouverte par échéance en défaut). */
+const delaySchema = new mongoose.Schema(
+  {
+    installmentSequence: { type: Number, required: true },
+    installmentId: { type: mongoose.Schema.Types.ObjectId, default: null },
+    dueDate: { type: Date, required: true },
+    graceEndsAt: { type: Date, required: true },
+    overdueAt: { type: Date, required: true },
+    resolvedAt: { type: Date, default: null },
+    status: {
+      type: String,
+      enum: ['OPEN', 'RESOLVED'],
+      default: 'OPEN',
+      index: true,
+    },
+    notifiedOverdueAt: { type: Date, default: null },
+  },
+  { _id: true },
+);
+
 const layawaySchema = new mongoose.Schema(
   {
     buyerId: {
@@ -115,6 +135,13 @@ const layawaySchema = new mongoose.Schema(
       remainingScheduleBalance: { type: Number, default: null },
       paidPercentage: { type: Number, default: 0 },
     },
+
+    delays: { type: [delaySchema], default: [] },
+
+    /** Date de passage en GELE (cron seuil défaut). */
+    frozenAt: { type: Date, default: null },
+    /** Dernière notif gel (anti-spam). */
+    notifiedFrozenAt: { type: Date, default: null },
 
     paymentCompletedAt: { type: Date, default: null },
     deliveryValidatedAt: { type: Date, default: null },

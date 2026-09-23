@@ -336,10 +336,12 @@ Backend :
 
 ### 4.5 Retards & gel
 
-- Cron : échéances dues non payées → `OVERDUE` / dossier `EN_RETARD`  
-- Grâce : `delayGracePeriodDays` (défaut 10) depuis `appliedParameters`  
-- Seuil défaut : `defaultThresholdMonths` (défaut 3) → `GELE`  
-- Bloquer opérations interdites sur dossier gelé (liste à finaliser métier)
+- Cron quotidien (`03:15 UTC`) : `DelayService.processDueLayaways`  
+- Grâce : `delayGracePeriodDays` (défaut 10) depuis `appliedParameters` — avant expiration, pas d’OVERDUE  
+- Après grâce : échéance → `OVERDUE`, dossier `ACTIF` → `EN_RETARD`, entrée `delays[]`, notif acheteur  
+- Seuil : `defaultThresholdMonths` (défaut 3) depuis `dueDate` de la plus ancienne échéance encore due → `GELE` + `frozenAt`  
+- Paiements refusés sur `GELE` (`LAYAWAY_FROZEN`) — **TODO métier** ops / dégel admin  
+- Rattrapage : paiement qui solde les OVERDUE → `EN_RETARD` → `ACTIF`, delays `RESOLVED`
 
 ### 4.6 Annulation / remboursement
 
@@ -524,10 +526,11 @@ Documenter en code comme `TODO métier` / feature flags, **sans hardcoder** une 
 
 ### Phase 4 — Retards / gel / notifications
 
-- [ ] Cron quotidien `DelayService`  
-- [ ] Grâce configurable, historique retards  
-- [ ] Notifications (réutiliser `Notification`)  
-- [ ] Passage `GELE` + garde-fous opérations  
+- [x] Cron quotidien `DelayService` (`03:15 UTC` via `cronJobs`)  
+- [x] Grâce configurable (`delayGracePeriodDays`), historique `delays[]`  
+- [x] Notifications in-app (`Notification` type `paiement`, related `Layaway`)  
+- [x] Passage `GELE` + garde-fous paiements (déjà dans `assertPayable`)  
+- [x] Rattrapage paiement : `EN_RETARD` → `ACTIF` si plus d’OVERDUE  
 
 **Livrable :** dossiers en retard détectés sans intervention manuelle.
 
@@ -601,13 +604,15 @@ Un MVP Layaway backend est considéré prêt quand :
 
 ## 11. Prochaine action concrète
 
-Après validation de ce document :
+**Fait (Phase 4) :** `DelayService` + cron quotidien + `delays[]` + notifs + gel.
 
-1. Créer le squelette `src/services/layaway/ScheduleService.js` + tests.  
-2. Créer `src/models/LayawaySettings.js` (singleton comme `SellerGainPricing`).  
-3. Créer `src/models/Layaway.js` + `LayawayStateMachine`.  
+**Suite (Phase 5) — Fin de parcours positif :**
 
-**Hors scope immédiat :** UI Flutter / dashboard (consommeront l’API une fois les phases 0–2 stables).
+1. Auto `PAIEMENT_COMPLET` (déjà partiel via webhook allocation) + remise / preuves.  
+2. Validation admin → `REMISE_VALIDEE` + gate payout vendeur.  
+3. Facture finale + `CLOTURE` + timestamps revenu.  
+
+**Hors scope immédiat :** UI Flutter / dashboard.
 
 ---
 

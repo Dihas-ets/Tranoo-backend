@@ -215,6 +215,9 @@ function applyAllocationToLayaway(layaway, plan, paidAt = new Date()) {
     if (inst.remainingAmount === 0) {
       inst.status = 'PAID';
       inst.paidAt = paidAt;
+    } else if (inst.status === 'OVERDUE') {
+      // Garde OVERDUE si partiel après retard (le cron / DelayService gère la suite)
+      inst.status = 'OVERDUE';
     } else {
       inst.status = 'PARTIALLY_PAID';
     }

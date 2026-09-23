@@ -186,7 +186,111 @@ function run() {
   assert.strictEqual(minNext.kind, 'INSTALLMENT');
   assert.strictEqual(minNext.minimumAmount, 100_000);
 
-  console.log('Layaway schedule / guarantee / state-machine / allocation tests passed ✅');
+  // --- DelayService : grâce / EN_RETARD / GELE / recovery ---
+  const DelayService = require('../src/services/layaway/DelayService');
+
+  function buildDelayFixture({ dueDate, status = 'ACTIF', grace = 10, threshold = 3, instStatus = 'PENDING' }) {
+    return {
+      status,
+      notifiedFrozenAt: null,
+      delays: [],
+      appliedParameters: {
+        delayGracePeriodDays: grace,
+        defaultThresholdMonths: threshold,
+      },
+      schedule: {
+        installments: [
+          {
+            sequence: 1,
+            dueDate: new Date(dueDate),
+            amount: 100_000,
+            paidAmount: 0,
+            remainingAmount: 100_000,
+            status: instStatus,
+          },
+        ],
+      },
+    };
+  }
+
+  // Dans la grâce (due il y a 5 j, grâce 10) → rien
+  const inGrace = buildDelayFixture({ dueDate: '2026-09-01T00:00:00.000Z' });
+  const evalGrace = DelayService.evaluateLayaway(
+    inGrace,
+    new Date('2026-09-06T12:00:00.000Z'),
+  );
+  assert.strictEqual(evalGrace.markedOverdue.length, 0);
+  assert.strictEqual(evalGrace.newStatus, null);
+
+  // Après grâce (due 01/09, grâce 10 → overdue à partir du 12/09) → EN_RETARD
+  const pastGrace = buildDelayFixture({ dueDate: '2026-09-01T00:00:00.000Z' });
+  const evalOverdue = DelayService.evaluateLayaway(
+    pastGrace,
+    new Date('2026-09-12T00:00:00.000Z'),
+  );
+  assert.strictEqual(evalOverdue.markedOverdue.length, 1);
+  assert.strictEqual(evalOverdue.newStatus, 'EN_RETARD');
+  const appliedOverdue = DelayService.applyEvaluation(
+    pastGrace,
+    evalOverdue,
+    new Date('2026-09-12T00:00:00.000Z'),
+  );
+  assert.strictEqual(pastGrace.status, 'EN_RETARD');
+  assert.strictEqual(pastGrace.schedule.installments[0].status, 'OVERDUE');
+  assert.strictEqual(pastGrace.delays.length, 1);
+  assert.strictEqual(pastGrace.delays[0].status, 'OPEN');
+  assert.strictEqual(appliedOverdue.installmentsMarked, 1);
+
+  // Seuil gel : due 01/06 + 3 mois = 01/09 → GELE le 01/09
+  const freezeCase = buildDelayFixture({
+    dueDate: '2026-06-01T00:00:00.000Z',
+    status: 'EN_RETARD',
+    instStatus: 'OVERDUE',
+  });
+  const evalFreeze = DelayService.evaluateLayaway(
+    freezeCase,
+    new Date('2026-09-01T00:00:00.000Z'),
+  );
+  assert.strictEqual(evalFreeze.newStatus, 'GELE');
+  DelayService.applyEvaluation(
+    freezeCase,
+    evalFreeze,
+    new Date('2026-09-01T00:00:00.000Z'),
+  );
+  assert.strictEqual(freezeCase.status, 'GELE');
+  assert.ok(freezeCase.frozenAt);
+
+  // Recovery : payer l'échéance OVERDUE → ACTIF
+  const recovery = buildDelayFixture({
+    dueDate: '2026-08-01T00:00:00.000Z',
+    status: 'EN_RETARD',
+    instStatus: 'OVERDUE',
+  });
+  recovery.delays = [
+    {
+      installmentSequence: 1,
+      dueDate: new Date('2026-08-01T00:00:00.000Z'),
+      graceEndsAt: new Date('2026-08-11T00:00:00.000Z'),
+      overdueAt: new Date('2026-08-12T00:00:00.000Z'),
+      status: 'OPEN',
+      resolvedAt: null,
+    },
+  ];
+  recovery.schedule.installments[0].status = 'PAID';
+  recovery.schedule.installments[0].paidAmount = 100_000;
+  recovery.schedule.installments[0].remainingAmount = 0;
+  const resolved = DelayService.resolveDelaysAfterPayment(
+    recovery,
+    new Date('2026-09-20T00:00:00.000Z'),
+  );
+  assert.strictEqual(resolved.resolved, 1);
+  assert.strictEqual(resolved.statusChanged, true);
+  assert.strictEqual(recovery.status, 'ACTIF');
+  assert.strictEqual(recovery.delays[0].status, 'RESOLVED');
+
+  console.log(
+    'Layaway schedule / guarantee / state-machine / allocation / delays tests passed ✅',
+  );
 }
 
 try {
