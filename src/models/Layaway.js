@@ -91,8 +91,16 @@ const layawaySchema = new mongoose.Schema(
       signedDocumentUrl: { type: String, default: null },
       signerFirstName: { type: String, default: null },
       signerLastName: { type: String, default: null },
+      /** Image / traits de signature (data URL base64 ou URL Cloudinary) */
       signatureData: { type: String, default: null },
       signedAt: { type: Date, default: null },
+      signedByUserId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null,
+      },
+      signedIp: { type: String, default: null },
+      signedUserAgent: { type: String, default: null },
     },
 
     status: {

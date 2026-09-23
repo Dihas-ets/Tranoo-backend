@@ -219,6 +219,9 @@ Champ dédié `layawayPublicationStatus` (indépendant du `statut` pub classique
 | GET | `/api/layaway/dossiers` | Acheteur — mes dossiers |
 | GET | `/api/layaway/dossiers/:id` | Acheteur — détail + échéancier |
 | GET | `/api/layaway/dossiers/:id/schedule` | Acheteur — échéancier seul |
+| GET | `/api/layaway/dossiers/:id/contract` | Acheteur — consulter le contrat |
+| POST | `/api/layaway/dossiers/:id/contract/sign` | Acheteur — enregistrer signature |
+| PUT | `/api/layaway/admin/dossiers/:id/contract/document` | Admin — associer PDF contrat |
 
 Body création / preview (choix uniquement) :
 
@@ -233,7 +236,27 @@ Body création / preview (choix uniquement) :
 
 Le backend calcule et retourne `guarantee`, `schedule`, `firstPayment`.  
 Tout montant envoyé par le client (`totalAmount`, `guaranteeAmount`, …) est **rejeté**.  
-À la création : véhicule `PUBLIE` → `RESERVE`, dossier → `CONTRAT_EN_ATTENTE`.
+À la création : véhicule `PUBLIE` → `RESERVE`, dossier → `CONTRAT_EN_ATTENTE`.  
+Le `documentUrl` du contrat est pris depuis `LayawaySettings.defaultContractDocumentUrl` s’il est configuré.
+
+#### Contrat & signature
+
+Body signature :
+
+```json
+{
+  "firstName": "Jean",
+  "lastName": "Dupont",
+  "signatureData": "data:image/png;base64,...",
+  "signedDocumentUrl": "https://... (optionnel)"
+}
+```
+
+Règles :
+- signature **obligatoire** — pas de `CONTRAT_SIGNE` sans `signatureData` ;
+- document contrat doit être associé avant signature ;
+- transition unique : `CONTRAT_EN_ATTENTE` → `CONTRAT_SIGNE` ;
+- document non modifiable après signature.
 
 
 Toute liste non-Layaway doit exclure le canal :

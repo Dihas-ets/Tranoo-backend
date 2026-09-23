@@ -4,6 +4,7 @@ const authMiddleware = require('../middlewares/auth');
 const roleMiddleware = require('../middlewares/role');
 const layawayVehicleController = require('../controllers/layawayVehicleController');
 const layawayDossierController = require('../controllers/layawayDossierController');
+const layawayContractController = require('../controllers/layawayContractController');
 
 const adminOnly = [
   authMiddleware,
@@ -41,6 +42,11 @@ router.patch(
   ...adminOnly,
   layawayVehicleController.setPublicationStatus,
 );
+router.put(
+  '/admin/dossiers/:id/contract/document',
+  ...adminOnly,
+  layawayContractController.attachDocument,
+);
 
 // --- Acheteur / public catalogue Layaway (PUBLIE uniquement) ---
 router.get('/vehicles', layawayVehicleController.listBuyerVehicles);
@@ -52,5 +58,11 @@ router.post('/dossiers', ...buyerAuth, layawayDossierController.createDossier);
 router.get('/dossiers', ...buyerAuth, layawayDossierController.listMyDossiers);
 router.get('/dossiers/:id', ...buyerAuth, layawayDossierController.getMyDossier);
 router.get('/dossiers/:id/schedule', ...buyerAuth, layawayDossierController.getMySchedule);
+router.get('/dossiers/:id/contract', ...buyerAuth, layawayContractController.getContract);
+router.post(
+  '/dossiers/:id/contract/sign',
+  ...buyerAuth,
+  layawayContractController.signContract,
+);
 
 module.exports = router;

@@ -20,6 +20,7 @@ function serialize(doc) {
     allowedFrequencies: doc.allowedFrequencies,
     allowedDurationsMonths: doc.allowedDurationsMonths,
     currency: doc.currency,
+    defaultContractDocumentUrl: doc.defaultContractDocumentUrl || null,
     updatedAt: doc.updatedAt,
   };
 }

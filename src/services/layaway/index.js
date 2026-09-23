@@ -5,4 +5,5 @@ module.exports = {
   LayawaySettingsService: require('./LayawaySettingsService'),
   LayawayCatalogService: require('./LayawayCatalogService'),
   LayawayService: require('./LayawayService'),
+  LayawayContractService: require('./LayawayContractService'),
 };

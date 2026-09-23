@@ -327,6 +327,7 @@ async function createDossier({
       appliedParameters: plan.appliedParameters,
       contract: {
         status: 'PENDING',
+        documentUrl: plan.settings.defaultContractDocumentUrl || null,
       },
       status: 'BROUILLON',
       aggregates: {
@@ -399,6 +400,11 @@ function buildPublicDossierView(layaway, firstPayment) {
     },
     contract: {
       status: layaway.contract?.status || 'NONE',
+      documentUrl: layaway.contract?.documentUrl || null,
+      signedDocumentUrl: layaway.contract?.signedDocumentUrl || null,
+      hasSignature: Boolean(layaway.contract?.signatureData),
+      signerFirstName: layaway.contract?.signerFirstName || null,
+      signerLastName: layaway.contract?.signerLastName || null,
       signedAt: layaway.contract?.signedAt || null,
     },
     aggregates: {

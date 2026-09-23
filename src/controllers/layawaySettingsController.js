@@ -75,6 +75,12 @@ exports.updateLayawaySettings = async (req, res) => {
       update.currency = String(body.currency).toUpperCase();
     }
 
+    if (body.defaultContractDocumentUrl !== undefined) {
+      const url = body.defaultContractDocumentUrl;
+      update.defaultContractDocumentUrl =
+        url === null || url === '' ? null : String(url).trim();
+    }
+
     Object.assign(doc, update);
     await doc.save();
 

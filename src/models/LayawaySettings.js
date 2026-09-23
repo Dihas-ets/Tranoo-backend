@@ -9,6 +9,7 @@ const DEFAULTS = {
   allowedFrequencies: ['DAILY', 'WEEKLY', 'MONTHLY'],
   allowedDurationsMonths: [6, 12, 18, 24],
   currency: 'XOF',
+  defaultContractDocumentUrl: null,
 };
 
 const LayawaySettingsSchema = new mongoose.Schema({
@@ -27,6 +28,11 @@ const LayawaySettingsSchema = new mongoose.Schema({
     default: () => [...DEFAULTS.allowedDurationsMonths],
   },
   currency: { type: String, default: DEFAULTS.currency },
+  /** URL du modèle de contrat Tranoo (PDF) associé aux nouveaux dossiers */
+  defaultContractDocumentUrl: {
+    type: String,
+    default: null,
+  },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
 });
