@@ -345,10 +345,13 @@ Backend :
 
 ### 4.6 Annulation / remboursement
 
-- Demande → `ANNULATION_DEMANDEE` (pas de saut direct `ANNULE`)  
-- Calcul retenue (%, base à confirmer métier)  
-- Modes : `BANK_TRANSFER` | `CHECK` uniquement  
-- Suivi : demande → validation → exécution → `ANNULE`
+- Demande acheteur → `ANNULATION_DEMANDEE` (pas de saut direct `ANNULE` côté acheteur)  
+- Autorisé depuis : `CONTRAT_SIGNE` | `ACTIF` | `EN_RETARD` | `GELE`  
+- Retenue : `retentionPercentage` (snapshot) sur **base MVP = total payé** (garantie + échéances) — **TODO métier** base exacte  
+- Modes : `BANK_TRANSFER` | `CHECK` uniquement (obligatoires si `refundAmount > 0`)  
+- Admin : approve → `REMBOURSEMENT_EN_COURS` (ou `ANNULE` si refund = 0)  
+- Admin : reject → retour `previousStatus`  
+- Admin : execute-refund → `ANNULE` + libération véhicule `RESERVE`/`ENGAGE` → `PUBLIE`  
 
 ### 4.7 Remise / payout / facture / clôture
 
@@ -433,9 +436,9 @@ models/ + repositories si besoin
 
 | Zone | Exemples |
 |------|----------|
-| Acheteur | `GET/POST /api/layaway/dossiers`, `.../schedule`, `.../contract/sign`, `.../payments`, `POST .../delivery`, `GET .../invoice` |
-| Webhook | Réutiliser / étendre `POST /api/payments/feexpay/webhook` avec branche `type=layaway` |
-| Admin | `.../admin/vehicles`, `.../admin/dossiers/:id/delivery/validate\|reject`, `.../payout/mark-paid`, `.../close`, settings |
+| Acheteur | `.../dossiers`, `.../payments`, `.../delivery`, `.../invoice`, `POST .../cancellation` |
+| Webhook | `POST /api/payments/feexpay/webhook` branche `type=layaway` |
+| Admin | vehicles, delivery validate/reject, payout, close, cancellation approve/reject/execute-refund, settings |
 
 ---
 
@@ -551,10 +554,10 @@ Documenter en code comme `TODO métier` / feature flags, **sans hardcoder** une 
 
 ### Phase 6 — Annulation / remboursement
 
-- [ ] Demande annulation + règles d’autorisation  
-- [ ] Calcul retenue (paramétré, base documentée même si TBD)  
-- [ ] Workflow validation + modes BANK_TRANSFER / CHECK  
-- [ ] Audit complet  
+- [x] Demande annulation + règles d’autorisation  
+- [x] Calcul retenue (paramétré ; base MVP = total payé, TBD métier)  
+- [x] Workflow validation + modes BANK_TRANSFER / CHECK  
+- [ ] Audit complet (Phase 7 / AuditService)  
 
 **Livrable :** branche négative contrôlée.
 
@@ -605,13 +608,13 @@ Un MVP Layaway backend est considéré prêt quand :
 
 ## 11. Prochaine action concrète
 
-**Fait (Phase 5) :** remise / validation / gate payout / facture / clôture.
+**Fait (Phase 6) :** annulation / retenue / remboursement BANK_TRANSFER|CHECK.
 
-**Suite (Phase 6) — Annulation / remboursement :**
+**Suite (Phase 7) — Durcissement & ops :**
 
-1. Demande `ANNULATION_DEMANDEE` + règles d’autorisation.  
-2. Calcul retenue (`retentionPercentage` snapshot, base TBD métier).  
-3. Workflow validation + modes `BANK_TRANSFER` / `CHECK` → `ANNULE`.  
+1. OpenAPI / indexes / revue concurrence (double validation, double payout).  
+2. AuditLog actions sensibles.  
+3. Alignement décisions métier §7 + rôles admin fins.  
 
 **Hors scope immédiat :** UI Flutter / dashboard.
 

@@ -8,6 +8,7 @@ const layawayContractController = require('../controllers/layawayContractControl
 const layawayPaymentController = require('../controllers/layawayPaymentController');
 const layawayDeliveryController = require('../controllers/layawayDeliveryController');
 const layawayCompletionController = require('../controllers/layawayCompletionController');
+const layawayCancellationController = require('../controllers/layawayCancellationController');
 
 const adminOnly = [
   authMiddleware,
@@ -75,6 +76,21 @@ router.post(
   ...adminOnly,
   layawayCompletionController.closeDossier,
 );
+router.post(
+  '/admin/dossiers/:id/cancellation/approve',
+  ...adminOnly,
+  layawayCancellationController.approveCancellation,
+);
+router.post(
+  '/admin/dossiers/:id/cancellation/reject',
+  ...adminOnly,
+  layawayCancellationController.rejectCancellation,
+);
+router.post(
+  '/admin/dossiers/:id/cancellation/execute-refund',
+  ...adminOnly,
+  layawayCancellationController.executeRefund,
+);
 
 // --- Acheteur / public catalogue Layaway (PUBLIE uniquement) ---
 router.get('/vehicles', layawayVehicleController.listBuyerVehicles);
@@ -125,6 +141,18 @@ router.get(
   '/dossiers/:id/invoice',
   ...buyerAuth,
   layawayCompletionController.getInvoice,
+);
+
+// --- Annulation / remboursement ---
+router.get(
+  '/dossiers/:id/cancellation',
+  ...buyerAuth,
+  layawayCancellationController.getCancellation,
+);
+router.post(
+  '/dossiers/:id/cancellation',
+  ...buyerAuth,
+  layawayCancellationController.requestCancellation,
 );
 
 module.exports = router;

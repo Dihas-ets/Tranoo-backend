@@ -35,7 +35,15 @@ const TRANSITIONS = Object.freeze({
   REMISE_EN_ATTENTE: new Set(['REMISE_VALIDEE']),
   REMISE_VALIDEE: new Set(['CLOTURE']),
   CLOTURE: new Set([]),
-  ANNULATION_DEMANDEE: new Set(['REMBOURSEMENT_EN_COURS', 'ACTIF', 'ANNULE']),
+  // Rejet demande → retour au statut précédent (snapshot cancellation.previousStatus)
+  ANNULATION_DEMANDEE: new Set([
+    'REMBOURSEMENT_EN_COURS',
+    'ACTIF',
+    'CONTRAT_SIGNE',
+    'EN_RETARD',
+    'GELE',
+    'ANNULE',
+  ]),
   REMBOURSEMENT_EN_COURS: new Set(['ANNULE']),
   ANNULE: new Set([]),
 });

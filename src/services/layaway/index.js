@@ -12,4 +12,5 @@ module.exports = {
   LayawayDeliveryService: require('./LayawayDeliveryService'),
   LayawayPayoutService: require('./LayawayPayoutService'),
   LayawayClosureService: require('./LayawayClosureService'),
+  LayawayCancellationService: require('./LayawayCancellationService'),
 };

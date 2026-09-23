@@ -215,6 +215,69 @@ const layawaySchema = new mongoose.Schema(
       },
     },
 
+    /**
+     * Annulation / remboursement.
+     * Modes payout client : BANK_TRANSFER | CHECK uniquement.
+     */
+    cancellation: {
+      status: {
+        type: String,
+        enum: ['NONE', 'REQUESTED', 'APPROVED', 'REJECTED', 'COMPLETED'],
+        default: 'NONE',
+      },
+      previousStatus: { type: String, default: null },
+      reason: { type: String, default: null },
+      requestedAt: { type: Date, default: null },
+      requestedByUserId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null,
+      },
+      /** Snapshot calcul retenue au moment de la demande / approbation */
+      totalPaid: { type: Number, default: null },
+      retentionPercentage: { type: Number, default: null },
+      /** TODO métier : base exacte (MVP = totalPaid) */
+      retentionBase: { type: Number, default: null },
+      retentionAmount: { type: Number, default: null },
+      refundAmount: { type: Number, default: null },
+      currency: { type: String, default: null },
+      refundMode: {
+        type: String,
+        enum: ['BANK_TRANSFER', 'CHECK', null],
+        default: null,
+      },
+      bankDetails: {
+        accountName: { type: String, default: null },
+        bankName: { type: String, default: null },
+        ibanOrAccount: { type: String, default: null },
+      },
+      checkDetails: {
+        payeeName: { type: String, default: null },
+        mailingAddress: { type: String, default: null },
+      },
+      approvedAt: { type: Date, default: null },
+      approvedByUserId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null,
+      },
+      rejectedAt: { type: Date, default: null },
+      rejectedByUserId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null,
+      },
+      rejectionReason: { type: String, default: null },
+      executedAt: { type: Date, default: null },
+      executedByUserId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null,
+      },
+      executionReference: { type: String, default: null },
+      notes: { type: String, default: null },
+    },
+
     paymentCompletedAt: { type: Date, default: null },
     deliveryValidatedAt: { type: Date, default: null },
     invoiceIssuedAt: { type: Date, default: null },

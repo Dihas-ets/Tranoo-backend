@@ -427,6 +427,12 @@ function buildPublicDossierView(layaway, firstPayment) {
       invoiceNumber: layaway.invoice?.invoiceNumber || null,
       issuedAt: layaway.invoiceIssuedAt || layaway.invoice?.issuedAt || null,
     },
+    cancellation: {
+      status: layaway.cancellation?.status || 'NONE',
+      refundAmount: layaway.cancellation?.refundAmount ?? null,
+      refundMode: layaway.cancellation?.refundMode || null,
+      requestedAt: layaway.cancellation?.requestedAt || null,
+    },
     timestamps: {
       paymentCompletedAt: layaway.paymentCompletedAt || null,
       deliveryValidatedAt: layaway.deliveryValidatedAt || null,

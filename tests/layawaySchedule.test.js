@@ -344,8 +344,39 @@ function run() {
     true,
   );
 
+  // --- Phase 6 : retenue / transitions annulation ---
+  const Cancel = require('../src/services/layaway/LayawayCancellationService');
+  const breakdown = Cancel.computeRefundBreakdown({
+    guarantee: { amount: 150_000, status: 'PAID' },
+    aggregates: { totalInstallmentsPaid: 850_000 },
+    appliedParameters: { retentionPercentage: 5 },
+    pricing: { currency: 'XOF' },
+  });
+  assert.strictEqual(breakdown.totalPaid, 1_000_000);
+  assert.strictEqual(breakdown.retentionAmount, 50_000);
+  assert.strictEqual(breakdown.refundAmount, 950_000);
+
+  const zeroPaid = Cancel.computeRefundBreakdown({
+    guarantee: { amount: 150_000, status: 'PENDING' },
+    aggregates: { totalInstallmentsPaid: 0 },
+    appliedParameters: { retentionPercentage: 5 },
+    pricing: { currency: 'XOF' },
+  });
+  assert.strictEqual(zeroPaid.totalPaid, 0);
+  assert.strictEqual(zeroPaid.refundAmount, 0);
+
+  assert.strictEqual(canTransition('ACTIF', 'ANNULATION_DEMANDEE'), true);
+  assert.strictEqual(canTransition('ANNULATION_DEMANDEE', 'REMBOURSEMENT_EN_COURS'), true);
+  assert.strictEqual(canTransition('REMBOURSEMENT_EN_COURS', 'ANNULE'), true);
+  assert.strictEqual(canTransition('ANNULATION_DEMANDEE', 'CONTRAT_SIGNE'), true);
+  assert.strictEqual(canTransition('ANNULATION_DEMANDEE', 'GELE'), true);
+  assert.strictEqual(canTransition('PAIEMENT_COMPLET', 'ANNULATION_DEMANDEE'), false);
+  transition('ACTIF', 'ANNULATION_DEMANDEE');
+  transition('ANNULATION_DEMANDEE', 'REMBOURSEMENT_EN_COURS');
+  transition('REMBOURSEMENT_EN_COURS', 'ANNULE');
+
   console.log(
-    'Layaway schedule / guarantee / state-machine / allocation / delays / completion tests passed ✅',
+    'Layaway schedule / guarantee / state-machine / allocation / delays / completion / cancel tests passed ✅',
   );
 }
 
