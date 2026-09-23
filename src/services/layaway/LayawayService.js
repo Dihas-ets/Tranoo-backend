@@ -413,6 +413,26 @@ function buildPublicDossierView(layaway, firstPayment) {
         layaway.aggregates.remainingScheduleBalance ?? totalAmount - paid,
       paidPercentage: layaway.aggregates.paidPercentage || 0,
     },
+    delivery: {
+      status: layaway.delivery?.status || 'NONE',
+      submittedAt: layaway.delivery?.submittedAt || null,
+      validatedAt: layaway.deliveryValidatedAt || layaway.delivery?.validatedAt || null,
+      rejectionReason: layaway.delivery?.rejectionReason || null,
+    },
+    payout: {
+      status: layaway.payout?.status || 'BLOCKED',
+      amount: layaway.payout?.amount ?? layaway.pricing?.sellerPrice ?? null,
+    },
+    invoice: {
+      invoiceNumber: layaway.invoice?.invoiceNumber || null,
+      issuedAt: layaway.invoiceIssuedAt || layaway.invoice?.issuedAt || null,
+    },
+    timestamps: {
+      paymentCompletedAt: layaway.paymentCompletedAt || null,
+      deliveryValidatedAt: layaway.deliveryValidatedAt || null,
+      invoiceIssuedAt: layaway.invoiceIssuedAt || null,
+      closedAt: layaway.closedAt || null,
+    },
     firstPayment: firstPayment || null,
     createdAt: layaway.createdAt,
     updatedAt: layaway.updatedAt,

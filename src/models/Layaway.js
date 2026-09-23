@@ -143,6 +143,78 @@ const layawaySchema = new mongoose.Schema(
     /** Dernière notif gel (anti-spam). */
     notifiedFrozenAt: { type: Date, default: null },
 
+    /**
+     * Remise véhicule (preuves + validation Tranoo).
+     * status: NONE | SUBMITTED | VALIDATED | REJECTED
+     */
+    delivery: {
+      status: {
+        type: String,
+        enum: ['NONE', 'SUBMITTED', 'VALIDATED', 'REJECTED'],
+        default: 'NONE',
+      },
+      pvUrl: { type: String, default: null },
+      photoUrls: { type: [String], default: [] },
+      idDocumentUrl: { type: String, default: null },
+      notes: { type: String, default: null },
+      submittedAt: { type: Date, default: null },
+      submittedByUserId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null,
+      },
+      validatedAt: { type: Date, default: null },
+      validatedByUserId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null,
+      },
+      validationNotes: { type: String, default: null },
+      rejectedAt: { type: Date, default: null },
+      rejectedByUserId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null,
+      },
+      rejectionReason: { type: String, default: null },
+    },
+
+    /**
+     * Payout vendeur — interdit tant que remise ≠ VALIDATED.
+     * status: BLOCKED | ELIGIBLE | PAID
+     */
+    payout: {
+      status: {
+        type: String,
+        enum: ['BLOCKED', 'ELIGIBLE', 'PAID'],
+        default: 'BLOCKED',
+      },
+      amount: { type: Number, default: null },
+      currency: { type: String, default: null },
+      eligibleAt: { type: Date, default: null },
+      paidAt: { type: Date, default: null },
+      paidByUserId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null,
+      },
+      reference: { type: String, default: null },
+      notes: { type: String, default: null },
+    },
+
+    /** Facture finale (émise à la clôture, pas au seul 100 % payé). */
+    invoice: {
+      invoiceNumber: { type: String, default: null },
+      amount: { type: Number, default: null },
+      currency: { type: String, default: null },
+      issuedAt: { type: Date, default: null },
+      issuedByUserId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null,
+      },
+    },
+
     paymentCompletedAt: { type: Date, default: null },
     deliveryValidatedAt: { type: Date, default: null },
     invoiceIssuedAt: { type: Date, default: null },

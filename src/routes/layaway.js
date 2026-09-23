@@ -6,6 +6,8 @@ const layawayVehicleController = require('../controllers/layawayVehicleControlle
 const layawayDossierController = require('../controllers/layawayDossierController');
 const layawayContractController = require('../controllers/layawayContractController');
 const layawayPaymentController = require('../controllers/layawayPaymentController');
+const layawayDeliveryController = require('../controllers/layawayDeliveryController');
+const layawayCompletionController = require('../controllers/layawayCompletionController');
 
 const adminOnly = [
   authMiddleware,
@@ -48,6 +50,31 @@ router.put(
   ...adminOnly,
   layawayContractController.attachDocument,
 );
+router.post(
+  '/admin/dossiers/:id/delivery/validate',
+  ...adminOnly,
+  layawayDeliveryController.validateDelivery,
+);
+router.post(
+  '/admin/dossiers/:id/delivery/reject',
+  ...adminOnly,
+  layawayDeliveryController.rejectDelivery,
+);
+router.get(
+  '/admin/dossiers/:id/payout',
+  ...adminOnly,
+  layawayCompletionController.getPayout,
+);
+router.post(
+  '/admin/dossiers/:id/payout/mark-paid',
+  ...adminOnly,
+  layawayCompletionController.markPayoutPaid,
+);
+router.post(
+  '/admin/dossiers/:id/close',
+  ...adminOnly,
+  layawayCompletionController.closeDossier,
+);
 
 // --- Acheteur / public catalogue Layaway (PUBLIE uniquement) ---
 router.get('/vehicles', layawayVehicleController.listBuyerVehicles);
@@ -81,6 +108,23 @@ router.get(
   '/dossiers/:id/payments',
   ...buyerAuth,
   layawayPaymentController.listPayments,
+);
+
+// --- Remise / facture (fin de parcours) ---
+router.get(
+  '/dossiers/:id/delivery',
+  ...buyerAuth,
+  layawayDeliveryController.getDelivery,
+);
+router.post(
+  '/dossiers/:id/delivery',
+  ...buyerAuth,
+  layawayDeliveryController.submitDelivery,
+);
+router.get(
+  '/dossiers/:id/invoice',
+  ...buyerAuth,
+  layawayCompletionController.getInvoice,
 );
 
 module.exports = router;

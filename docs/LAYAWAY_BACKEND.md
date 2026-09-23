@@ -352,12 +352,13 @@ Backend :
 
 ### 4.7 Remise / payout / facture / clôture
 
-- `PAIEMENT_COMPLET` → `REMISE_EN_ATTENTE`  
-- Preuves : PV, photos, pièce d’identité  
-- Validation Tranoo → `REMISE_VALIDEE`  
-- **Payout interdit** si remise ≠ validée  
-- Facture finale liée à la clôture (pas au seul 100 % payé)  
-- Revenu reconnu après livraison : conserver `paymentCompletedAt`, `deliveryValidatedAt`, `invoiceIssuedAt`, `closedAt`
+- `PAIEMENT_COMPLET` → soumission preuves → `REMISE_EN_ATTENTE`  
+- Preuves : `pvUrl`, `photoUrls[]`, `idDocumentUrl` (+ notes)  
+- Validation admin → `REMISE_VALIDEE` + `deliveryValidatedAt` + véhicule `REMIS` + payout `ELIGIBLE`  
+- Rejet admin → `delivery.REJECTED`, resoumission possible (reste `REMISE_EN_ATTENTE`)  
+- **Payout interdit** si remise ≠ `VALIDATED` (`LAYAWAY_PAYOUT_BLOCKED`)  
+- Clôture admin → facture (`nextInvoiceNumber`) + `CLOTURE` + `invoiceIssuedAt` / `closedAt`  
+- Timestamps revenu : `paymentCompletedAt`, `deliveryValidatedAt`, `invoiceIssuedAt`, `closedAt`
 
 ### 4.8 Audit & admin
 
@@ -432,9 +433,9 @@ models/ + repositories si besoin
 
 | Zone | Exemples |
 |------|----------|
-| Acheteur | `GET/POST /api/layaways`, `GET /api/layaways/:id`, `GET .../schedule`, `POST .../contract/sign`, `POST .../payments`, `POST .../cancellation`, `POST .../delivery` |
+| Acheteur | `GET/POST /api/layaway/dossiers`, `.../schedule`, `.../contract/sign`, `.../payments`, `POST .../delivery`, `GET .../invoice` |
 | Webhook | Réutiliser / étendre `POST /api/payments/feexpay/webhook` avec branche `type=layaway` |
-| Admin | `GET/PATCH /api/admin/layaways`, `GET/PATCH /api/admin/layaway-settings`, validation remise, payout |
+| Admin | `.../admin/vehicles`, `.../admin/dossiers/:id/delivery/validate\|reject`, `.../payout/mark-paid`, `.../close`, settings |
 
 ---
 
@@ -538,11 +539,11 @@ Documenter en code comme `TODO métier` / feature flags, **sans hardcoder** une 
 
 ### Phase 5 — Fin de parcours positif
 
-- [ ] `PAIEMENT_COMPLET` auto quand somme échéances OK  
-- [ ] Remise : preuves + validation admin → `REMISE_VALIDEE`  
-- [ ] Gate payout vendeur  
-- [ ] Facture finale + `CLOTURE`  
-- [ ] Timestamps reconnaissance revenu  
+- [x] `PAIEMENT_COMPLET` auto quand somme échéances OK (webhook allocation)  
+- [x] Remise : preuves + validation admin → `REMISE_VALIDEE`  
+- [x] Gate payout vendeur (`LayawayPayoutService.assertPayoutAllowed`)  
+- [x] Facture finale + `CLOTURE` (`LayawayClosureService`)  
+- [x] Timestamps reconnaissance revenu  
 
 **Livrable :** happy path bout-en-bout.
 
@@ -604,13 +605,13 @@ Un MVP Layaway backend est considéré prêt quand :
 
 ## 11. Prochaine action concrète
 
-**Fait (Phase 4) :** `DelayService` + cron quotidien + `delays[]` + notifs + gel.
+**Fait (Phase 5) :** remise / validation / gate payout / facture / clôture.
 
-**Suite (Phase 5) — Fin de parcours positif :**
+**Suite (Phase 6) — Annulation / remboursement :**
 
-1. Auto `PAIEMENT_COMPLET` (déjà partiel via webhook allocation) + remise / preuves.  
-2. Validation admin → `REMISE_VALIDEE` + gate payout vendeur.  
-3. Facture finale + `CLOTURE` + timestamps revenu.  
+1. Demande `ANNULATION_DEMANDEE` + règles d’autorisation.  
+2. Calcul retenue (`retentionPercentage` snapshot, base TBD métier).  
+3. Workflow validation + modes `BANK_TRANSFER` / `CHECK` → `ANNULE`.  
 
 **Hors scope immédiat :** UI Flutter / dashboard.
 

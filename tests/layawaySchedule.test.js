@@ -288,8 +288,64 @@ function run() {
   assert.strictEqual(recovery.status, 'ACTIF');
   assert.strictEqual(recovery.delays[0].status, 'RESOLVED');
 
+  // --- Phase 5 : transitions remise / clôture + gate payout ---
+  assert.strictEqual(canTransition('PAIEMENT_COMPLET', 'REMISE_EN_ATTENTE'), true);
+  assert.strictEqual(canTransition('REMISE_EN_ATTENTE', 'REMISE_VALIDEE'), true);
+  assert.strictEqual(canTransition('REMISE_VALIDEE', 'CLOTURE'), true);
+  assert.strictEqual(canTransition('PAIEMENT_COMPLET', 'CLOTURE'), false);
+  transition('PAIEMENT_COMPLET', 'REMISE_EN_ATTENTE');
+  transition('REMISE_EN_ATTENTE', 'REMISE_VALIDEE');
+  transition('REMISE_VALIDEE', 'CLOTURE');
+
+  const Delivery = require('../src/services/layaway/LayawayDeliveryService');
+  assert.throws(
+    () => Delivery.assertProofs({ pvUrl: null, photoUrls: ['a'], idDocumentUrl: 'b' }),
+    (err) => err.code === 'LAYAWAY_DELIVERY_PV_REQUIRED',
+  );
+  assert.throws(
+    () => Delivery.assertProofs({ pvUrl: 'pv', photoUrls: [], idDocumentUrl: 'id' }),
+    (err) => err.code === 'LAYAWAY_DELIVERY_PHOTOS_REQUIRED',
+  );
+  Delivery.assertProofs({
+    pvUrl: 'https://cdn/pv.pdf',
+    photoUrls: ['https://cdn/p1.jpg'],
+    idDocumentUrl: 'https://cdn/id.jpg',
+  });
+
+  const Payout = require('../src/services/layaway/LayawayPayoutService');
+  assert.throws(
+    () =>
+      Payout.assertPayoutAllowed({
+        status: 'REMISE_EN_ATTENTE',
+        delivery: { status: 'SUBMITTED' },
+      }),
+    (err) => err.code === 'LAYAWAY_PAYOUT_BLOCKED',
+  );
+  assert.throws(
+    () =>
+      Payout.assertPayoutAllowed({
+        status: 'REMISE_VALIDEE',
+        delivery: { status: 'SUBMITTED' },
+      }),
+    (err) => err.code === 'LAYAWAY_PAYOUT_BLOCKED',
+  );
+  assert.strictEqual(
+    Payout.assertPayoutAllowed({
+      status: 'REMISE_VALIDEE',
+      delivery: { status: 'VALIDATED' },
+    }),
+    true,
+  );
+  assert.strictEqual(
+    Payout.assertPayoutAllowed({
+      status: 'CLOTURE',
+      delivery: { status: 'VALIDATED' },
+    }),
+    true,
+  );
+
   console.log(
-    'Layaway schedule / guarantee / state-machine / allocation / delays tests passed ✅',
+    'Layaway schedule / guarantee / state-machine / allocation / delays / completion tests passed ✅',
   );
 }
 
