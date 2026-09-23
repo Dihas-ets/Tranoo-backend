@@ -355,8 +355,10 @@ Backend :
 
 ### 4.7 Remise / payout / facture / clôture
 
-- `PAIEMENT_COMPLET` → soumission preuves → `REMISE_EN_ATTENTE`  
-- Preuves : `pvUrl`, `photoUrls[]`, `idDocumentUrl` (+ notes)  
+- `PAIEMENT_COMPLET` → soumission PV signé → `REMISE_EN_ATTENTE`  
+- Preuves acheteur : `pvUrl` + `signatureData` (signature du PV)  
+- Pièce d’identité : collectée à la **signature du contrat** (`contract.idDocumentUrl`), pas à la remise  
+- Photos : hors scope actuel (à revoir plus tard)  
 - Validation admin → `REMISE_VALIDEE` + `deliveryValidatedAt` + véhicule `REMIS` + payout `ELIGIBLE`  
 - Rejet admin → `delivery.REJECTED`, resoumission possible (reste `REMISE_EN_ATTENTE`)  
 - **Payout interdit** si remise ≠ `VALIDATED` (`LAYAWAY_PAYOUT_BLOCKED`)  

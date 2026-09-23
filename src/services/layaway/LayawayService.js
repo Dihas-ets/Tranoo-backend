@@ -403,6 +403,7 @@ function buildPublicDossierView(layaway, firstPayment) {
       documentUrl: layaway.contract?.documentUrl || null,
       signedDocumentUrl: layaway.contract?.signedDocumentUrl || null,
       hasSignature: Boolean(layaway.contract?.signatureData),
+      idDocumentUrl: layaway.contract?.idDocumentUrl || null,
       signerFirstName: layaway.contract?.signerFirstName || null,
       signerLastName: layaway.contract?.signerLastName || null,
       signedAt: layaway.contract?.signedAt || null,

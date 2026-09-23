@@ -5,8 +5,9 @@ function sendDeliveryError(res, error) {
     LAYAWAY_NOT_FOUND: 404,
     LAYAWAY_FORBIDDEN: 403,
     LAYAWAY_DELIVERY_PV_REQUIRED: 400,
-    LAYAWAY_DELIVERY_ID_REQUIRED: 400,
-    LAYAWAY_DELIVERY_PHOTOS_REQUIRED: 400,
+    LAYAWAY_DELIVERY_PV_SIGNATURE_REQUIRED: 400,
+    LAYAWAY_DELIVERY_PV_SIGNATURE_INVALID: 400,
+    LAYAWAY_DELIVERY_PV_INCOMPLETE: 409,
     LAYAWAY_DELIVERY_FORBIDDEN: 409,
     LAYAWAY_DELIVERY_VALIDATE_FORBIDDEN: 409,
     LAYAWAY_DELIVERY_NOT_SUBMITTED: 409,
@@ -44,7 +45,8 @@ exports.getDelivery = async (req, res) => {
 
 /**
  * POST /api/layaway/dossiers/:id/delivery
- * Body: { pvUrl, photoUrls[], idDocumentUrl, notes? }
+ * Body: { pvUrl, signatureData [, firstName, lastName, notes] }
+ * Pièce d’identité : déjà collectée à la signature du contrat.
  */
 exports.submitDelivery = async (req, res) => {
   try {
@@ -53,13 +55,14 @@ exports.submitDelivery = async (req, res) => {
       buyerId: req.user._id,
       isAdmin: isAdminUser(req.user),
       pvUrl: body.pvUrl || body.pv,
-      photoUrls: body.photoUrls || body.photos,
-      idDocumentUrl: body.idDocumentUrl || body.identityDocumentUrl || body.pieceIdentiteUrl,
+      signatureData: body.signatureData || body.signature || body.pvSignature,
+      firstName: body.firstName || body.prenom,
+      lastName: body.lastName || body.nom,
       notes: body.notes,
     });
     return res.status(200).json({
       success: true,
-      message: 'Preuves de remise soumises',
+      message: 'PV de remise signé soumis',
       ...result,
     });
   } catch (error) {
@@ -101,7 +104,7 @@ exports.rejectDelivery = async (req, res) => {
     );
     return res.status(200).json({
       success: true,
-      message: 'Preuves de remise rejetées',
+      message: 'PV de remise rejeté',
       ...result,
     });
   } catch (error) {

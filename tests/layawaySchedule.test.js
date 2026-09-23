@@ -299,17 +299,20 @@ function run() {
 
   const Delivery = require('../src/services/layaway/LayawayDeliveryService');
   assert.throws(
-    () => Delivery.assertProofs({ pvUrl: null, photoUrls: ['a'], idDocumentUrl: 'b' }),
+    () => Delivery.assertProofs({ pvUrl: null, signatureData: 'x'.repeat(25) }),
     (err) => err.code === 'LAYAWAY_DELIVERY_PV_REQUIRED',
   );
   assert.throws(
-    () => Delivery.assertProofs({ pvUrl: 'pv', photoUrls: [], idDocumentUrl: 'id' }),
-    (err) => err.code === 'LAYAWAY_DELIVERY_PHOTOS_REQUIRED',
+    () => Delivery.assertProofs({ pvUrl: 'https://cdn/pv.pdf', signatureData: '' }),
+    (err) => err.code === 'LAYAWAY_DELIVERY_PV_SIGNATURE_REQUIRED',
+  );
+  assert.throws(
+    () => Delivery.assertProofs({ pvUrl: 'https://cdn/pv.pdf', signatureData: 'short' }),
+    (err) => err.code === 'LAYAWAY_DELIVERY_PV_SIGNATURE_INVALID',
   );
   Delivery.assertProofs({
     pvUrl: 'https://cdn/pv.pdf',
-    photoUrls: ['https://cdn/p1.jpg'],
-    idDocumentUrl: 'https://cdn/id.jpg',
+    signatureData: 'data:image/png;base64,AAAA' + 'B'.repeat(20),
   });
 
   const Payout = require('../src/services/layaway/LayawayPayoutService');

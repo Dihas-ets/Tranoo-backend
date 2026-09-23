@@ -1,6 +1,10 @@
 /**
  * Remise véhicule Layaway (Phase 5).
- * PAIEMENT_COMPLET → REMISE_EN_ATTENTE (preuves) → REMISE_VALIDEE (admin).
+ * PAIEMENT_COMPLET → REMISE_EN_ATTENTE (PV signé) → REMISE_VALIDEE (admin).
+ *
+ * Preuves acheteur actuelles : PV (url) + signature du PV.
+ * Pièce d’identité : collectée à la signature du contrat (pas ici).
+ * Photos : hors scope pour l’instant (à revoir plus tard).
  */
 
 const mongoose = require('mongoose');
@@ -34,58 +38,60 @@ function assertBuyerOwns(layaway, buyerId) {
   }
 }
 
-function normalizeUrlList(input) {
-  if (!input) return [];
-  const arr = Array.isArray(input) ? input : [input];
-  return arr
-    .map((u) => String(u || '').trim())
-    .filter(Boolean);
-}
-
 function serializeDelivery(layaway) {
   const d = layaway.delivery || {};
   return {
     status: d.status || 'NONE',
     pvUrl: d.pvUrl || null,
-    photoUrls: d.photoUrls || [],
-    idDocumentUrl: d.idDocumentUrl || null,
+    hasSignature: Boolean(d.signatureData),
+    signatureData: d.signatureData || null,
+    signerFirstName: d.signerFirstName || null,
+    signerLastName: d.signerLastName || null,
+    signedAt: d.signedAt || null,
     notes: d.notes || null,
     submittedAt: d.submittedAt || null,
     validatedAt: d.validatedAt || layaway.deliveryValidatedAt || null,
     validationNotes: d.validationNotes || null,
     rejectedAt: d.rejectedAt || null,
     rejectionReason: d.rejectionReason || null,
+    /** Pièce ID déjà sur le contrat (indicatif pour admin) */
+    contractIdDocumentUrl: layaway.contract?.idDocumentUrl || null,
   };
 }
 
-function assertProofs({ pvUrl, photoUrls, idDocumentUrl }) {
+/**
+ * Preuves MVP : PV + signature du PV.
+ */
+function assertProofs({ pvUrl, signatureData }) {
   if (!pvUrl) {
     throw deliveryError('PV de remise requis (pvUrl)', 'LAYAWAY_DELIVERY_PV_REQUIRED');
   }
-  if (!idDocumentUrl) {
+  const signature = String(signatureData || '').trim();
+  if (!signature) {
     throw deliveryError(
-      'Pièce d’identité requise (idDocumentUrl)',
-      'LAYAWAY_DELIVERY_ID_REQUIRED',
+      'Signature du PV requise (signatureData)',
+      'LAYAWAY_DELIVERY_PV_SIGNATURE_REQUIRED',
     );
   }
-  if (!photoUrls || photoUrls.length < 1) {
+  if (signature.length < 20) {
     throw deliveryError(
-      'Au moins une photo de remise requise (photoUrls)',
-      'LAYAWAY_DELIVERY_PHOTOS_REQUIRED',
+      'Données de signature du PV invalides',
+      'LAYAWAY_DELIVERY_PV_SIGNATURE_INVALID',
     );
   }
 }
 
 /**
- * Acheteur (ou admin) dépose les preuves et passe en REMISE_EN_ATTENTE.
+ * Acheteur dépose le PV signé → REMISE_EN_ATTENTE.
  * Autorisé depuis PAIEMENT_COMPLET, ou resoumission depuis REMISE_EN_ATTENTE (après rejet).
  */
 async function submitDelivery(layawayId, {
   buyerId,
   isAdmin = false,
   pvUrl,
-  photoUrls,
-  idDocumentUrl,
+  signatureData,
+  firstName,
+  lastName,
   notes,
 } = {}) {
   const layaway = await loadDossier(layawayId);
@@ -102,22 +108,35 @@ async function submitDelivery(layawayId, {
   }
 
   const pv = String(pvUrl || '').trim();
-  const photos = normalizeUrlList(photoUrls);
-  const idDoc = String(idDocumentUrl || '').trim();
-  assertProofs({ pvUrl: pv, photoUrls: photos, idDocumentUrl: idDoc });
+  const signature = String(signatureData || '').trim();
+  assertProofs({ pvUrl: pv, signatureData: signature });
+
+  const prenom =
+    String(firstName || '').trim() ||
+    layaway.contract?.signerFirstName ||
+    '';
+  const nom =
+    String(lastName || '').trim() ||
+    layaway.contract?.signerLastName ||
+    '';
 
   const now = new Date();
   layaway.delivery = layaway.delivery || {};
   layaway.delivery.status = 'SUBMITTED';
   layaway.delivery.pvUrl = pv;
-  layaway.delivery.photoUrls = photos;
-  layaway.delivery.idDocumentUrl = idDoc;
-  layaway.delivery.notes = notes != null ? String(notes).trim() || null : layaway.delivery.notes;
+  layaway.delivery.signatureData = signature;
+  layaway.delivery.signerFirstName = prenom || null;
+  layaway.delivery.signerLastName = nom || null;
+  layaway.delivery.signedAt = now;
+  layaway.delivery.notes =
+    notes != null ? String(notes).trim() || null : layaway.delivery.notes;
   layaway.delivery.submittedAt = now;
   layaway.delivery.submittedByUserId = buyerId || null;
   layaway.delivery.rejectedAt = null;
   layaway.delivery.rejectedByUserId = null;
   layaway.delivery.rejectionReason = null;
+  layaway.delivery.idDocumentUrl = null;
+  layaway.delivery.photoUrls = [];
 
   if (layaway.status === 'PAIEMENT_COMPLET') {
     transition('PAIEMENT_COMPLET', 'REMISE_EN_ATTENTE');
@@ -158,8 +177,15 @@ async function validateDelivery(layawayId, adminUserId, { notes } = {}) {
   }
   if (layaway.delivery?.status !== 'SUBMITTED') {
     throw deliveryError(
-      'Preuves de remise non soumises',
+      'PV de remise non soumis',
       'LAYAWAY_DELIVERY_NOT_SUBMITTED',
+      409,
+    );
+  }
+  if (!layaway.delivery?.pvUrl || !layaway.delivery?.signatureData) {
+    throw deliveryError(
+      'PV signé incomplet',
+      'LAYAWAY_DELIVERY_PV_INCOMPLETE',
       409,
     );
   }
@@ -230,7 +256,7 @@ async function validateDelivery(layawayId, adminUserId, { notes } = {}) {
 }
 
 /**
- * Admin rejette les preuves — reste REMISE_EN_ATTENTE, delivery REJECTED.
+ * Admin rejette le PV — reste REMISE_EN_ATTENTE, delivery REJECTED.
  * L’acheteur peut resoumettre.
  */
 async function rejectDelivery(layawayId, adminUserId, { reason } = {}) {
@@ -265,8 +291,8 @@ async function rejectDelivery(layawayId, adminUserId, { reason } = {}) {
     await Notification.create({
       recipient: layaway.buyerId,
       sender: 'system',
-      title: 'Layaway — preuves de remise refusées',
-      message: `Vos preuves de remise ont été refusées : ${why}. Veuillez les soumettre à nouveau.`,
+      title: 'Layaway — PV de remise refusé',
+      message: `Votre PV de remise a été refusé : ${why}. Veuillez le soumettre à nouveau (document + signature).`,
       type: 'paiement',
       relatedId: layaway._id,
       relatedModel: 'Layaway',

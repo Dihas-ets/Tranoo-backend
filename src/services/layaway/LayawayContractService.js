@@ -36,8 +36,8 @@ function serializeContract(layaway) {
     signerFirstName: c.signerFirstName || null,
     signerLastName: c.signerLastName || null,
     hasSignature: Boolean(c.signatureData),
-    // Ne pas renvoyer signatureData complète en liste ; OK en détail signé
     signatureData: c.signatureData || null,
+    idDocumentUrl: c.idDocumentUrl || null,
     signedAt: c.signedAt || null,
     signedByUserId: c.signedByUserId || null,
   };
@@ -110,6 +110,7 @@ async function signContract(layawayId, {
   lastName,
   signatureData,
   signedDocumentUrl,
+  idDocumentUrl,
   ip,
   userAgent,
 }) {
@@ -144,6 +145,7 @@ async function signContract(layawayId, {
   const prenom = String(firstName || '').trim();
   const nom = String(lastName || '').trim();
   const signature = String(signatureData || '').trim();
+  const idDoc = String(idDocumentUrl || '').trim();
 
   if (!prenom || !nom) {
     throw contractError(
@@ -163,6 +165,12 @@ async function signContract(layawayId, {
       'LAYAWAY_CONTRACT_SIGNATURE_INVALID',
     );
   }
+  if (!idDoc) {
+    throw contractError(
+      'Pièce d’identité requise à la signature du contrat (idDocumentUrl)',
+      'LAYAWAY_CONTRACT_ID_REQUIRED',
+    );
+  }
 
   // Transition d'abord (refuse si illégale)
   transition(layaway.status, 'CONTRAT_SIGNE');
@@ -171,6 +179,7 @@ async function signContract(layawayId, {
   layaway.contract.signerFirstName = prenom;
   layaway.contract.signerLastName = nom;
   layaway.contract.signatureData = signature;
+  layaway.contract.idDocumentUrl = idDoc;
   layaway.contract.signedDocumentUrl = signedDocumentUrl
     ? String(signedDocumentUrl).trim()
     : layaway.contract.documentUrl;

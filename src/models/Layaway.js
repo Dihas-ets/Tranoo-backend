@@ -113,6 +113,8 @@ const layawaySchema = new mongoose.Schema(
       signerLastName: { type: String, default: null },
       /** Image / traits de signature (data URL base64 ou URL Cloudinary) */
       signatureData: { type: String, default: null },
+      /** Pièce d'identité collectée à la signature du contrat */
+      idDocumentUrl: { type: String, default: null },
       signedAt: { type: Date, default: null },
       signedByUserId: {
         type: mongoose.Schema.Types.ObjectId,
@@ -153,7 +155,14 @@ const layawaySchema = new mongoose.Schema(
         enum: ['NONE', 'SUBMITTED', 'VALIDATED', 'REJECTED'],
         default: 'NONE',
       },
+      /** URL du PV de remise (document) */
       pvUrl: { type: String, default: null },
+      /** Signature acheteur du PV (data URL / URL) — obligatoire à la soumission */
+      signatureData: { type: String, default: null },
+      signerFirstName: { type: String, default: null },
+      signerLastName: { type: String, default: null },
+      signedAt: { type: Date, default: null },
+      /** @deprecated photos / pièce ID : pièce collectée au contrat ; photos hors scope actuel */
       photoUrls: { type: [String], default: [] },
       idDocumentUrl: { type: String, default: null },
       notes: { type: String, default: null },

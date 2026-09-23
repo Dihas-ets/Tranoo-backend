@@ -12,6 +12,7 @@ function sendContractError(res, error) {
     LAYAWAY_CONTRACT_SIGNER_REQUIRED: 400,
     LAYAWAY_CONTRACT_SIGNATURE_REQUIRED: 400,
     LAYAWAY_CONTRACT_SIGNATURE_INVALID: 400,
+    LAYAWAY_CONTRACT_ID_REQUIRED: 400,
     LAYAWAY_TRANSITION_FORBIDDEN: 409,
   };
   const status = error.status || codeStatus[error.code] || 500;
@@ -44,7 +45,7 @@ exports.getContract = async (req, res) => {
 
 /**
  * POST /api/layaway/dossiers/:id/contract/sign
- * Body: firstName, lastName, signatureData [, signedDocumentUrl]
+ * Body: firstName, lastName, signatureData, idDocumentUrl [, signedDocumentUrl]
  */
 exports.signContract = async (req, res) => {
   try {
@@ -55,6 +56,11 @@ exports.signContract = async (req, res) => {
       lastName: body.lastName || body.nom,
       signatureData: body.signatureData || body.signature,
       signedDocumentUrl: body.signedDocumentUrl,
+      idDocumentUrl:
+        body.idDocumentUrl ||
+        body.identityDocumentUrl ||
+        body.pieceIdentiteUrl ||
+        body.carteIdentiteUrl,
       ip: req.ip || req.headers['x-forwarded-for'] || null,
       userAgent: req.headers['user-agent'] || null,
     });
