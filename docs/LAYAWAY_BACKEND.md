@@ -262,21 +262,21 @@ Sauf requête **explicite** `source=layaway` (ou routes `/api/layaway/vehicles`,
 
 ### 4.2 Création du dossier
 
-`POST /api/layaways` (convention à aligner sur `/api/...` existant)
+`POST /api/layaway/dossiers`
 
-Entrées : choix acheteur uniquement.  
+Entrées : `vehicleId` + `customsCase` uniquement.  
 Backend :
 
 1. Auth + rôle acheteur  
-2. Véhicule existe + éligible Layaway + non déjà engagé  
+2. Véhicule existe + `source=layaway` + `PUBLIE` + non déjà engagé  
 3. Résoudre devis selon `customsCase`  
-4. Valider fréquence / durée (vs `maxDurationMonths`)  
-5. Charger `LayawaySettings` → **copier** dans `appliedParameters`  
-6. Calculer garantie  
-7. Calculer `startDate` / `endDate`  
-8. `ScheduleService.generate(...)` + contrôle d’intégrité  
-9. Persister dossier + échéancier + snapshot pricing  
-10. Transition → `CONTRAT_EN_ATTENTE` (ou `BROUILLON` selon UX)
+4. Charger `LayawaySettings` → **copier** dans `appliedParameters` (retenue, grâce, seuil…)  
+5. Snapshot pricing (devis figé) — **sans** échéancier, **sans** garantie  
+6. Véhicule `PUBLIE` → `RESERVE`  
+7. Persister dossier → `CONTRAT_EN_ATTENTE`
+
+Échéancier **après** signature : `PUT /api/layaway/dossiers/:id/schedule`  
+(`frequency` + `durationMonths` → `ScheduleService.generate` + tours persistés).
 
 ### 4.3 Contrat & signature
 
@@ -285,16 +285,26 @@ Backend :
 - Enregistrement signature (nom, prénom, date, image/signature, IP/device si utile)  
 - Version signée persistée  
 - `CONTRAT_SIGNE` **uniquement** si signature enregistrée  
+- Après signature : l’acheteur définit l’échéancier (`PUT .../schedule`) puis peut payer
 
 ### 4.4 Paiements
 
-**Premier paiement :** init FeexPay sur `totalFirstPayment` ; à confirmation, ventiler garantie + 1ʳᵉ échéance ; reçu ; `ACTIF`.
+**Allocation :** tours uniquement (`LayawayPaymentAllocation`) — pas de ventilation garantie.
 
-**Paiements suivants :** échéance ciblée, montant attendu calculé backend, confirmation webhook, MAJ échéance + agrégats, reçu.
+**Montants :**
+- min = reste du prochain tour ouvert  
+- max = solde total de l’échéancier  
+- surplus autorisé → complète les tours suivants dans l’ordre
+
+**États payables (`assertPayable`) :** `CONTRAT_SIGNE` (si schedule défini) | `ACTIF` | `EN_RETARD`  
+Refus si : `ANNULE` / `breach` / pas de schedule / contrat non signé / `GELE` legacy.
+
+**Premier paiement confirmé :** allocation sur le 1er tour → `ACTIF`.  
+**Objectif atteint :** → `PAIEMENT_COMPLET` + notif modalités de remise.
 
 **Idempotence :** clé `providerTransactionId` (unique). Webhook répété → 1 seul paiement.
 
-**Sécurité :** ignorer / rejeter tout montant arbitraire envoyé par le client ; comparer au montant attendu.
+**Sécurité :** ignorer / rejeter tout montant arbitraire envoyé par le client ; comparer au quote backend.
 
 ### 4.5 Retards & rupture auto
 
@@ -339,57 +349,67 @@ Backend :
 
 ---
 
-## 5. Modèle de données cible (conceptuel)
+## 5. Modèle de données (aligné code)
 
 ```
 Layaway
 ├── buyerId, vehicleId (article), sellerId
 ├── pricing (snapshot) : sellerPrice, tranooMargin, fees, customsCase, quote, totalAmount
-├── guarantee : percentage, calculationBase, amount, status
-├── schedule : frequency, duration, startDate, endDate, numberOfInstallments, installments[]
-├── appliedParameters : { guaranteePercentage, retentionPercentage, ... }
-├── contract : { status, documentUrl, signedDocumentUrl, signature, signedAt, ... }
+├── guarantee : @deprecated (NONE / 0 — ignoré par le flux métier)
+├── schedule : optionnel à la création ; frequency, durationMonths, startDate, endDate,
+│              numberOfInstallments, installments[], definedAt
+├── appliedParameters : { retentionPercentage, maxDurationMonths, delayGracePeriodDays,
+│                         defaultThresholdMonths, currency, snapshottedAt,
+│                         guaranteePercentage? (@deprecated) }
+├── contract : { status, documentUrl, signedDocumentUrl, signature, idDocumentUrl, signedAt, ... }
 ├── payments[]
-├── delays[]
+├── delays[] : { installmentSequence, dueDate, graceEndsAt, overdueAt, resolvedAt,
+│                status, notifiedOverdueAt, regularizationDeadlineAt }
+├── breach : { reason, breachedAt, retentionPercentage, retentionAmount, refundAmount, totalPaid }
 ├── cancellation / refund
 ├── delivery / invoice / payout
-├── status
-├── aggregates : totalInstallmentsPaid, remainingScheduleBalance, paidPercentage
-└── auditRefs / timestamps métier
+├── status (+ frozenAt @deprecated legacy GELE)
+├── aggregates : totalInstallmentsPaid, remainingScheduleBalance, paidPercentage,
+│                toursPaid / toursRemaining (progression)
+└── timestamps métier (paymentCompletedAt, deliveryValidatedAt, …)
 ```
 
 **Installment :** `id`, `sequence`, `dueDate`, `amount`, `paidAmount`, `remainingAmount`, `status` (`PENDING` | `PARTIALLY_PAID` | `PAID` | `OVERDUE` | `CANCELLED`), `paidAt`
 
-**Indexes recommandés :** `buyerId`, `vehicleId`, `status`, `schedule.installments.dueDate`, `payments.providerTransactionId` (unique), `createdAt`
+**Breach reasons :** `DELAY_WINDOW_EXPIRED` | `SCHEDULE_ENDED_UNPAID`
+
+**Indexes :** `buyerId`, `vehicleId`, `status`, `schedule.endDate`, `schedule.installments.dueDate`, `delays.regularizationDeadlineAt`, `breach.breachedAt`, `payments.providerTransactionId` (unique), `createdAt`
 
 ---
 
-## 6. Architecture cible (alignée Tranoo)
+## 6. Architecture (alignée Tranoo)
 
 Ne pas mettre la logique dans les controllers.
 
 ```
-routes/layaway*.js
+routes/layaway.js
    ↓
 controllers/layaway*.js
    ↓
-services/
-   LayawayService
-   ScheduleService          ← prioritaire, testable unitairement
-   GuaranteeService
-   LayawayPaymentService
-   LayawayWebhookService    (ou extension paymentController + hooks)
+services/layaway/
+   LayawayService              ← création dossier / schedule / agrégats
+   ScheduleService             ← génération tours (testable)
+   LayawayPaymentService       ← quote + intents + assertPayable
+   LayawayPaymentAllocation    ← allocation sur installments
    LayawayStateMachine
-   DelayService
-   CancellationService
-   RefundService
-   DeliveryService (layaway)
-   PayoutService
-   InvoiceService (layaway)
-   AuditService
+   DelayService                ← grâce 15j + fenêtre 3 mois
+   LayawayBreachService        ← rupture auto + retenue
+   LayawayCancellationService
+   LayawayContractService
+   LayawayDeliveryService
+   LayawayPayoutService
+   LayawayClosureService
+   LayawayCatalogService
    LayawaySettingsService
+   GuaranteeService            ← @deprecated (legacy)
    ↓
-models/ + repositories si besoin
+models/Layaway.js, LayawaySettings.js
+cron : utils/cronJobs.js → DelayService.processDueLayaways
 ```
 
 **Conventions API existantes à respecter :**
@@ -397,204 +417,157 @@ models/ + repositories si besoin
 - Préfixe `/api/...` (pas `/api/v1`)
 - Auth Bearer Firebase
 - Réponses préférées via `utils/apiResponse.js` + codes d’erreur
-- OpenAPI sous `src/docs/openapi/`
+- OpenAPI sous `src/docs/openapi/` (à compléter — Phase 7)
 
-### Surfaces API (indicatif)
+### Surfaces API
 
 | Zone | Exemples |
 |------|----------|
-| Acheteur | `.../dossiers`, `.../payments`, `.../delivery`, `.../invoice`, `POST .../cancellation` |
+| Acheteur | `.../dossiers`, `PUT .../schedule`, `.../payments`, `.../delivery`, `.../invoice`, `POST .../cancellation` |
 | Webhook | `POST /api/payments/feexpay/webhook` branche `type=layaway` |
 | Admin | vehicles, delivery validate/reject, payout, close, cancellation approve/reject/execute-refund, settings |
 
 ---
 
-## 7. Points métier encore ouverts (dev possible, prod bloquée)
+## 7. Points métier encore ouverts
 
-Documenter en code comme `TODO métier` / feature flags, **sans hardcoder** une décision fausse :
+**Tranchés (logique finalisée 2026-10-03) — ne plus rouvrir sans décision produit :**
 
-1. Base exacte du calcul de la garantie 5 %  
-2. Traitement comptable final de la garantie (à terme / annulation)  
-3. Base exacte de la retenue 5 %  
-4. Sort de la garantie si Layaway mené à terme  
-5. Règle mensuelle si jour inexistant (31 → 28/30 ?)  
-6. Indisponibilité véhicule pendant un Layaway actif  
-7. Workflow exact après 3 mois de défaut  
-8. Opérations autorisées / interdites sur `GELE`  
-9. Workflow validation remboursements (qui approuve)  
-10. Périmètre paramètres admin modifiables + effet sur dossiers actifs (par défaut : **aucun**)
+| Sujet | Décision |
+|-------|----------|
+| Garantie financière | **Supprimée** du flux (1er paiement = 1er tour) |
+| Retenue rupture | **20 %** défaut, paramétrable ; base = total tours payés |
+| Grâce retard | **15 jours** |
+| Post-défaut | Notif + fenêtre **3 mois depuis la notif** ; paiements OK pour régulariser |
+| Fin fenêtre / fin échéancier sans objectif | **Rupture auto** → `ANNULE` + retenue (`LayawayBreachService`) |
+| État `GELE` | **Legacy** — plus de nouvelle transition vers `GELE` |
 
----
+**Encore ouverts (nuances front / ops / produit) :**
 
-## 8. Plan d’attaque (phased)
-
-### Phase 0 — Fondations (1 lot)
-
-**Objectif :** squelette sans paiements réels + **séparation catalogue**.
-
-- [x] `docs/LAYAWAY_BACKEND.md` (ce fichier) — base + nuance catalogue  
-- [ ] Modèles : `LayawaySettings`, `Layaway`, sous-docs installments / guarantee / contract stubs  
-- [ ] `LayawayStateMachine` (transitions + erreurs `TRANSITION_INTERDITE`)  
-- [ ] `AuditService` minimal  
-- [ ] Extension `Article` : `source: 'layaway'` + `layawayPublicationStatus` + devis douane/hors douane  
-- [ ] **Exclusion** `source ≠ layaway` sur listes Articles / Tranoo / landing / badges  
-- [ ] Routes admin settings + CRUD / publish véhicules Layaway (canal dédié)  
-- [ ] Tests : transitions illégales refusées ; article layaway absent des listes classiques  
-
-**Livrable :** admin gère un stock Layaway **isolé** ; settings lus/écrits ; aucun dossier acheteur encore ; zéro fuite vers listes Tranoo/app.
+1. Règle mensuelle si jour inexistant (31 → 28/30 ?) — vérifier comportement `ScheduleService` vs attente métier  
+2. Mapping exact des champs dashboard (settings, devis véhicule, widgets) ↔ API — **à valider avec le front**  
+3. Confirmation réception véhicule in-app — **hors scope**  
+4. Migration dossiers existants créés avec ancienne garantie — **hors scope MVP**  
+5. Workflow validation remboursements (rôles admin fins / `responsablePaiement`)  
+6. Périmètre paramètres admin modifiables + effet sur dossiers actifs (par défaut : **aucun** — snapshot)  
+7. OpenAPI, indexes prod, revue concurrence, AuditLog complet  
 
 ---
 
-### Phase 1 — Moteur financier (cœur, prioritaire)
+## 8. Plan d’attaque (phased) — état
 
-**Objectif :** calculs corrects, isolés, testés.
+### Phase 0 — Fondations + catalogue
 
-- [ ] `GuaranteeService.calculate(base, percentage)`  
-- [ ] `ScheduleService.generate({ totalAmount, startDate, endDate, frequency })`  
-  - DAILY / WEEKLY / MONTHLY  
-  - arrondi + dernière échéance  
-  - assert somme = total  
-- [ ] Helpers durée calendaire (`addMonths` / fin de période)  
-- [ ] Suite de tests dédiée (minimum du §56 du brief) :
-  - mensuel 3 000 000 / 12  
-  - hebdo (pas de 7 j)  
-  - journalier  
-  - arrondi 1 000 000 / 3  
-  - année bissextile  
-  - fin de mois (31 janv.)  
+- [x] `docs/LAYAWAY_BACKEND.md`  
+- [x] Modèles `LayawaySettings`, `Layaway`  
+- [x] `LayawayStateMachine`  
+- [x] `Article.source: 'layaway'` + `layawayPublicationStatus`  
+- [x] Exclusion catalogue + routes admin vehicles / settings  
+- [ ] `AuditService` minimal (reporté Phase 7)  
 
-**Livrable :** package testable indépendamment de FeexPay / HTTP.
+### Phase 1 — Moteur financier
 
----
+- [x] `ScheduleService.generate` (DAILY / WEEKLY / MONTHLY) + intégrité somme  
+- [x] Tests schedule / state-machine / allocation / delays / breach / cancel (`tests/layawaySchedule.test.js`)  
+- [x] Garantie retirée du flux (service legacy conservé `@deprecated`)  
 
-### Phase 2 — Création dossier + contrat
+### Phase 2 — Création dossier + contrat + schedule
 
-- [ ] `POST /api/layaways` (snapshot pricing + params + échéancier persisté)  
-- [ ] `GET` liste / détail / schedule  
-- [ ] Upload / association document contrat  
-- [ ] `POST .../contract/sign` → `CONTRAT_SIGNE`  
-- [ ] Erreurs métier explicites (véhicule non éligible, devis, fréquence, durée…)  
+- [x] `POST /dossiers` : `vehicleId` + `customsCase` → `CONTRAT_EN_ATTENTE` (sans schedule)  
+- [x] Signature → `CONTRAT_SIGNE`  
+- [x] `PUT /dossiers/:id/schedule` après signature  
+- [x] Preview échéancier sans garantie  
 
-**Livrable :** parcours acheteur jusqu’au contrat signé, sans argent.
+### Phase 3 — Paiements + webhook
 
----
+- [x] Quote min/max + intents FeexPay (`type=layaway`)  
+- [x] Allocation tours uniquement → `ACTIF` / `PAIEMENT_COMPLET`  
+- [x] Idempotence webhook `providerTransactionId`  
+- [x] Blocage si rompu / pas de schedule  
 
-### Phase 3 — Paiements + webhook + idempotence
+### Phase 4 — Retards / fenêtre 3 mois / rupture auto
 
-- [ ] Étendre `Payment.type` → `layaway` (+ refs `layawayId`, `installmentId`, decomposition garantie)  
-- [ ] Init premier paiement (montant **calculé** backend)  
-- [ ] Confirmation → ventilation garantie / échéance → `ACTIF`  
-- [ ] Paiements d’échéances suivantes  
-- [ ] Webhook : vérif authenticité, montant, état, **idempotence** `providerTransactionId` unique  
-- [ ] Reçus  
-- [ ] Agrégats : solde, % payé (sans double-compter garantie)  
-- [ ] Mongo transactions ou écritures atomiques + unique index  
-- [ ] Tests : webhook ×3 → 1 paiement ; concurrence  
+- [x] Cron `DelayService` (`03:15 UTC`)  
+- [x] Grâce 15 j → `OVERDUE` + `EN_RETARD` + notif + `regularizationDeadlineAt`  
+- [x] Régularisation → `ACTIF` (pas de pénalité récidive)  
+- [x] `LayawayBreachService` : fin fenêtre / fin échéancier → `ANNULE` + retenue  
+- [x] Retrait du chemin métier `GELE`  
 
-**Livrable :** dossier ACTIF + échéancier qui se remplit correctement.
+### Phase 5 — Remise / payout / clôture
 
----
-
-### Phase 4 — Retards / gel / notifications
-
-- [x] Cron quotidien `DelayService` (`03:15 UTC` via `cronJobs`)  
-- [x] Grâce configurable (`delayGracePeriodDays`), historique `delays[]`  
-- [x] Notifications in-app (`Notification` type `paiement`, related `Layaway`)  
-- [x] Passage `GELE` + garde-fous paiements (déjà dans `assertPayable`)  
-- [x] Rattrapage paiement : `EN_RETARD` → `ACTIF` si plus d’OVERDUE  
-
-**Livrable :** dossiers en retard détectés sans intervention manuelle.
-
----
-
-### Phase 5 — Fin de parcours positif
-
-- [x] `PAIEMENT_COMPLET` auto quand somme échéances OK (webhook allocation)  
-- [x] Remise : preuves + validation admin → `REMISE_VALIDEE`  
-- [x] Gate payout vendeur (`LayawayPayoutService.assertPayoutAllowed`)  
-- [x] Facture finale + `CLOTURE` (`LayawayClosureService`)  
-- [x] Timestamps reconnaissance revenu  
-
-**Livrable :** happy path bout-en-bout.
-
----
+- [x] Notif modalités de remise à `PAIEMENT_COMPLET`  
+- [x] Remise PV + signature ; ID à la signature contrat  
+- [x] Payout gate + facture + `CLOTURE`  
 
 ### Phase 6 — Annulation / remboursement
 
-- [x] Demande annulation + règles d’autorisation  
-- [x] Calcul retenue (paramétré ; base MVP = total payé, TBD métier)  
-- [x] Workflow validation + modes BANK_TRANSFER / CHECK  
-- [ ] Audit complet (Phase 7 / AuditService)  
+- [x] Demande acheteur + retenue 20 % sur tours payés  
+- [x] Approve / reject / execute-refund (BANK_TRANSFER | CHECK)  
 
-**Livrable :** branche négative contrôlée.
+### Phase 7 — Durcissement & ops *(reste à faire)*
 
----
-
-### Phase 7 — Durcissement & ops
-
-- [ ] OpenAPI / Swagger  
-- [ ] Indexes prod  
-- [ ] Revue concurrence (double validation, double payout)  
-- [ ] Alignement décisions métier §7  
-- [ ] Permissions `responsablePaiement` / rôles admin fins  
+- [ ] OpenAPI / Swagger Layaway  
+- [ ] Indexes prod / revue concurrence  
+- [ ] AuditLog actions sensibles  
+- [ ] Rôles admin fins  
+- [ ] Alignement champs dashboard ↔ API (§7.2)  
 
 ---
 
-## 9. Ordre de priorité recommandé pour démarrer le code
+## 9. Priorité pour le prochain dev
 
-1. **Séparation catalogue** `source=layaway` + exclusion listes Tranoo/app/landing *(en cours)*  
-2. **ScheduleService + tests** (risque métier #1)  
-3. **LayawaySettings + snapshot**  
-4. **Modèle Layaway + state machine**  
-5. **CRUD / publish véhicules admin (section Layaway dédiée)**  
-6. **Création dossier**  
-7. **Contrat / signature**  
-8. **Paiements FeexPay + idempotence**  
-9. **Cron retards**  
-10. **Remise / payout / facture**  
-11. **Annulation / remboursement**
+1. **Front / dashboard** : brancher sur l’API finalisée ; valider mapping données (§7.2)  
+2. Phase 7 ops (OpenAPI, audit, concurrence)  
+3. Décider migration dossiers legacy avec garantie (si existants en base)  
+4. Confirmation réception in-app (si produit le demande)  
 
 ---
 
-## 10. Critères de « done » backend (MVP technique)
+## 10. Critères de « done » backend (logique finalisée)
 
-Un MVP Layaway backend est considéré prêt quand :
+Le backend Layaway (logique métier) est prêt quand :
 
-1. Un admin publie un véhicule Layaway et configure les settings.  
-2. Un acheteur crée un dossier : garantie + échéancier corrects, montants **figés**.  
-3. `SUM(échéances) === totalAmount` toujours.  
-4. Contrat signé avant premier paiement.  
-5. Premier paiement = garantie + 1ʳᵉ échéance, ventilé.  
-6. Webhook idempotent.  
-7. % payé ignore la garantie.  
-8. Transitions d’état centralisées.  
-9. Aucun montant financier critique accepté tel quel depuis le client.  
-10. Paramètres admin ne modifient pas les dossiers déjà créés.
+1. Admin publie un véhicule Layaway + settings (retenue 20 %, grâce 15 j, seuil 3 mois).  
+2. Acheteur crée un dossier : snapshot devis/params **sans** schedule ni garantie.  
+3. Signature puis `PUT schedule` : `SUM(tours) === totalAmount`.  
+4. Paiements = tours uniquement ; min = prochain tour ; max = solde.  
+5. Webhook idempotent ; transitions via `LayawayStateMachine`.  
+6. Retard → grâce → notif + fenêtre 3 mois ; régularisation possible.  
+7. Fin fenêtre / fin échéancier sans objectif → rupture auto + retenue.  
+8. Objectif atteint → `PAIEMENT_COMPLET` + notif remise ; parcours remise/payout/clôture OK.  
+9. Annulation acheteur : retenue paramétrée sur total tours payés.  
+10. Params admin ne recalculent pas les dossiers déjà créés (snapshot).  
+11. Tests `tests/layawaySchedule.test.js` verts.
 
 ---
 
-## 11. Prochaine action concrète
+## 11. État actuel & suite
 
-**Fait (Phase 6) :** annulation / retenue / remboursement BANK_TRANSFER|CHECK.
+**Branche :** `SECONDARY` (dev) — **ne pas merger en prod** tant que front + nuances données §7 ne sont pas validés.
 
-**Suite (Phase 7) — Durcissement & ops :**
+**Fait :** logique métier finalisée (flux, paiements, retards, rupture, annulation, remise) + doc + tests.
 
-1. OpenAPI / indexes / revue concurrence (double validation, double payout).  
-2. AuditLog actions sensibles.  
-3. Alignement décisions métier §7 + rôles admin fins.  
+**Suite recommandée :**
 
-**Hors scope immédiat :** UI Flutter / dashboard.
+1. Front dash / apps : consommer les endpoints et valider les champs.  
+2. Phase 7 (OpenAPI, audit, concurrence, rôles).  
+3. Migration legacy garantie si nécessaire.
+
+**Hors scope immédiat :** UI Flutter / confirmation réception in-app.
 
 ---
 
 ## 12. Références internes
 
-- Paiements : `src/models/Payment.js`, `src/controllers/paymentController.js`, `src/routes/payment.js`  
+- Routes : `src/routes/layaway.js`  
+- Services : `src/services/layaway/`  
+- Modèles : `src/models/Layaway.js`, `src/models/LayawaySettings.js`  
+- Tests : `tests/layawaySchedule.test.js`  
+- Cron : `src/utils/cronJobs.js`  
+- Paiements FeexPay : `src/models/Payment.js`, `src/controllers/paymentController.js`  
 - Articles : `src/models/Article.js`  
-- Settings singleton : `src/models/SellerGainPricing.js`, `src/routes/sellerGainPricing.js`  
 - Auth / rôles : `src/middlewares/auth.js`, `src/middlewares/role.js`  
-- Brief métier long : conversation produit Layaway (garanties / échéancier / états)  
 
 ---
 
-*Document de pilotage technique — à faire évoluer au fil des validations métier (§7) et des PRs de chaque phase.*
+*Document de pilotage technique — logique métier finalisée (v2.0, 2026-10-03). Mettre à jour §7 / Phase 7 au fil du handoff front.*
