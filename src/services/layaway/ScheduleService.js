@@ -186,21 +186,32 @@ function generate(params) {
 }
 
 /**
- * Premier règlement = garantie + première échéance (montants distincts).
+ * Premier règlement = montant du premier tour (plus de garantie).
+ * Compat legacy : computeFirstPayment(guaranteeAmount, schedule) encore accepté.
  */
-function computeFirstPayment(guaranteeAmount, schedule) {
-  const first = schedule?.installments?.[0];
+function computeFirstPayment(scheduleOrGuarantee, maybeSchedule) {
+  let sched = scheduleOrGuarantee;
+  if (
+    typeof scheduleOrGuarantee === 'number' &&
+    maybeSchedule &&
+    typeof maybeSchedule === 'object'
+  ) {
+    sched = maybeSchedule;
+  }
+
+  const first = sched?.installments?.[0];
   if (!first) {
     const err = new Error('Échéancier vide');
     err.code = 'LAYAWAY_INVALID_SCHEDULE';
     throw err;
   }
-  const g = Math.round(Number(guaranteeAmount));
   const installmentAmount = first.amount;
   return {
-    guaranteeAmount: g,
+    guaranteeAmount: 0,
     installmentAmount,
-    totalAmount: g + installmentAmount,
+    tourAmount: installmentAmount,
+    totalAmount: installmentAmount,
+    tourSequence: first.sequence,
   };
 }
 

@@ -1,10 +1,12 @@
 const mongoose = require('mongoose');
 
 const DEFAULTS = {
-  guaranteePercentage: 5,
-  retentionPercentage: 5,
+  /** @deprecated Garantie retirée de la logique métier finalisée */
+  guaranteePercentage: 0,
+  retentionPercentage: 20,
   maxDurationMonths: 24,
-  delayGracePeriodDays: 10,
+  delayGracePeriodDays: 15,
+  /** Mois de régularisation après notification de retard */
   defaultThresholdMonths: 3,
   allowedFrequencies: ['DAILY', 'WEEKLY', 'MONTHLY'],
   allowedDurationsMonths: [6, 12, 18, 24],
@@ -14,6 +16,7 @@ const DEFAULTS = {
 
 const LayawaySettingsSchema = new mongoose.Schema({
   key: { type: String, default: 'LAYAWAY_SETTINGS_SINGLETON' },
+  /** @deprecated Ignoré par le flux métier (conservé pour compat admin / legacy) */
   guaranteePercentage: { type: Number, default: DEFAULTS.guaranteePercentage },
   retentionPercentage: { type: Number, default: DEFAULTS.retentionPercentage },
   maxDurationMonths: { type: Number, default: DEFAULTS.maxDurationMonths },

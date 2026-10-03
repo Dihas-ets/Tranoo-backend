@@ -1,14 +1,12 @@
 /**
- * Détection retards / gel Layaway (Phase 4).
+ * Détection retards Layaway (logique finalisée).
  *
- * Règles MVP :
- * - Grâce : `appliedParameters.delayGracePeriodDays` (défaut 10).
- *   Après dueDate + grâce → échéance OVERDUE + dossier EN_RETARD.
- * - Gel : `appliedParameters.defaultThresholdMonths` (défaut 3).
- *   Si l’échéance OPEN en retard la plus ancienne a dueDate + N mois ≤ now → GELE.
- *
- * TODO métier (§7) : workflow exact post-gel, ops autorisées sur GELE
- * (paiements actuellement refusés — voir LayawayPaymentService.assertPayable).
+ * - Grâce : delayGracePeriodDays (défaut 15) après dueDate.
+ * - Après grâce : OVERDUE + EN_RETARD + notification.
+ * - À la notif : regularizationDeadlineAt = notifiedAt + defaultThresholdMonths (3).
+ * - Pendant la fenêtre : paiements autorisés ; régularisation → ACTIF, pas de pénalité.
+ * - Après deadline sans régularisation → rupture auto (DELAY_WINDOW_EXPIRED).
+ * - Fin échéancier (endDate) + solde > 0 → rupture auto (SCHEDULE_ENDED_UNPAID).
  */
 
 const Layaway = require('../../models/Layaway');
@@ -16,6 +14,7 @@ const Notification = require('../../models/Notification');
 const { transition } = require('./LayawayStateMachine');
 const { addUtcMonthsClamped } = require('./ScheduleService');
 const { DEFAULTS } = require('../../models/LayawaySettings');
+const { applyBreach, BREACH_REASONS } = require('./LayawayBreachService');
 
 const OPEN_INSTALLMENT_STATUSES = new Set([
   'PENDING',
@@ -61,13 +60,7 @@ function graceEndsAt(dueDate, graceDays) {
 
 /**
  * Évalue un dossier sans I/O (testable).
- * @returns {{
- *   markedOverdue: Array<{ sequence: number, dueDate: Date, graceEndsAt: Date }>,
- *   newStatus: string|null,
- *   shouldNotifyOverdue: boolean,
- *   shouldNotifyFrozen: boolean,
- *   oldestOverdueDueDate: Date|null,
- * }}
+ * Ne déclenche plus de GELE — la rupture est gérée séparément via deadline.
  */
 function evaluateLayaway(layaway, now = new Date()) {
   const today = startOfUtcDay(now);
@@ -86,7 +79,6 @@ function evaluateLayaway(layaway, now = new Date()) {
     const daysPast = daysBetweenUtc(due, today);
     if (daysPast <= graceDays) continue;
 
-    // Past grace → overdue
     if (inst.status !== 'OVERDUE') {
       markedOverdue.push({
         sequence: inst.sequence,
@@ -101,7 +93,6 @@ function evaluateLayaway(layaway, now = new Date()) {
     }
   }
 
-  // Also consider already-OVERDUE installments for freeze / status
   for (const inst of installments) {
     if (inst.status !== 'OVERDUE') continue;
     if (installmentRemaining(inst) <= 0) continue;
@@ -119,36 +110,21 @@ function evaluateLayaway(layaway, now = new Date()) {
     );
 
   let newStatus = null;
-  let shouldNotifyFrozen = false;
   let shouldNotifyOverdue = false;
 
   const current = layaway.status;
 
-  if (
-    hasOverdue &&
-    oldestOverdueDueDate &&
-    (current === 'ACTIF' || current === 'EN_RETARD')
-  ) {
-    const freezeAt = addUtcMonthsClamped(oldestOverdueDueDate, thresholdMonths);
-    if (startOfUtcDay(freezeAt).getTime() <= today.getTime()) {
-      if (current !== 'GELE') {
-        newStatus = 'GELE';
-        shouldNotifyFrozen = !layaway.notifiedFrozenAt;
-      }
-    } else if (current === 'ACTIF') {
+  if (hasOverdue && (current === 'ACTIF' || current === 'EN_RETARD')) {
+    if (current === 'ACTIF') {
       newStatus = 'EN_RETARD';
       shouldNotifyOverdue = true;
     }
-  } else if (hasOverdue && current === 'ACTIF') {
-    newStatus = 'EN_RETARD';
-    shouldNotifyOverdue = true;
   }
 
-  // First time marking overdue while already EN_RETARD → still notify if no open delay notifs
   if (
     markedOverdue.length > 0 &&
     current === 'EN_RETARD' &&
-    newStatus !== 'GELE'
+    newStatus !== 'ANNULE'
   ) {
     const hasOpenNotified = (layaway.delays || []).some(
       (d) => d.status === 'OPEN' && d.notifiedOverdueAt,
@@ -156,20 +132,30 @@ function evaluateLayaway(layaway, now = new Date()) {
     if (!hasOpenNotified) shouldNotifyOverdue = true;
   }
 
+  // Deadline de régularisation dépassée ?
+  let shouldBreachDelay = false;
+  const openDelays = (layaway.delays || []).filter((d) => d.status === 'OPEN');
+  for (const d of openDelays) {
+    if (d.regularizationDeadlineAt) {
+      if (startOfUtcDay(d.regularizationDeadlineAt).getTime() <= today.getTime()) {
+        shouldBreachDelay = true;
+        break;
+      }
+    }
+  }
+
   return {
     markedOverdue,
     newStatus,
     shouldNotifyOverdue,
-    shouldNotifyFrozen,
+    shouldNotifyFrozen: false,
+    shouldBreachDelay,
     oldestOverdueDueDate,
     graceDays,
     thresholdMonths,
   };
 }
 
-/**
- * Applique le résultat d'évaluation sur le document (mutation in-place).
- */
 function applyEvaluation(layaway, evaluation, now = new Date()) {
   const changes = {
     installmentsMarked: 0,
@@ -208,26 +194,28 @@ function applyEvaluation(layaway, evaluation, now = new Date()) {
         resolvedAt: null,
         status: 'OPEN',
         notifiedOverdueAt: null,
+        regularizationDeadlineAt: null,
       });
       changes.delaysOpened += 1;
     }
   }
 
-  if (evaluation.newStatus && evaluation.newStatus !== layaway.status) {
+  if (
+    evaluation.newStatus &&
+    evaluation.newStatus !== layaway.status &&
+    evaluation.newStatus !== 'GELE'
+  ) {
     transition(layaway.status, evaluation.newStatus);
     layaway.status = evaluation.newStatus;
     changes.statusTo = evaluation.newStatus;
-    if (evaluation.newStatus === 'GELE') {
-      layaway.frozenAt = now;
-    }
   }
 
   return changes;
 }
 
 /**
- * Après paiement : clôture les delays des échéances soldées ;
- * EN_RETARD → ACTIF s'il ne reste plus d'OVERDUE.
+ * Après paiement : clôture les delays des tours soldés ;
+ * EN_RETARD → ACTIF s'il ne reste plus d'OVERDUE. Pas de pénalité récidive.
  */
 function resolveDelaysAfterPayment(layaway, now = new Date()) {
   const installments = layaway?.schedule?.installments || [];
@@ -261,67 +249,75 @@ function resolveDelaysAfterPayment(layaway, now = new Date()) {
   return { resolved, statusChanged, status: layaway.status };
 }
 
-async function notifyBuyer(layaway, kind) {
+async function notifyBuyerOverdue(layaway, deadlineAt) {
   const buyerId = layaway.buyerId;
   if (!buyerId) return null;
 
-  const titles = {
-    OVERDUE: 'Layaway — échéance en retard',
-    FROZEN: 'Layaway — dossier gelé',
-  };
-  const messages = {
-    OVERDUE:
-      'Une ou plusieurs échéances de votre dossier Layaway sont en retard après la période de grâce. Régularisez pour éviter le gel du dossier.',
-    FROZEN:
-      'Votre dossier Layaway a été gelé suite à un défaut prolongé. Contactez le support Tranoo.',
-  };
+  const deadlineStr = deadlineAt
+    ? new Date(deadlineAt).toISOString().slice(0, 10)
+    : '';
 
   try {
-    const notif = await Notification.create({
+    return await Notification.create({
       recipient: buyerId,
       sender: 'system',
-      title: titles[kind] || 'Layaway',
-      message: messages[kind] || '',
+      title: 'Layaway — échéance en retard',
+      message:
+        'Une ou plusieurs échéances de votre dossier Layaway sont en retard après le délai de grâce. ' +
+        `Vous disposez de 3 mois à compter de cette notification${deadlineStr ? ` (jusqu’au ${deadlineStr})` : ''} pour régulariser. ` +
+        'Passé ce délai, le contrat sera rompu et Tranoo conservera la retenue paramétrée.',
       type: 'paiement',
       relatedId: layaway._id,
       relatedModel: 'Layaway',
       data: {
         layawayId: String(layaway._id),
-        kind,
+        kind: 'OVERDUE',
         status: layaway.status,
+        regularizationDeadlineAt: deadlineAt || null,
       },
     });
-    return notif;
   } catch (err) {
     console.error('[LAYAWAY][DELAY] Notification échouée:', err.message);
     return null;
   }
 }
 
-/**
- * Traite un dossier chargé (save + notifs).
- */
 async function processLayawayDocument(layaway, now = new Date()) {
   const evaluation = evaluateLayaway(layaway, now);
   const changes = applyEvaluation(layaway, evaluation, now);
 
   let notified = [];
+  let breached = false;
+
   if (evaluation.shouldNotifyOverdue) {
-    const n = await notifyBuyer(layaway, 'OVERDUE');
+    const thresholdMonths = evaluation.thresholdMonths;
+    const deadline = addUtcMonthsClamped(now, thresholdMonths);
+    const n = await notifyBuyerOverdue(layaway, deadline);
     if (n) {
       notified.push('OVERDUE');
       const openDelays = (layaway.delays || []).filter((d) => d.status === 'OPEN');
       for (const d of openDelays) {
-        if (!d.notifiedOverdueAt) d.notifiedOverdueAt = now;
+        if (!d.notifiedOverdueAt) {
+          d.notifiedOverdueAt = now;
+          d.regularizationDeadlineAt = deadline;
+        }
       }
     }
   }
-  if (evaluation.shouldNotifyFrozen) {
-    const n = await notifyBuyer(layaway, 'FROZEN');
-    if (n) {
-      notified.push('FROZEN');
-      layaway.notifiedFrozenAt = now;
-    }
+
+  // Re-évaluer breach après éventuelle pose de deadlines
+  const reEval = evaluateLayaway(layaway, now);
+  if (reEval.shouldBreachDelay && !layaway.breach?.breachedAt) {
+    await layaway.save();
+    await applyBreach(layaway, BREACH_REASONS.DELAY_WINDOW_EXPIRED, now);
+    breached = true;
+    return {
+      evaluation: reEval,
+      changes: { ...changes, statusTo: 'ANNULE' },
+      notified,
+      touched: true,
+      breached: true,
+    };
   }
 
   const touched =
@@ -330,15 +326,56 @@ async function processLayawayDocument(layaway, now = new Date()) {
     changes.statusFrom !== changes.statusTo ||
     notified.length > 0;
 
-  if (touched) {
+  if (touched && !breached) {
     await layaway.save();
   }
 
-  return { evaluation, changes, notified, touched };
+  return { evaluation, changes, notified, touched, breached };
 }
 
 /**
- * Cron : scan des dossiers ACTIF / EN_RETARD avec échéances dues.
+ * Fin d'échéancier sans objectif atteint → rupture.
+ */
+async function processScheduleEndedBreaches(now = new Date()) {
+  const today = startOfUtcDay(now);
+  const dossiers = await Layaway.find({
+    status: { $in: DELAY_SCAN_STATUSES },
+    'schedule.endDate': { $lt: today },
+    'aggregates.remainingScheduleBalance': { $gt: 0 },
+    'breach.breachedAt': null,
+  });
+
+  const summary = {
+    scanned: dossiers.length,
+    breached: 0,
+    errors: [],
+  };
+
+  for (const layaway of dossiers) {
+    try {
+      const remaining =
+        layaway.aggregates?.remainingScheduleBalance ??
+        (layaway.schedule?.installments || []).reduce(
+          (acc, i) => acc + installmentRemaining(i),
+          0,
+        );
+      if (remaining <= 0) continue;
+      await applyBreach(layaway, BREACH_REASONS.SCHEDULE_ENDED_UNPAID, now);
+      summary.breached += 1;
+    } catch (err) {
+      console.error(
+        `[LAYAWAY][BREACH][SCHEDULE] Erreur dossier ${layaway._id}:`,
+        err.message,
+      );
+      summary.errors.push({ layawayId: String(layaway._id), message: err.message });
+    }
+  }
+
+  return summary;
+}
+
+/**
+ * Cron : scan retards + ruptures (délai / fin échéancier).
  */
 async function processDueLayaways(now = new Date()) {
   const today = startOfUtcDay(now);
@@ -353,17 +390,35 @@ async function processDueLayaways(now = new Date()) {
     },
   });
 
+  // Aussi dossiers EN_RETARD avec deadline proche (même sans dueDate récente)
+  const withDeadline = await Layaway.find({
+    status: 'EN_RETARD',
+    'delays': {
+      $elemMatch: {
+        status: 'OPEN',
+        regularizationDeadlineAt: { $lte: today },
+      },
+    },
+  });
+
+  const byId = new Map();
+  for (const d of [...dossiers, ...withDeadline]) {
+    byId.set(String(d._id), d);
+  }
+
   const summary = {
-    scanned: dossiers.length,
+    scanned: byId.size,
     updated: 0,
     markedOverdue: 0,
     toEnRetard: 0,
     toGele: 0,
+    breached: 0,
+    scheduleBreached: 0,
     notified: 0,
     errors: [],
   };
 
-  for (const layaway of dossiers) {
+  for (const layaway of byId.values()) {
     try {
       const result = await processLayawayDocument(layaway, now);
       if (result.touched) summary.updated += 1;
@@ -371,12 +426,21 @@ async function processDueLayaways(now = new Date()) {
       if (result.changes.statusTo === 'EN_RETARD' && result.changes.statusFrom === 'ACTIF') {
         summary.toEnRetard += 1;
       }
-      if (result.changes.statusTo === 'GELE') summary.toGele += 1;
+      if (result.breached) summary.breached += 1;
       summary.notified += result.notified.length;
     } catch (err) {
       console.error(`[LAYAWAY][DELAY] Erreur dossier ${layaway._id}:`, err.message);
       summary.errors.push({ layawayId: String(layaway._id), message: err.message });
     }
+  }
+
+  try {
+    const scheduleResult = await processScheduleEndedBreaches(now);
+    summary.scheduleBreached = scheduleResult.breached;
+    summary.errors.push(...scheduleResult.errors);
+  } catch (err) {
+    console.error('[LAYAWAY][BREACH][SCHEDULE] Scan échoué:', err.message);
+    summary.errors.push({ layawayId: null, message: err.message });
   }
 
   return summary;
@@ -388,6 +452,7 @@ module.exports = {
   resolveDelaysAfterPayment,
   processLayawayDocument,
   processDueLayaways,
+  processScheduleEndedBreaches,
   startOfUtcDay,
   daysBetweenUtc,
   graceEndsAt,

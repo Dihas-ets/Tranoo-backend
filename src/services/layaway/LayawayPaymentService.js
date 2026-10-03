@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const Layaway = require('../../models/Layaway');
 const Payment = require('../../models/Payment');
 const Article = require('../../models/Article');
+const Notification = require('../../models/Notification');
 const { transition } = require('./LayawayStateMachine');
 const {
   resolvePayableAmount,
@@ -11,6 +12,7 @@ const {
   computeMaximumPayable,
 } = require('./LayawayPaymentAllocation');
 const { resolveDelaysAfterPayment } = require('./DelayService');
+const { hasSchedule } = require('./LayawayService');
 
 function payError(message, code, status = 400, meta) {
   const err = new Error(message);
@@ -37,8 +39,19 @@ async function loadOwnedDossier(layawayId, buyerId) {
 const PAYABLE_STATUSES = new Set(['CONTRAT_SIGNE', 'ACTIF', 'EN_RETARD']);
 
 function assertPayable(layaway) {
+  if (layaway.status === 'ANNULE' || layaway.breach?.breachedAt) {
+    throw payError(
+      'Contrat rompu : paiements interdits',
+      'LAYAWAY_BREACHED',
+      409,
+    );
+  }
   if (layaway.status === 'GELE') {
-    throw payError('Dossier gelé : paiements interdits', 'LAYAWAY_FROZEN', 409);
+    throw payError(
+      'Dossier gelé (legacy) : paiements interdits',
+      'LAYAWAY_FROZEN',
+      409,
+    );
   }
   if (layaway.status === 'PAIEMENT_COMPLET' || layaway.status === 'CLOTURE') {
     throw payError('Dossier déjà soldé', 'LAYAWAY_ALREADY_PAID', 409);
@@ -51,16 +64,40 @@ function assertPayable(layaway) {
       { status: layaway.status },
     );
   }
-  // Premier paiement : contrat signé requis
-  if (
-    layaway.status === 'CONTRAT_SIGNE' &&
-    layaway.contract?.status !== 'SIGNED'
-  ) {
+  if (layaway.contract?.status !== 'SIGNED') {
+    throw payError('Contrat non signé', 'LAYAWAY_CONTRACT_NOT_SIGNED', 409);
+  }
+  if (!hasSchedule(layaway)) {
     throw payError(
-      'Contrat non signé',
-      'LAYAWAY_CONTRACT_NOT_SIGNED',
+      'Échéancier non défini : définissez vos tours avant de payer',
+      'LAYAWAY_SCHEDULE_REQUIRED',
       409,
     );
+  }
+}
+
+async function notifyPaymentComplete(layaway) {
+  if (!layaway.buyerId) return;
+  try {
+    await Notification.create({
+      recipient: layaway.buyerId,
+      sender: 'system',
+      title: 'Layaway — objectif de paiement atteint',
+      message:
+        'Félicitations, votre objectif de paiement Layaway est atteint. ' +
+        'Les modalités de remise du véhicule vous seront communiquées ; ' +
+        'l’organisation pratique se fait avec les administrateurs Tranoo.',
+      type: 'paiement',
+      relatedId: layaway._id,
+      relatedModel: 'Layaway',
+      data: {
+        layawayId: String(layaway._id),
+        kind: 'PAYMENT_COMPLETE',
+        status: layaway.status,
+      },
+    });
+  } catch (err) {
+    console.error('[LAYAWAY][PAYMENT] Notif PAIEMENT_COMPLET échouée:', err.message);
   }
 }
 
@@ -79,7 +116,7 @@ async function quotePayment(layawayId, buyerId, requestedAmount) {
     maximumAmount: resolved.maxAmount,
     amount: resolved.amount,
     kind: resolved.minInfo.kind,
-    guaranteeDue: resolved.minInfo.guaranteeDue,
+    guaranteeDue: 0,
     installmentDue: resolved.minInfo.installmentDue,
     targetInstallmentSequence: resolved.minInfo.targetInstallmentSequence,
     breakdownPreview: planAllocation(layaway, resolved.amount),
@@ -88,8 +125,6 @@ async function quotePayment(layawayId, buyerId, requestedAmount) {
 
 /**
  * Crée un Payment pending lié au dossier.
- * Le montant est validé côté backend (>= min, <= max).
- * L'init FeexPay (RTP/carte) réutilise ensuite ce payment via customId.
  */
 async function createPaymentIntent(layawayId, buyerId, { amount, method } = {}) {
   const layaway = await loadOwnedDossier(layawayId, buyerId);
@@ -111,7 +146,7 @@ async function createPaymentIntent(layawayId, buyerId, { amount, method } = {}) 
     type: 'layaway',
     layaway: layaway._id,
     layawayKind: resolved.minInfo.kind,
-    layawayGuaranteeAmount: breakdown.guaranteeAmount,
+    layawayGuaranteeAmount: 0,
     layawayInstallmentAmount: breakdown.installmentAmount,
     layawayAllocation: breakdown.allocations,
     layawayAllocationApplied: false,
@@ -124,7 +159,7 @@ async function createPaymentIntent(layawayId, buyerId, { amount, method } = {}) 
       maximumAmount: resolved.maxAmount,
       amount: resolved.amount,
       kind: resolved.minInfo.kind,
-      guaranteeDue: resolved.minInfo.guaranteeDue,
+      guaranteeDue: 0,
       installmentDue: resolved.minInfo.installmentDue,
       breakdown,
     },
@@ -162,7 +197,14 @@ async function applyConfirmedPayment(payment) {
     throw payError('Dossier introuvable pour paiement', 'LAYAWAY_NOT_FOUND', 404);
   }
 
-  // Recalcule l'allocation sur l'état actuel (sécurité si montant > min)
+  if (layaway.status === 'ANNULE' || layaway.breach?.breachedAt) {
+    throw payError(
+      'Contrat rompu : paiement non applicable',
+      'LAYAWAY_BREACHED',
+      409,
+    );
+  }
+
   const plan = planAllocation(layaway, payment.amount);
   const paidAt = new Date();
   const result = applyAllocationToLayaway(layaway, plan, paidAt);
@@ -174,29 +216,34 @@ async function applyConfirmedPayment(payment) {
     await markVehicleEngaged(layaway.vehicleId);
   }
 
+  let becameComplete = false;
   if (result.allInstallmentsPaid) {
     resolveDelaysAfterPayment(layaway, paidAt);
     if (layaway.status === 'ACTIF' || layaway.status === 'EN_RETARD') {
       transition(layaway.status, 'PAIEMENT_COMPLET');
       layaway.status = 'PAIEMENT_COMPLET';
       layaway.paymentCompletedAt = paidAt;
+      becameComplete = true;
     } else if (layaway.status === 'CONTRAT_SIGNE') {
-      // Cas extrême : tout payé d'un coup au premier règlement
       transition('CONTRAT_SIGNE', 'ACTIF');
       layaway.status = 'ACTIF';
       await markVehicleEngaged(layaway.vehicleId);
       transition('ACTIF', 'PAIEMENT_COMPLET');
       layaway.status = 'PAIEMENT_COMPLET';
       layaway.paymentCompletedAt = paidAt;
+      becameComplete = true;
     }
   } else {
-    // Rattrapage : clôture delays + EN_RETARD → ACTIF si plus d'OVERDUE
     resolveDelaysAfterPayment(layaway, paidAt);
   }
 
   await layaway.save();
 
-  payment.layawayGuaranteeAmount = plan.guaranteeAmount;
+  if (becameComplete) {
+    await notifyPaymentComplete(layaway);
+  }
+
+  payment.layawayGuaranteeAmount = 0;
   payment.layawayInstallmentAmount = plan.installmentAmount;
   payment.layawayAllocation = plan.allocations;
   payment.layawayAllocationApplied = true;
@@ -207,7 +254,7 @@ async function applyConfirmedPayment(payment) {
     applied: true,
     layawayId: layaway._id,
     status: layaway.status,
-    guaranteeAmount: plan.guaranteeAmount,
+    guaranteeAmount: 0,
     installmentAmount: plan.installmentAmount,
     allocations: plan.allocations,
     aggregates: layaway.aggregates,
@@ -228,7 +275,7 @@ async function getPaymentQuoteInfo(layaway) {
     minimumAmount: minInfo.minimumAmount,
     maximumAmount: computeMaximumPayable(layaway),
     kind: minInfo.kind,
-    guaranteeDue: minInfo.guaranteeDue,
+    guaranteeDue: 0,
     installmentDue: minInfo.installmentDue,
   };
 }

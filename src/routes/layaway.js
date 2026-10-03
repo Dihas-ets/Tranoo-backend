@@ -102,6 +102,11 @@ router.post('/dossiers', ...buyerAuth, layawayDossierController.createDossier);
 router.get('/dossiers', ...buyerAuth, layawayDossierController.listMyDossiers);
 router.get('/dossiers/:id', ...buyerAuth, layawayDossierController.getMyDossier);
 router.get('/dossiers/:id/schedule', ...buyerAuth, layawayDossierController.getMySchedule);
+router.put(
+  '/dossiers/:id/schedule',
+  ...buyerAuth,
+  layawayDossierController.defineSchedule,
+);
 router.get('/dossiers/:id/contract', ...buyerAuth, layawayContractController.getContract);
 router.post(
   '/dossiers/:id/contract/sign',

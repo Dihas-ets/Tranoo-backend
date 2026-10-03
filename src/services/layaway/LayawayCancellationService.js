@@ -1,13 +1,12 @@
 /**
- * Annulation / remboursement Layaway (Phase 6).
+ * Annulation / remboursement Layaway.
  *
  * Flux : demande → ANNULATION_DEMANDEE → (approve) REMBOURSEMENT_EN_COURS
  *        → (execute) ANNULE
  *        ou (reject) retour previousStatus
  *        ou (approve + refund=0) ANNULE direct
  *
- * Retenue : appliedParameters.retentionPercentage sur base = total payé
- * (garantie + échéances). TODO métier §7 : base exacte de la retenue.
+ * Retenue : appliedParameters.retentionPercentage (défaut 20 %) sur base = total tours payés.
  * Modes : BANK_TRANSFER | CHECK uniquement.
  */
 
@@ -22,7 +21,7 @@ const CANCELABLE_STATUSES = new Set([
   'CONTRAT_SIGNE',
   'ACTIF',
   'EN_RETARD',
-  'GELE',
+  'GELE', // legacy
 ]);
 
 const REFUND_MODES = new Set(['BANK_TRANSFER', 'CHECK']);
@@ -58,21 +57,17 @@ function assertBuyerOwns(layaway, buyerId) {
 
 /**
  * Montants retenue / remboursement (pur, testable).
- * Base MVP = total payé (garantie si PAID + échéances).
+ * Base = total des tours payés (plus de garantie).
  */
 function computeRefundBreakdown(layaway) {
-  const guaranteePaid =
-    layaway.guarantee?.status === 'PAID'
-      ? roundXof(layaway.guarantee.amount)
-      : 0;
   const installmentsPaid = roundXof(layaway.aggregates?.totalInstallmentsPaid);
-  const totalPaid = guaranteePaid + installmentsPaid;
+  const totalPaid = installmentsPaid;
 
   const pctRaw = Number(layaway.appliedParameters?.retentionPercentage);
   const retentionPercentage =
     Number.isFinite(pctRaw) && pctRaw >= 0 ? pctRaw : DEFAULTS.retentionPercentage;
 
-  const retentionBase = totalPaid; // TODO métier : autre base possible
+  const retentionBase = totalPaid;
   const retentionAmount =
     totalPaid > 0 ? roundXof((retentionBase * retentionPercentage) / 100) : 0;
   const refundAmount = Math.max(0, totalPaid - retentionAmount);
@@ -84,7 +79,7 @@ function computeRefundBreakdown(layaway) {
     retentionAmount,
     refundAmount,
     currency: layaway.pricing?.currency || 'XOF',
-    guaranteePaid,
+    guaranteePaid: 0,
     installmentsPaid,
   };
 }

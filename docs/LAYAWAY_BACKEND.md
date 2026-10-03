@@ -1,50 +1,28 @@
-# Layaway Tranoo — Objectifs Backend & Plan d’attaque
+# Layaway Tranoo — Backend (logique finalisée)
 
 **Module :** Layaway — Paiement échelonné  
 **Périmètre :** Backend / API / logique métier / persistance / paiements  
 **Branche de travail :** `SECONDARY`  
 **Stack cible :** Express + Mongoose (MongoDB) — `src/`  
-**Version document :** 1.0 — Base de développement  
-**Date :** 2026-09-23
+**Version document :** 2.0 — Logique métier finalisée  
+**Date :** 2026-10-03
 
 ---
 
-## 0. Verdict sur l’existant
+## 0. Logique métier retenue (résumé)
 
-### Ce qui est OK (réutilisable)
-
-| Domaine | Existant | Réutilisation Layaway |
-|---------|----------|------------------------|
-| Auth / rôles | Firebase + `User.role` / `typeAdmin` | Routes acheteur / admin / (vendeur lecture) |
-| Paiement one-shot | FeexPay (`Payment`, webhook, status worker) | Étendre pour `type: layaway` + idempotence |
-| Articles véhicule/moto | `Article` (`prix`, `dedouanement`, `statutVente`) | Base véhicule + éligibilité Layaway |
-| Settings admin singleton | `SellerGainPricing`, `VerificationPricing`, etc. | Pattern `LayawaySettings` |
-| Factures / numérotation | `Invoice`, `invoiceNumberService` | Reçus + facture finale |
-| Cron | `node-cron` / `cronJobs` | Détection retards / gel |
-| Notifications | `Notification` + push | Rappels échéances / retards |
-| Marges vendeur | `SellerGainPricing` | Snapshot pricing dans le dossier |
-
-### Ce qui manque (à construire — vertical neuf)
-
-| Capacité | Statut actuel |
-|----------|---------------|
-| Modèle / routes / services Layaway | **Absent** (0 occurrence dans `src/`) |
-| Publication véhicules Layaway (dashboard) | **Absent** — canal `source=layaway` + statut dédié à créer ; exclusion des listes Tranoo/app |
-| Séparation catalogue vs Tranoo / landing | **À forcer** — aujourd’hui `source` = `app` \| `tranoo` seulement |
-| Devis multi-cas (douane / hors douane) dédié Layaway | **Absent** (seul `Article.prix` + bool `dedouanement`) |
-| Moteur d’échéancier (`ScheduleService`) | **Absent** |
-| Garantie financière 5 % (distincte des échéances) | **Absent** |
-| Contrat + signature acheteur | **Absent** |
-| Paiements échelonnés + premier règlement (garantie + 1ʳᵉ échéance) | **Absent** |
-| Machine à états Layaway centralisée | **Absent** |
-| Retards / grâce 10 j / gel 3 mois | **Absent** |
-| Annulation → remboursement (retenue, virement/chèque) | **Absent** (enums `refunded` seulement) |
-| Remise véhicule + validation + gate payout | **Absent** |
-| Audit log domaine financier | **Absent** |
-| Transactions MongoDB multi-documents | **Jamais utilisées** dans le repo |
-| Idempotence webhook robuste (`providerTransactionId` unique) | **Partielle** (pas d’index unique strict sur `transactionId`) |
-
-**Conclusion :** le document métier est cohérent et implémentable. Le backend actuel **n’a pas** de fondation Layaway : il faut un **nouveau module vertical**, branché sur FeexPay, Article, settings singleton, auth et cron. Ne pas tenter d’étendre `Achat` / `Order` comme « quasi-Layaway ».
+1. Admin renseigne devis + params, publie les véhicules éligibles (`source=layaway`).
+2. Retenue rupture : **20 % par défaut**, paramétrable dashboard (`retentionPercentage`).
+3. Acheteur consulte le catalogue, sélectionne un véhicule → dossier `CONTRAT_EN_ATTENTE`.
+4. Acheteur **signe le contrat** → `CONTRAT_SIGNE`.
+5. Acheteur **définit ensuite** son échéancier (fréquence + durée) → tours générés backend.
+6. Paiements par **tours** jusqu’à l’objectif (= montant du devis). Pas de garantie financière.
+7. Retard : grâce **15 jours** ; puis notif + fenêtre **3 mois à compter de la notif**.
+8. Régularisation dans la fenêtre → dossier redevient `ACTIF` (pas de pénalité récidive).
+9. Sinon → **rupture auto** (`ANNULE` + retenue) ; paiements bloqués.
+10. Fin d’échéancier sans objectif atteint → **rupture auto** idem.
+11. Objectif atteint → `PAIEMENT_COMPLET` + notif modalités de remise (orga avec admins).
+12. Confirmation réception in-app : **hors scope** pour l’instant.
 
 ---
 
@@ -52,107 +30,90 @@
 
 Le backend est **l’unique source de vérité** pour :
 
-- montants, calculs, échéanciers, paiements ;
+- montants, calculs, échéanciers (tours), paiements ;
 - états et transitions ;
 - règles métier, validations, sécurité ;
 - historique et données financières figées.
 
 Le frontend n’envoie que des **choix** :
 
-- `vehicleId` / `articleId`
-- `customsCase` (douane / hors douane)
-- `frequency` (`DAILY` | `WEEKLY` | `MONTHLY`)
-- `duration` (ex. 6 / 12 / 18 / 24 mois)
+- à la création : `vehicleId`, `customsCase`
+- après signature : `frequency`, `durationMonths`
+- signature / preuves documentaires
 
 Il **ne doit jamais** imposer comme vérité :
 
-- `monthlyAmount`, `totalAmount`, `guaranteeAmount`, `remainingBalance`, `percentagePaid`
+- `monthlyAmount`, `totalAmount`, `remainingBalance`, `percentagePaid`
 
 ---
 
-## 2. Principes financiers non négociables
+## 2. Principes financiers
 
-### 2.1 Garantie ≠ échéancier
+### 2.1 Plus de garantie
 
-```
-garantie = montantDuDevis × guaranteePercentage / 100
-échéancier = 100 % du montantDuDevis   (la garantie N’EST PAS déduite)
-```
+L’objectif de paiement = **100 % du devis**.  
+Aucun acompte / garantie distincte. Le 1er paiement = montant du **1er tour**.
 
-Exemple : devis 3 000 000 → garantie 150 000 ; échéancier sur **3 000 000**.
-
-### 2.2 Premier règlement
+### 2.2 Tours (= installments)
 
 ```
-totalFirstPayment = guaranteeAmount + firstInstallmentAmount
+montantTour ≈ devis / nombreDeTours  (dernière échéance = reste exact)
+SUM(tours.amount) === totalAmount
 ```
-
-Persister séparément `guaranteeAmount` et `installmentAmount`.
 
 ### 2.3 Montant figé
 
-À la création du dossier, snapshot du devis / pricing / paramètres admin.  
-Un changement de prix dashboard **ne recalcule pas** les dossiers existants.
+À la création du dossier, snapshot du devis + `appliedParameters` (retenue, grâce, seuil…).  
+Un changement dashboard **ne recalcule pas** les dossiers existants.
 
-### 2.4 Calendrier réel
-
-Durée = période calendaire (`startDate` → `endDate`), **pas** 360/365 jours fixes.  
-Gérer années bissextiles et fins de mois (règle fin de mois à figer en phase moteur).
-
-### 2.5 Arrondis
-
-- Toutes les échéances sauf la dernière : montant arrondi (unité FCFA).
-- Dernière échéance : reste exact.
-- Contrôle : `SUM(installments.amount) === totalAmount` sinon **refus d’enregistrement**.
-
-### 2.6 Progression
+### 2.4 Progression
 
 ```
 paidPercentage = totalInstallmentsPaid / totalAmount × 100
+toursPaid / toursRemaining = compte des installments PAID vs ouverts
 ```
 
-La garantie **n’entre pas** dans le % de progression du prix.
-
-### 2.7 Solde échéances
+### 2.5 Retenue à la rupture
 
 ```
-remainingScheduleBalance = totalAmount - totalInstallmentsPaid
+retentionAmount = totalPaid × retentionPercentage / 100   (défaut 20 %)
+refundAmount    = totalPaid − retentionAmount
 ```
-
-Ne pas confondre avec « tous les paiements » (garantie distincte).
 
 ---
 
-## 3. Cycle de vie métier (ce que le backend doit gérer)
+## 3. Cycle de vie métier
 
 ```
 Publication véhicule Layaway (admin)
         ↓
-Création dossier (BROUILLON / CONTRAT_EN_ATTENTE)
+Sélection véhicule → CONTRAT_EN_ATTENTE
         ↓
-Contrat + signature → CONTRAT_SIGNE
+Signature contrat → CONTRAT_SIGNE
         ↓
-Premier règlement (garantie + 1ʳᵉ échéance) confirmé → ACTIF
+Définition échéancier (tours)
         ↓
-Paiements suivants / retards → EN_RETARD → (seuil) GELE
+1er tour payé → ACTIF
         ↓
-Toutes échéances payées → PAIEMENT_COMPLET
+Paiements suivants / retards → EN_RETARD
+        ↓ (régularisation) ACTIF
+        ↓ (deadline 3 mois post-notif OU fin échéancier sans objectif)
+        ANNULE (rupture auto + retenue)
+        ↓ (objectif atteint)
+        PAIEMENT_COMPLET → notif remise
         ↓
-Remise → REMISE_EN_ATTENTE → validation → REMISE_VALIDEE
-        ↓
-Payout vendeur (après remise validée uniquement)
-        ↓
-Facture finale → CLOTURE
+Remise admin → REMISE_EN_ATTENTE → REMISE_VALIDEE → CLOTURE
 
-Branche parallèle :
-ACTIF → ANNULATION_DEMANDEE → REMBOURSEMENT_EN_COURS → ANNULE
+Branche parallèle (demande acheteur) :
+ACTIF|EN_RETARD|CONTRAT_SIGNE → ANNULATION_DEMANDEE → REMBOURSEMENT_EN_COURS → ANNULE
 ```
 
-### États autorisés
+### États
 
-`BROUILLON` · `CONTRAT_EN_ATTENTE` · `CONTRAT_SIGNE` · `ACTIF` · `EN_RETARD` · `GELE` · `PAIEMENT_COMPLET` · `REMISE_EN_ATTENTE` · `REMISE_VALIDEE` · `CLOTURE` · `ANNULATION_DEMANDEE` · `REMBOURSEMENT_EN_COURS` · `ANNULE`
+`BROUILLON` · `CONTRAT_EN_ATTENTE` · `CONTRAT_SIGNE` · `ACTIF` · `EN_RETARD` · `PAIEMENT_COMPLET` · `REMISE_EN_ATTENTE` · `REMISE_VALIDEE` · `CLOTURE` · `ANNULATION_DEMANDEE` · `REMBOURSEMENT_EN_COURS` · `ANNULE`  
+(`GELE` = legacy uniquement, plus de transition vers cet état)
 
-**Règle :** aucun controller ne mute `status` directement — uniquement via `LayawayStateMachine` / service dédié.
+**Règle :** aucun controller ne mute `status` directement — uniquement via `LayawayStateMachine` / services.
 
 ---
 
@@ -210,34 +171,35 @@ Champ dédié `layawayPublicationStatus` (indépendant du `statut` pub classique
 | DELETE | `/api/layaway/admin/vehicles/:id` | Soft `RETIRE` si publié, hard si brouillon | Admin |
 | GET/PUT | `/api/admin/layaway-settings` | Paramètres métier | Admin dashboard |
 
-#### API dossiers acheteur (création)
+#### API dossiers acheteur
 
 | Méthode | Route | Rôle |
 |---------|-------|------|
-| POST | `/api/layaway/dossiers/preview` | Acheteur — calcul sans persistance |
-| POST | `/api/layaway/dossiers` | Acheteur — crée dossier + réserve véhicule |
-| GET | `/api/layaway/dossiers` | Acheteur — mes dossiers |
-| GET | `/api/layaway/dossiers/:id` | Acheteur — détail + échéancier |
-| GET | `/api/layaway/dossiers/:id/schedule` | Acheteur — échéancier seul |
-| GET | `/api/layaway/dossiers/:id/contract` | Acheteur — consulter le contrat |
-| POST | `/api/layaway/dossiers/:id/contract/sign` | Acheteur — enregistrer signature |
-| PUT | `/api/layaway/admin/dossiers/:id/contract/document` | Admin — associer PDF contrat |
+| POST | `/api/layaway/dossiers/preview` | Preview échéancier (frequency + duration) |
+| POST | `/api/layaway/dossiers` | Création : `vehicleId` + `customsCase` → `CONTRAT_EN_ATTENTE` |
+| GET | `/api/layaway/dossiers` | Mes dossiers |
+| GET | `/api/layaway/dossiers/:id` | Détail |
+| GET | `/api/layaway/dossiers/:id/schedule` | Échéancier |
+| PUT | `/api/layaway/dossiers/:id/schedule` | Définir tours **après** `CONTRAT_SIGNE` |
+| GET | `/api/layaway/dossiers/:id/contract` | Consulter contrat |
+| POST | `/api/layaway/dossiers/:id/contract/sign` | Signer |
+| PUT | `/api/layaway/admin/dossiers/:id/contract/document` | Admin — associer PDF |
 
-Body création / preview (choix uniquement) :
+Body création :
 
 ```json
-{
-  "vehicleId": "...",
-  "customsCase": "WITH_CUSTOMS | WITHOUT_CUSTOMS",
-  "frequency": "DAILY | WEEKLY | MONTHLY",
-  "durationMonths": 12
-}
+{ "vehicleId": "...", "customsCase": "WITH_CUSTOMS | WITHOUT_CUSTOMS" }
 ```
 
-Le backend calcule et retourne `guarantee`, `schedule`, `firstPayment`.  
-Tout montant envoyé par le client (`totalAmount`, `guaranteeAmount`, …) est **rejeté**.  
-À la création : véhicule `PUBLIE` → `RESERVE`, dossier → `CONTRAT_EN_ATTENTE`.  
-Le `documentUrl` du contrat est pris depuis `LayawaySettings.defaultContractDocumentUrl` s’il est configuré.
+Body échéancier (après signature) :
+
+```json
+{ "frequency": "DAILY | WEEKLY | MONTHLY", "durationMonths": 12 }
+```
+
+Le backend calcule les tours. Tout montant client est **rejeté**.  
+À la création : véhicule `PUBLIE` → `RESERVE`, dossier → `CONTRAT_EN_ATTENTE` (sans schedule).  
+Après signature + `PUT schedule` : tours persistés ; paiements possibles.
 
 #### Contrat & signature
 
@@ -267,16 +229,16 @@ Règles :
 | GET | `/api/layaway/dossiers/:id/payments` | Historique paiements dossier |
 
 Règle montant :
-- **interdit** de payer moins que le minimum dû ;
-- **autorisé** de payer plus : le surplus complète les échéances suivantes dans l’ordre ;
-- 1er paiement (garantie non payée) : min = garantie + 1ʳᵉ échéance ;
-- suivants : min = reste de la prochaine échéance ouverte ;
-- max = garantie impayée + solde total de l’échéancier.
+- **interdit** de payer moins que le minimum dû (reste du prochain tour) ;
+- **autorisé** de payer plus : le surplus complète les tours suivants dans l’ordre ;
+- max = solde total de l’échéancier ;
+- paiement refusé si contrat rompu (`ANNULE` / `breach`) ou échéancier non défini.
 
 Flux FeexPay :
 1. `POST .../payments` → `{ customId, amount }`
 2. `POST /api/payments/feexpay/requesttopay/:network` avec ce `customId` + `amount` (réutilise l’intent)
-3. Webhook success → allocation garantie / échéances → `ACTIF` (1er) ou MAJ échéancier ; idempotent
+3. Webhook success → allocation tours → `ACTIF` (1er) ou MAJ échéancier ; idempotent
+4. Objectif atteint → `PAIEMENT_COMPLET` + notif modalités de remise
 
 
 Toute liste non-Layaway doit exclure le canal :
@@ -334,24 +296,26 @@ Backend :
 
 **Sécurité :** ignorer / rejeter tout montant arbitraire envoyé par le client ; comparer au montant attendu.
 
-### 4.5 Retards & gel
+### 4.5 Retards & rupture auto
 
-- Cron quotidien (`03:15 UTC`) : `DelayService.processDueLayaways`  
-- Grâce : `delayGracePeriodDays` (défaut 10) depuis `appliedParameters` — avant expiration, pas d’OVERDUE  
-- Après grâce : échéance → `OVERDUE`, dossier `ACTIF` → `EN_RETARD`, entrée `delays[]`, notif acheteur  
-- Seuil : `defaultThresholdMonths` (défaut 3) depuis `dueDate` de la plus ancienne échéance encore due → `GELE` + `frozenAt`  
-- Paiements refusés sur `GELE` (`LAYAWAY_FROZEN`) — **TODO métier** ops / dégel admin  
-- Rattrapage : paiement qui solde les OVERDUE → `EN_RETARD` → `ACTIF`, delays `RESOLVED`
+- Cron quotidien (`03:15 UTC`) : `DelayService.processDueLayaways`
+- Grâce : `delayGracePeriodDays` (**défaut 15**) — avant expiration, pas d’OVERDUE
+- Après grâce : tour → `OVERDUE`, dossier `ACTIF` → `EN_RETARD`, entrée `delays[]`, **notif acheteur**
+- À la notif : `regularizationDeadlineAt = notifiedAt + defaultThresholdMonths` (**3 mois**)
+- Pendant la fenêtre : paiements **autorisés** pour régulariser → `EN_RETARD` → `ACTIF` (pas de pénalité récidive)
+- Deadline dépassée avec retard ouvert → **rupture auto** (`LayawayBreachService`, reason `DELAY_WINDOW_EXPIRED`) → `ANNULE` + retenue
+- Fin d’échéancier (`endDate` passé) + solde > 0 → rupture auto (`SCHEDULE_ENDED_UNPAID`)
+- Après rupture : **aucun nouveau paiement** (`LAYAWAY_BREACHED`)
 
-### 4.6 Annulation / remboursement
+### 4.6 Annulation / remboursement / retenue
 
-- Demande acheteur → `ANNULATION_DEMANDEE` (pas de saut direct `ANNULE` côté acheteur)  
-- Autorisé depuis : `CONTRAT_SIGNE` | `ACTIF` | `EN_RETARD` | `GELE`  
-- Retenue : `retentionPercentage` (snapshot) sur **base MVP = total payé** (garantie + échéances) — **TODO métier** base exacte  
-- Modes : `BANK_TRANSFER` | `CHECK` uniquement (obligatoires si `refundAmount > 0`)  
-- Admin : approve → `REMBOURSEMENT_EN_COURS` (ou `ANNULE` si refund = 0)  
-- Admin : reject → retour `previousStatus`  
-- Admin : execute-refund → `ANNULE` + libération véhicule `RESERVE`/`ENGAGE` → `PUBLIE`  
+- Demande acheteur → `ANNULATION_DEMANDEE` (pas de saut direct `ANNULE` côté acheteur)
+- Autorisé depuis : `CONTRAT_SIGNE` | `ACTIF` | `EN_RETARD`
+- Retenue : `retentionPercentage` (**défaut 20 %**) sur **total tours payés**
+- Modes : `BANK_TRANSFER` | `CHECK` uniquement (si `refundAmount > 0`)
+- Admin : approve → `REMBOURSEMENT_EN_COURS` (ou `ANNULE` si refund = 0)
+- Admin : reject → retour `previousStatus`
+- Admin : execute-refund → `ANNULE` + libération véhicule  
 
 ### 4.7 Remise / payout / facture / clôture
 
@@ -370,7 +334,8 @@ Backend :
 - `AuditLog` pour actions sensibles (statut, finance, remise, payout, settings)  
 - `GET/PATCH /api/admin/layaways`  
 - `GET/PATCH /api/admin/layaway-settings`  
-- Paramètres : `guaranteePercentage`, `retentionPercentage`, `maxDurationMonths`, `delayGracePeriodDays`, `defaultThresholdMonths`
+- Paramètres : `retentionPercentage` (défaut 20), `maxDurationMonths`, `delayGracePeriodDays` (défaut 15), `defaultThresholdMonths` (défaut 3)  
+- `guaranteePercentage` : **déprécié** (ignoré par le flux métier)
 
 ---
 

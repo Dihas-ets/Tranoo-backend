@@ -69,15 +69,16 @@ const autoViewsCron = cron.schedule('* * * * *', async () => {
   scheduled: false,
 });
 
-// Layaway : retards / gel (quotidien 03:15 UTC)
+// Layaway : retards / rupture auto (quotidien 03:15 UTC)
 const layawayDelaysCron = cron.schedule('15 3 * * *', async () => {
   try {
-    console.log('[CRON][LAYAWAY] Scan retards / gel...');
+    console.log('[CRON][LAYAWAY] Scan retards / rupture...');
     const summary = await DelayService.processDueLayaways(new Date());
     console.log(
       `[CRON][LAYAWAY] scanned=${summary.scanned} updated=${summary.updated} ` +
         `overdue=${summary.markedOverdue} en_retard=${summary.toEnRetard} ` +
-        `gele=${summary.toGele} notifs=${summary.notified} errors=${summary.errors.length}`,
+        `breached=${summary.breached} scheduleBreached=${summary.scheduleBreached} ` +
+        `notifs=${summary.notified} errors=${summary.errors.length}`,
     );
   } catch (error) {
     console.error('[CRON][LAYAWAY] Erreur scan retards:', error);

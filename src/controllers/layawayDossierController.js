@@ -1,5 +1,4 @@
 const LayawayService = require('../services/layaway/LayawayService');
-const { computeFirstPayment } = require('../services/layaway/ScheduleService');
 
 function sendLayawayError(res, error) {
   const codeStatus = {
@@ -18,6 +17,10 @@ function sendLayawayError(res, error) {
     LAYAWAY_INVALID_DATE: 400,
     LAYAWAY_INVALID_SCHEDULE: 400,
     LAYAWAY_SCHEDULE_INTEGRITY: 500,
+    LAYAWAY_SCHEDULE_DEFINE_FORBIDDEN: 409,
+    LAYAWAY_SCHEDULE_ALREADY_DEFINED: 409,
+    LAYAWAY_CONTRACT_NOT_SIGNED: 409,
+    LAYAWAY_BREACHED: 409,
     LAYAWAY_TRANSITION_FORBIDDEN: 409,
     LAYAWAY_NOT_FOUND: 404,
     LAYAWAY_FORBIDDEN: 403,
@@ -61,7 +64,7 @@ function rejectClientAmounts(body, res) {
   return null;
 }
 
-/** POST /api/layaway/dossiers/preview */
+/** POST /api/layaway/dossiers/preview — preview échéancier (sans garantie) */
 exports.previewDossier = async (req, res) => {
   try {
     if (rejectClientAmounts(req.body, res)) return;
@@ -78,7 +81,10 @@ exports.previewDossier = async (req, res) => {
   }
 };
 
-/** POST /api/layaway/dossiers */
+/**
+ * POST /api/layaway/dossiers
+ * Body : vehicleId + customsCase uniquement (signature puis échéancier ensuite).
+ */
 exports.createDossier = async (req, res) => {
   try {
     if (rejectClientAmounts(req.body, res)) return;
@@ -99,20 +105,55 @@ exports.createDossier = async (req, res) => {
       });
     }
 
-    const { layaway, firstPayment } = await LayawayService.createDossier({
+    const { layaway } = await LayawayService.createDossier({
       buyerId,
       vehicleId: req.body.vehicleId,
       customsCase: req.body.customsCase,
-      frequency: req.body.frequency,
-      durationMonths: req.body.durationMonths ?? req.body.duration,
-      startDate: req.body.startDate,
     });
 
     return res.status(201).json({
       success: true,
-      message: 'Dossier Layaway créé',
+      message: 'Dossier Layaway créé — signez le contrat puis définissez l’échéancier',
+      dossier: LayawayService.buildPublicDossierView(layaway, null),
+    });
+  } catch (error) {
+    return sendLayawayError(res, error);
+  }
+};
+
+/**
+ * PUT /api/layaway/dossiers/:id/schedule
+ * Après CONTRAT_SIGNE : frequency + durationMonths.
+ */
+exports.defineSchedule = async (req, res) => {
+  try {
+    if (rejectClientAmounts(req.body, res)) return;
+
+    const buyerId = req.user?._id;
+    if (!buyerId) {
+      return res.status(401).json({
+        success: false,
+        code: 'LAYAWAY_BUYER_REQUIRED',
+        message: 'Authentification acheteur requise',
+      });
+    }
+
+    const { layaway, firstPayment } = await LayawayService.defineSchedule(
+      req.params.id,
+      buyerId,
+      {
+        frequency: req.body.frequency,
+        durationMonths: req.body.durationMonths ?? req.body.duration,
+        startDate: req.body.startDate,
+      },
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: 'Échéancier défini',
       dossier: LayawayService.buildPublicDossierView(layaway, firstPayment),
       schedule: layaway.schedule,
+      firstPayment,
     });
   } catch (error) {
     return sendLayawayError(res, error);
@@ -133,12 +174,7 @@ exports.listMyDossiers = async (req, res) => {
       success: true,
       count: dossiers.length,
       dossiers: dossiers.map((d) => {
-        let firstPayment = null;
-        try {
-          firstPayment = computeFirstPayment(d.guarantee.amount, d.schedule);
-        } catch (_) {
-          /* ignore */
-        }
+        const firstPayment = LayawayService.computeFirstPaymentFromDoc(d);
         return LayawayService.buildPublicDossierView(d, firstPayment);
       }),
     });
@@ -154,14 +190,11 @@ exports.getMyDossier = async (req, res) => {
       req.params.id,
       req.user._id,
     );
-    const firstPayment = computeFirstPayment(
-      layaway.guarantee.amount,
-      layaway.schedule,
-    );
+    const firstPayment = LayawayService.computeFirstPaymentFromDoc(layaway);
     return res.status(200).json({
       success: true,
       dossier: LayawayService.buildPublicDossierView(layaway, firstPayment),
-      schedule: layaway.schedule,
+      schedule: LayawayService.hasSchedule(layaway) ? layaway.schedule : null,
       vehicle: layaway.vehicleId,
     });
   } catch (error) {
@@ -179,7 +212,8 @@ exports.getMySchedule = async (req, res) => {
     return res.status(200).json({
       success: true,
       layawayId: layaway._id,
-      schedule: layaway.schedule,
+      scheduleDefined: LayawayService.hasSchedule(layaway),
+      schedule: LayawayService.hasSchedule(layaway) ? layaway.schedule : null,
       aggregates: layaway.aggregates,
     });
   } catch (error) {

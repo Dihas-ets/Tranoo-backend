@@ -1,7 +1,6 @@
 const mongoose = require('mongoose');
 const Article = require('../../models/Article');
 const Layaway = require('../../models/Layaway');
-const GuaranteeService = require('./GuaranteeService');
 const ScheduleService = require('./ScheduleService');
 const { computeFirstPayment } = require('./ScheduleService');
 const { transition } = require('./LayawayStateMachine');
@@ -33,6 +32,24 @@ function layawayError(message, code, status = 400, meta) {
   err.status = status;
   if (meta) err.meta = meta;
   return err;
+}
+
+function hasSchedule(layaway) {
+  return Boolean(
+    layaway?.schedule?.definedAt ||
+      (layaway?.schedule?.numberOfInstallments > 0 &&
+        Array.isArray(layaway?.schedule?.installments) &&
+        layaway.schedule.installments.length > 0),
+  );
+}
+
+function computeTourProgress(installments = []) {
+  const list = installments || [];
+  const toursPaid = list.filter((i) => i.status === 'PAID').length;
+  const toursRemaining = list.filter((i) =>
+    ['PENDING', 'PARTIALLY_PAID', 'OVERDUE'].includes(i.status),
+  ).length;
+  return { toursPaid, toursRemaining };
 }
 
 function normalizeCustomsCase(raw) {
@@ -106,62 +123,69 @@ function validateFrequencyAndDuration(settings, frequency, durationMonths) {
 }
 
 /**
- * Calcule devis / garantie / échéancier / 1er règlement sans persister.
- * Entrée client : vehicleId, customsCase, frequency, durationMonths [, startDate]
+ * Calcule devis + échéancier (tours) sans garantie, sans persister.
  */
-async function buildPlan({
+async function buildSchedulePlan({
   vehicleId,
   customsCase: customsCaseRaw,
   frequency,
   durationMonths,
   startDate,
+  quote: quoteOverride,
+  settings: settingsOverride,
 }) {
-  if (!vehicleId || !mongoose.isValidObjectId(vehicleId)) {
-    throw layawayError('vehicleId invalide', 'LAYAWAY_INVALID_VEHICLE');
-  }
-
-  const vehicle = await Article.findById(vehicleId);
-  assertLayawayVehicle(vehicle);
-
-  if (vehicle.layawayPublicationStatus !== 'PUBLIE') {
-    throw layawayError(
-      'Véhicule non disponible au Layaway',
-      'LAYAWAY_VEHICLE_NOT_AVAILABLE',
-      409,
-    );
-  }
-
-  const settings = await ensureSettingsDoc();
-  const customsCase = normalizeCustomsCase(customsCaseRaw);
+  const settings = settingsOverride || (await ensureSettingsDoc());
   const { frequency: freq, durationMonths: duration } = validateFrequencyAndDuration(
     settings,
     frequency,
     durationMonths,
   );
 
-  const quote = resolveQuote(vehicle, customsCase);
-  const guarantee = GuaranteeService.calculate(
-    quote,
-    settings.guaranteePercentage,
-  );
+  let quote = quoteOverride;
+  let vehicle = null;
+  let customsCase = customsCaseRaw ? normalizeCustomsCase(customsCaseRaw) : null;
+
+  if (quote == null) {
+    if (!vehicleId || !mongoose.isValidObjectId(vehicleId)) {
+      throw layawayError('vehicleId invalide', 'LAYAWAY_INVALID_VEHICLE');
+    }
+    vehicle = await Article.findById(vehicleId);
+    assertLayawayVehicle(vehicle);
+    if (vehicle.layawayPublicationStatus !== 'PUBLIE') {
+      throw layawayError(
+        'Véhicule non disponible au Layaway',
+        'LAYAWAY_VEHICLE_NOT_AVAILABLE',
+        409,
+      );
+    }
+    customsCase = normalizeCustomsCase(customsCaseRaw);
+    quote = resolveQuote(vehicle, customsCase);
+  }
+
   const schedule = ScheduleService.generate({
     totalAmount: quote,
     startDate: startDate || new Date(),
     durationMonths: duration,
     frequency: freq,
   });
-  const firstPayment = computeFirstPayment(guarantee.amount, schedule);
+  const firstPayment = computeFirstPayment(schedule);
 
   return {
     vehicle,
     settings,
     customsCase,
     quote,
-    guarantee,
     schedule,
     firstPayment,
     appliedParameters: toAppliedParameters(settings),
+    durationMonths: duration,
+    frequency: freq,
   };
+}
+
+/** @deprecated alias — preview utilise buildSchedulePlan */
+async function buildPlan(input) {
+  return buildSchedulePlan(input);
 }
 
 async function assertNoOpenDossierOnVehicle(vehicleId) {
@@ -179,9 +203,6 @@ async function assertNoOpenDossierOnVehicle(vehicleId) {
   }
 }
 
-/**
- * Réserve atomiquement un véhicule PUBLIE → RESERVE.
- */
 async function reserveVehicle(vehicleId) {
   const updated = await Article.findOneAndUpdate(
     {
@@ -223,9 +244,9 @@ async function releaseVehicleReservation(vehicleId) {
   );
 }
 
-function serializePlan(plan, durationMonths) {
+function serializePlan(plan) {
   return {
-    vehicleId: plan.vehicle._id,
+    vehicleId: plan.vehicle?._id || null,
     customsCase: plan.customsCase,
     pricing: {
       quote: plan.quote,
@@ -233,14 +254,9 @@ function serializePlan(plan, durationMonths) {
       currency: plan.appliedParameters.currency || 'XOF',
       customsCase: plan.customsCase,
     },
-    guarantee: {
-      percentage: plan.guarantee.percentage,
-      calculationBase: plan.guarantee.calculationBase,
-      amount: plan.guarantee.amount,
-    },
     schedule: {
-      frequency: plan.schedule.frequency,
-      durationMonths,
+      frequency: plan.frequency || plan.schedule.frequency,
+      durationMonths: plan.durationMonths,
       startDate: plan.schedule.startDate,
       endDate: plan.schedule.endDate,
       numberOfInstallments: plan.schedule.numberOfInstallments,
@@ -252,105 +268,172 @@ function serializePlan(plan, durationMonths) {
 }
 
 /**
- * Prévisualisation : calculs backend, rien n'est enregistré.
+ * Prévisualisation échéancier (après choix fréquence/durée) — sans garantie.
  */
 async function previewCreation(input) {
-  const plan = await buildPlan(input);
-  const { frequency, durationMonths } = validateFrequencyAndDuration(
-    plan.settings,
-    input.frequency,
-    input.durationMonths,
-  );
-  const payload = serializePlan(plan, durationMonths);
-  payload.schedule.frequency = frequency;
-  return payload;
+  const plan = await buildSchedulePlan(input);
+  return serializePlan(plan);
 }
 
 /**
- * Création dossier :
- * choix client → calcul backend → snapshot → échéancier persisté → CONTRAT_EN_ATTENTE
- * véhicule PUBLIE → RESERVE
+ * Création dossier : sélection véhicule + cas douane uniquement.
+ * → réserve véhicule, snapshot devis/params, CONTRAT_EN_ATTENTE, sans échéancier.
  */
-async function createDossier({
-  buyerId,
-  vehicleId,
-  customsCase,
-  frequency,
-  durationMonths,
-  startDate,
-}) {
+async function createDossier({ buyerId, vehicleId, customsCase: customsCaseRaw }) {
   if (!buyerId) {
     throw layawayError('Acheteur requis', 'LAYAWAY_BUYER_REQUIRED', 401);
   }
+  if (!vehicleId || !mongoose.isValidObjectId(vehicleId)) {
+    throw layawayError('vehicleId invalide', 'LAYAWAY_INVALID_VEHICLE');
+  }
 
-  // Rejeter tout montant client éventuel (sécurité)
-  const plan = await buildPlan({
-    vehicleId,
-    customsCase,
-    frequency,
-    durationMonths,
-    startDate,
-  });
+  const vehicle = await Article.findById(vehicleId);
+  assertLayawayVehicle(vehicle);
+
+  if (vehicle.layawayPublicationStatus !== 'PUBLIE') {
+    throw layawayError(
+      'Véhicule non disponible au Layaway',
+      'LAYAWAY_VEHICLE_NOT_AVAILABLE',
+      409,
+    );
+  }
+
+  const settings = await ensureSettingsDoc();
+  const customsCase = normalizeCustomsCase(customsCaseRaw);
+  const quote = resolveQuote(vehicle, customsCase);
+  const appliedParameters = toAppliedParameters(settings);
 
   await assertNoOpenDossierOnVehicle(vehicleId);
   await reserveVehicle(vehicleId);
 
   try {
-    const duration = Math.round(Number(durationMonths));
     const layaway = new Layaway({
       buyerId,
       vehicleId,
-      sellerId: plan.vehicle.vendeur || null,
+      sellerId: vehicle.vendeur || null,
       pricing: {
-        sellerPrice: plan.vehicle.prix ?? null,
+        sellerPrice: vehicle.prix ?? null,
         tranooMargin: null,
         additionalFees: 0,
-        customsCase: plan.customsCase,
-        quote: plan.quote,
-        totalAmount: plan.quote,
-        currency: plan.appliedParameters.currency || 'XOF',
+        customsCase,
+        quote,
+        totalAmount: quote,
+        currency: appliedParameters.currency || 'XOF',
       },
       guarantee: {
-        percentage: plan.guarantee.percentage,
-        calculationBase: plan.guarantee.calculationBase,
-        amount: plan.guarantee.amount,
-        status: 'PENDING',
+        percentage: 0,
+        calculationBase: 0,
+        amount: 0,
+        status: 'NONE',
       },
       schedule: {
-        frequency: plan.schedule.frequency,
-        durationMonths: duration,
-        startDate: plan.schedule.startDate,
-        endDate: plan.schedule.endDate,
-        numberOfInstallments: plan.schedule.numberOfInstallments,
-        installments: plan.schedule.installments,
+        frequency: null,
+        durationMonths: null,
+        startDate: null,
+        endDate: null,
+        numberOfInstallments: null,
+        installments: [],
+        definedAt: null,
       },
-      appliedParameters: plan.appliedParameters,
+      appliedParameters,
       contract: {
         status: 'PENDING',
-        documentUrl: plan.settings.defaultContractDocumentUrl || null,
+        documentUrl: settings.defaultContractDocumentUrl || null,
       },
       status: 'BROUILLON',
       aggregates: {
         totalInstallmentsPaid: 0,
-        remainingScheduleBalance: plan.quote,
+        remainingScheduleBalance: quote,
         paidPercentage: 0,
+        toursPaid: 0,
+        toursRemaining: 0,
       },
     });
 
-    // BROUILLON → CONTRAT_EN_ATTENTE
     transition('BROUILLON', 'CONTRAT_EN_ATTENTE');
     layaway.status = 'CONTRAT_EN_ATTENTE';
 
     await layaway.save();
 
-    return {
-      layaway,
-      firstPayment: plan.firstPayment,
-    };
+    return { layaway, firstPayment: null };
   } catch (error) {
     await releaseVehicleReservation(vehicleId);
     throw error;
   }
+}
+
+/**
+ * Définition de l'échéancier (tours) après signature du contrat.
+ */
+async function defineSchedule(layawayId, buyerId, { frequency, durationMonths, startDate } = {}) {
+  if (!mongoose.isValidObjectId(layawayId)) {
+    throw layawayError('Dossier introuvable', 'LAYAWAY_NOT_FOUND', 404);
+  }
+  const layaway = await Layaway.findById(layawayId);
+  if (!layaway) {
+    throw layawayError('Dossier introuvable', 'LAYAWAY_NOT_FOUND', 404);
+  }
+  if (String(layaway.buyerId) !== String(buyerId)) {
+    throw layawayError('Accès refusé', 'LAYAWAY_FORBIDDEN', 403);
+  }
+
+  if (layaway.status !== 'CONTRAT_SIGNE') {
+    throw layawayError(
+      'L’échéancier ne peut être défini qu’après signature du contrat',
+      'LAYAWAY_SCHEDULE_DEFINE_FORBIDDEN',
+      409,
+      { status: layaway.status },
+    );
+  }
+  if (layaway.contract?.status !== 'SIGNED') {
+    throw layawayError('Contrat non signé', 'LAYAWAY_CONTRACT_NOT_SIGNED', 409);
+  }
+  if (hasSchedule(layaway)) {
+    throw layawayError(
+      'Échéancier déjà défini',
+      'LAYAWAY_SCHEDULE_ALREADY_DEFINED',
+      409,
+    );
+  }
+  if (layaway.breach?.breachedAt) {
+    throw layawayError(
+      'Dossier rompu : échéancier impossible',
+      'LAYAWAY_BREACHED',
+      409,
+    );
+  }
+
+  const settings = await ensureSettingsDoc();
+  const plan = await buildSchedulePlan({
+    frequency,
+    durationMonths,
+    startDate,
+    quote: layaway.pricing.totalAmount,
+    settings,
+  });
+
+  const now = new Date();
+  const tours = computeTourProgress(plan.schedule.installments);
+
+  layaway.schedule = {
+    frequency: plan.frequency,
+    durationMonths: plan.durationMonths,
+    startDate: plan.schedule.startDate,
+    endDate: plan.schedule.endDate,
+    numberOfInstallments: plan.schedule.numberOfInstallments,
+    installments: plan.schedule.installments,
+    definedAt: now,
+  };
+  layaway.aggregates.remainingScheduleBalance = plan.quote;
+  layaway.aggregates.toursPaid = tours.toursPaid;
+  layaway.aggregates.toursRemaining = tours.toursRemaining;
+
+  await layaway.save();
+
+  return {
+    layaway,
+    firstPayment: plan.firstPayment,
+  };
 }
 
 async function getDossierForBuyer(layawayId, buyerId) {
@@ -380,24 +463,25 @@ async function listDossiersForBuyer(buyerId, { status } = {}) {
 function buildPublicDossierView(layaway, firstPayment) {
   const totalAmount = layaway.pricing.totalAmount;
   const paid = layaway.aggregates.totalInstallmentsPaid || 0;
+  const scheduleDefined = hasSchedule(layaway);
+  const tours = computeTourProgress(layaway.schedule?.installments);
+
   return {
     id: layaway._id,
     status: layaway.status,
     vehicleId: layaway.vehicleId,
     pricing: layaway.pricing,
-    guarantee: {
-      percentage: layaway.guarantee.percentage,
-      calculationBase: layaway.guarantee.calculationBase,
-      amount: layaway.guarantee.amount,
-      status: layaway.guarantee.status,
-    },
-    schedule: {
-      frequency: layaway.schedule.frequency,
-      durationMonths: layaway.schedule.durationMonths,
-      startDate: layaway.schedule.startDate,
-      endDate: layaway.schedule.endDate,
-      numberOfInstallments: layaway.schedule.numberOfInstallments,
-    },
+    scheduleDefined,
+    schedule: scheduleDefined
+      ? {
+          frequency: layaway.schedule.frequency,
+          durationMonths: layaway.schedule.durationMonths,
+          startDate: layaway.schedule.startDate,
+          endDate: layaway.schedule.endDate,
+          numberOfInstallments: layaway.schedule.numberOfInstallments,
+          definedAt: layaway.schedule.definedAt || null,
+        }
+      : null,
     contract: {
       status: layaway.contract?.status || 'NONE',
       documentUrl: layaway.contract?.documentUrl || null,
@@ -413,7 +497,19 @@ function buildPublicDossierView(layaway, firstPayment) {
       remainingScheduleBalance:
         layaway.aggregates.remainingScheduleBalance ?? totalAmount - paid,
       paidPercentage: layaway.aggregates.paidPercentage || 0,
+      toursPaid: layaway.aggregates.toursPaid ?? tours.toursPaid,
+      toursRemaining: layaway.aggregates.toursRemaining ?? tours.toursRemaining,
     },
+    breach: layaway.breach?.breachedAt
+      ? {
+          reason: layaway.breach.reason,
+          breachedAt: layaway.breach.breachedAt,
+          retentionPercentage: layaway.breach.retentionPercentage,
+          retentionAmount: layaway.breach.retentionAmount,
+          refundAmount: layaway.breach.refundAmount,
+          totalPaid: layaway.breach.totalPaid,
+        }
+      : null,
     delivery: {
       status: layaway.delivery?.status || 'NONE',
       submittedAt: layaway.delivery?.submittedAt || null,
@@ -449,13 +545,18 @@ function buildPublicDossierView(layaway, firstPayment) {
 module.exports = {
   CUSTOMS_CASES,
   OPEN_DOSSIER_STATUSES,
+  hasSchedule,
+  computeTourProgress,
   buildPlan,
+  buildSchedulePlan,
   previewCreation,
   createDossier,
+  defineSchedule,
   getDossierForBuyer,
   listDossiersForBuyer,
   buildPublicDossierView,
   computeFirstPaymentFromDoc(layaway) {
-    return computeFirstPayment(layaway.guarantee.amount, layaway.schedule);
+    if (!hasSchedule(layaway)) return null;
+    return computeFirstPayment(layaway.schedule);
   },
 };

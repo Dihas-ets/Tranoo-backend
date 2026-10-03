@@ -1,7 +1,7 @@
 /**
- * Allocation des paiements Layaway.
- * Règle : on refuse un montant < minimum dû ;
- * un surplus est appliqué aux échéances suivantes (dans l'ordre).
+ * Allocation des paiements Layaway (tours / installments uniquement).
+ * Règle : on refuse un montant < minimum dû (prochain tour) ;
+ * un surplus est appliqué aux tours suivants (dans l'ordre).
  */
 
 function paymentAllocError(message, code, status = 400, meta) {
@@ -16,8 +16,17 @@ function roundXof(n) {
   return Math.round(Number(n) || 0);
 }
 
+function computeTourProgress(installments = []) {
+  const list = installments || [];
+  const toursPaid = list.filter((i) => i.status === 'PAID').length;
+  const toursRemaining = list.filter((i) =>
+    ['PENDING', 'PARTIALLY_PAID', 'OVERDUE'].includes(i.status),
+  ).length;
+  return { toursPaid, toursRemaining };
+}
+
 /**
- * Prochaine échéance non soldée (PENDING / PARTIALLY_PAID / OVERDUE), par sequence.
+ * Prochain tour non soldé (PENDING / PARTIALLY_PAID / OVERDUE), par sequence.
  */
 function getNextOpenInstallment(installments) {
   const list = [...(installments || [])].sort((a, b) => a.sequence - b.sequence);
@@ -35,32 +44,17 @@ function installmentRemaining(inst) {
   return Math.max(0, roundXof(inst.amount) - paid);
 }
 
-function unpaidGuarantee(layaway) {
-  if (!layaway?.guarantee) return 0;
-  if (layaway.guarantee.status === 'PAID') return 0;
-  return Math.max(0, roundXof(layaway.guarantee.amount));
+/** @deprecated Garantie retirée — toujours 0 */
+function unpaidGuarantee() {
+  return 0;
 }
 
 /**
- * Minimum accepté pour un paiement.
- * - Premier règlement (garantie non payée) : garantie + 1ère échéance restante
- * - Ensuite : montant restant de la prochaine échéance ouverte
+ * Minimum accepté = montant restant du prochain tour ouvert.
  */
 function computeMinimumDue(layaway) {
-  const g = unpaidGuarantee(layaway);
   const next = getNextOpenInstallment(layaway.schedule?.installments);
   const nextRem = installmentRemaining(next);
-
-  if (g > 0) {
-    // Premier règlement : garantie + première échéance
-    return {
-      minimumAmount: g + nextRem,
-      guaranteeDue: g,
-      installmentDue: nextRem,
-      targetInstallmentSequence: next?.sequence ?? null,
-      kind: 'FIRST',
-    };
-  }
 
   if (!next || nextRem <= 0) {
     return {
@@ -72,38 +66,35 @@ function computeMinimumDue(layaway) {
     };
   }
 
+  const isFirstTour = next.sequence === 1 && roundXof(next.paidAmount) === 0;
+
   return {
     minimumAmount: nextRem,
     guaranteeDue: 0,
     installmentDue: nextRem,
     targetInstallmentSequence: next.sequence,
-    kind: 'INSTALLMENT',
+    kind: isFirstTour ? 'FIRST_TOUR' : 'TOUR',
   };
 }
 
 /**
- * Plafond = garantie impayée + solde échéancier restant.
+ * Plafond = solde échéancier restant.
  */
 function computeMaximumPayable(layaway) {
-  const g = unpaidGuarantee(layaway);
-  const scheduleRemaining = (layaway.schedule?.installments || []).reduce(
+  return (layaway.schedule?.installments || []).reduce(
     (acc, inst) => acc + installmentRemaining(inst),
     0,
   );
-  return g + scheduleRemaining;
 }
 
 /**
  * Valide le montant proposé par l'acheteur.
- * - amount omis → minimum
- * - amount < minimum → rejet
- * - amount > maximum → rejet
  */
 function resolvePayableAmount(layaway, requestedAmount) {
   const minInfo = computeMinimumDue(layaway);
   if (minInfo.kind === 'NONE' || minInfo.minimumAmount <= 0) {
     throw paymentAllocError(
-      'Aucune échéance à payer sur ce dossier',
+      'Aucun tour à payer sur ce dossier',
       'LAYAWAY_NOTHING_TO_PAY',
       409,
     );
@@ -128,7 +119,6 @@ function resolvePayableAmount(layaway, requestedAmount) {
       {
         minimumAmount: minInfo.minimumAmount,
         requestedAmount: amount,
-        guaranteeDue: minInfo.guaranteeDue,
         installmentDue: minInfo.installmentDue,
       },
     );
@@ -147,26 +137,11 @@ function resolvePayableAmount(layaway, requestedAmount) {
 }
 
 /**
- * Répartit un montant confirmé : garantie d'abord, puis échéances dans l'ordre.
- * Ne mute pas le dossier — retourne un plan d'allocation.
- *
- * @returns {{
- *   guaranteeAmount: number,
- *   installmentAmount: number,
- *   allocations: Array<{ sequence: number, amount: number, installmentId?: string }>,
- *   leftover: number
- * }}
+ * Répartit un montant confirmé sur les tours dans l'ordre.
  */
 function planAllocation(layaway, paidAmount) {
   let remaining = roundXof(paidAmount);
-  let guaranteeAmount = 0;
   const allocations = [];
-
-  const gDue = unpaidGuarantee(layaway);
-  if (gDue > 0 && remaining > 0) {
-    guaranteeAmount = Math.min(gDue, remaining);
-    remaining -= guaranteeAmount;
-  }
 
   const installments = [...(layaway.schedule?.installments || [])].sort(
     (a, b) => a.sequence - b.sequence,
@@ -186,7 +161,7 @@ function planAllocation(layaway, paidAmount) {
   }
 
   return {
-    guaranteeAmount,
+    guaranteeAmount: 0,
     installmentAmount: allocations.reduce((a, x) => a + x.amount, 0),
     allocations,
     leftover: remaining,
@@ -197,11 +172,6 @@ function planAllocation(layaway, paidAmount) {
  * Applique le plan sur le document Layaway (mutation in-place, non sauvegardée).
  */
 function applyAllocationToLayaway(layaway, plan, paidAt = new Date()) {
-  if (plan.guaranteeAmount > 0) {
-    layaway.guarantee.status = 'PAID';
-    layaway.guarantee.paidAt = paidAt;
-  }
-
   const bySeq = new Map(
     (layaway.schedule?.installments || []).map((i) => [i.sequence, i]),
   );
@@ -216,7 +186,6 @@ function applyAllocationToLayaway(layaway, plan, paidAt = new Date()) {
       inst.status = 'PAID';
       inst.paidAt = paidAt;
     } else if (inst.status === 'OVERDUE') {
-      // Garde OVERDUE si partiel après retard (le cron / DelayService gère la suite)
       inst.status = 'OVERDUE';
     } else {
       inst.status = 'PARTIALLY_PAID';
@@ -232,15 +201,21 @@ function applyAllocationToLayaway(layaway, plan, paidAt = new Date()) {
     0,
   );
   const totalAmount = roundXof(layaway.pricing.totalAmount);
+  const tours = computeTourProgress(layaway.schedule.installments);
+
   layaway.aggregates.totalInstallmentsPaid = totalPaid;
   layaway.aggregates.remainingScheduleBalance = Math.max(0, totalAmount - totalPaid);
   layaway.aggregates.paidPercentage =
     totalAmount > 0 ? Math.min(100, Math.round((totalPaid / totalAmount) * 10000) / 100) : 0;
+  layaway.aggregates.toursPaid = tours.toursPaid;
+  layaway.aggregates.toursRemaining = tours.toursRemaining;
 
   return {
     allInstallmentsPaid: layaway.aggregates.remainingScheduleBalance === 0,
     totalInstallmentsPaid: totalPaid,
     paidPercentage: layaway.aggregates.paidPercentage,
+    toursPaid: tours.toursPaid,
+    toursRemaining: tours.toursRemaining,
   };
 }
 

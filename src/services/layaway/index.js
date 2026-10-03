@@ -9,6 +9,7 @@ module.exports = {
   LayawayPaymentAllocation: require('./LayawayPaymentAllocation'),
   LayawayPaymentService: require('./LayawayPaymentService'),
   DelayService: require('./DelayService'),
+  LayawayBreachService: require('./LayawayBreachService'),
   LayawayDeliveryService: require('./LayawayDeliveryService'),
   LayawayPayoutService: require('./LayawayPayoutService'),
   LayawayClosureService: require('./LayawayClosureService'),

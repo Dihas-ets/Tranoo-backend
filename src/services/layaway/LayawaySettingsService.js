@@ -12,6 +12,7 @@ async function ensureSettingsDoc() {
 
 function serialize(doc) {
   return {
+    /** @deprecated Non utilisé par le flux métier */
     guaranteePercentage: doc.guaranteePercentage,
     retentionPercentage: doc.retentionPercentage,
     maxDurationMonths: doc.maxDurationMonths,
@@ -31,7 +32,6 @@ function serialize(doc) {
  */
 function toAppliedParameters(doc) {
   return {
-    guaranteePercentage: doc.guaranteePercentage,
     retentionPercentage: doc.retentionPercentage,
     maxDurationMonths: doc.maxDurationMonths,
     delayGracePeriodDays: doc.delayGracePeriodDays,

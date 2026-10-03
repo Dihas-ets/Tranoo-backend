@@ -8,6 +8,7 @@ const STATUSES = Object.freeze([
   'CONTRAT_SIGNE',
   'ACTIF',
   'EN_RETARD',
+  /** @deprecated Remplacé par rupture auto → ANNULE ; conservé pour docs legacy */
   'GELE',
   'PAIEMENT_COMPLET',
   'REMISE_EN_ATTENTE',
@@ -27,15 +28,15 @@ const TRANSITIONS = Object.freeze({
     'EN_RETARD',
     'PAIEMENT_COMPLET',
     'ANNULATION_DEMANDEE',
-    'GELE',
+    'ANNULE',
   ]),
-  EN_RETARD: new Set(['ACTIF', 'GELE', 'PAIEMENT_COMPLET', 'ANNULATION_DEMANDEE']),
+  EN_RETARD: new Set(['ACTIF', 'PAIEMENT_COMPLET', 'ANNULATION_DEMANDEE', 'ANNULE']),
+  // Legacy : sortie uniquement vers annulation / rupture
   GELE: new Set(['ACTIF', 'ANNULATION_DEMANDEE', 'ANNULE']),
   PAIEMENT_COMPLET: new Set(['REMISE_EN_ATTENTE']),
   REMISE_EN_ATTENTE: new Set(['REMISE_VALIDEE']),
   REMISE_VALIDEE: new Set(['CLOTURE']),
   CLOTURE: new Set([]),
-  // Rejet demande → retour au statut précédent (snapshot cancellation.previousStatus)
   ANNULATION_DEMANDEE: new Set([
     'REMBOURSEMENT_EN_COURS',
     'ACTIF',

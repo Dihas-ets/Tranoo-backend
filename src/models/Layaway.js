@@ -20,7 +20,7 @@ const installmentSchema = new mongoose.Schema(
   { _id: true },
 );
 
-/** Historique des retards (une entrée ouverte par échéance en défaut). */
+/** Historique des retards (une entrée ouverte par échéance / tour en défaut). */
 const delaySchema = new mongoose.Schema(
   {
     installmentSequence: { type: Number, required: true },
@@ -36,6 +36,8 @@ const delaySchema = new mongoose.Schema(
       index: true,
     },
     notifiedOverdueAt: { type: Date, default: null },
+    /** Deadline de régularisation = notifiedOverdueAt + defaultThresholdMonths */
+    regularizationDeadlineAt: { type: Date, default: null, index: true },
   },
   { _id: true },
 );
@@ -70,35 +72,42 @@ const layawaySchema = new mongoose.Schema(
       currency: { type: String, default: 'XOF' },
     },
 
+    /**
+     * @deprecated Garantie retirée de la logique finalisée.
+     * Conservé optionnel pour docs legacy ; nouveaux dossiers n'utilisent plus ce bloc.
+     */
     guarantee: {
-      percentage: { type: Number, required: true },
-      calculationBase: { type: Number, required: true },
-      amount: { type: Number, required: true },
+      percentage: { type: Number, default: 0 },
+      calculationBase: { type: Number, default: 0 },
+      amount: { type: Number, default: 0 },
       status: {
         type: String,
-        enum: ['PENDING', 'PAID', 'REFUNDED', 'RETAINED', 'RELEASED'],
-        default: 'PENDING',
+        enum: ['PENDING', 'PAID', 'REFUNDED', 'RETAINED', 'RELEASED', 'NONE'],
+        default: 'NONE',
       },
       paidAt: { type: Date, default: null },
     },
 
+    /** Défini après signature via PUT schedule ; absent à la création. */
     schedule: {
-      frequency: { type: String, enum: FREQUENCIES, required: true },
-      durationMonths: { type: Number, required: true },
-      startDate: { type: Date, required: true },
-      endDate: { type: Date, required: true },
-      numberOfInstallments: { type: Number, required: true },
+      frequency: { type: String, enum: [...FREQUENCIES, null], default: null },
+      durationMonths: { type: Number, default: null },
+      startDate: { type: Date, default: null },
+      endDate: { type: Date, default: null, index: true },
+      numberOfInstallments: { type: Number, default: null },
       installments: { type: [installmentSchema], default: [] },
+      definedAt: { type: Date, default: null },
     },
 
     appliedParameters: {
-      guaranteePercentage: Number,
       retentionPercentage: Number,
       maxDurationMonths: Number,
       delayGracePeriodDays: Number,
       defaultThresholdMonths: Number,
       currency: String,
       snapshottedAt: { type: Date, default: Date.now },
+      /** @deprecated */
+      guaranteePercentage: Number,
     },
 
     contract: {
@@ -111,9 +120,7 @@ const layawaySchema = new mongoose.Schema(
       signedDocumentUrl: { type: String, default: null },
       signerFirstName: { type: String, default: null },
       signerLastName: { type: String, default: null },
-      /** Image / traits de signature (data URL base64 ou URL Cloudinary) */
       signatureData: { type: String, default: null },
-      /** Pièce d'identité collectée à la signature du contrat */
       idDocumentUrl: { type: String, default: null },
       signedAt: { type: Date, default: null },
       signedByUserId: {
@@ -136,33 +143,46 @@ const layawaySchema = new mongoose.Schema(
       totalInstallmentsPaid: { type: Number, default: 0 },
       remainingScheduleBalance: { type: Number, default: null },
       paidPercentage: { type: Number, default: 0 },
+      /** Tours (= installments) soldés */
+      toursPaid: { type: Number, default: 0 },
+      /** Tours encore à payer */
+      toursRemaining: { type: Number, default: 0 },
     },
 
     delays: { type: [delaySchema], default: [] },
 
-    /** Date de passage en GELE (cron seuil défaut). */
+    /**
+     * Rupture automatique (retard non régularisé / fin échéancier sans objectif).
+     */
+    breach: {
+      reason: {
+        type: String,
+        enum: ['DELAY_WINDOW_EXPIRED', 'SCHEDULE_ENDED_UNPAID', null],
+        default: null,
+      },
+      breachedAt: { type: Date, default: null },
+      retentionPercentage: { type: Number, default: null },
+      retentionAmount: { type: Number, default: null },
+      refundAmount: { type: Number, default: null },
+      totalPaid: { type: Number, default: null },
+      currency: { type: String, default: null },
+    },
+
+    /** @deprecated Ancien gel — remplacé par breach / ANNULE */
     frozenAt: { type: Date, default: null },
-    /** Dernière notif gel (anti-spam). */
     notifiedFrozenAt: { type: Date, default: null },
 
-    /**
-     * Remise véhicule (preuves + validation Tranoo).
-     * status: NONE | SUBMITTED | VALIDATED | REJECTED
-     */
     delivery: {
       status: {
         type: String,
         enum: ['NONE', 'SUBMITTED', 'VALIDATED', 'REJECTED'],
         default: 'NONE',
       },
-      /** URL du PV de remise (document) */
       pvUrl: { type: String, default: null },
-      /** Signature acheteur du PV (data URL / URL) — obligatoire à la soumission */
       signatureData: { type: String, default: null },
       signerFirstName: { type: String, default: null },
       signerLastName: { type: String, default: null },
       signedAt: { type: Date, default: null },
-      /** @deprecated photos / pièce ID : pièce collectée au contrat ; photos hors scope actuel */
       photoUrls: { type: [String], default: [] },
       idDocumentUrl: { type: String, default: null },
       notes: { type: String, default: null },
@@ -188,10 +208,6 @@ const layawaySchema = new mongoose.Schema(
       rejectionReason: { type: String, default: null },
     },
 
-    /**
-     * Payout vendeur — interdit tant que remise ≠ VALIDATED.
-     * status: BLOCKED | ELIGIBLE | PAID
-     */
     payout: {
       status: {
         type: String,
@@ -211,7 +227,6 @@ const layawaySchema = new mongoose.Schema(
       notes: { type: String, default: null },
     },
 
-    /** Facture finale (émise à la clôture, pas au seul 100 % payé). */
     invoice: {
       invoiceNumber: { type: String, default: null },
       amount: { type: Number, default: null },
@@ -224,10 +239,6 @@ const layawaySchema = new mongoose.Schema(
       },
     },
 
-    /**
-     * Annulation / remboursement.
-     * Modes payout client : BANK_TRANSFER | CHECK uniquement.
-     */
     cancellation: {
       status: {
         type: String,
@@ -242,10 +253,8 @@ const layawaySchema = new mongoose.Schema(
         ref: 'User',
         default: null,
       },
-      /** Snapshot calcul retenue au moment de la demande / approbation */
       totalPaid: { type: Number, default: null },
       retentionPercentage: { type: Number, default: null },
-      /** TODO métier : base exacte (MVP = totalPaid) */
       retentionBase: { type: Number, default: null },
       retentionAmount: { type: Number, default: null },
       refundAmount: { type: Number, default: null },
@@ -298,5 +307,6 @@ const layawaySchema = new mongoose.Schema(
 layawaySchema.index({ buyerId: 1, status: 1 });
 layawaySchema.index({ vehicleId: 1, status: 1 });
 layawaySchema.index({ createdAt: -1 });
+layawaySchema.index({ 'breach.breachedAt': 1 });
 
 module.exports = mongoose.model('Layaway', layawaySchema);
