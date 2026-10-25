@@ -280,6 +280,7 @@ const userSchema = new mongoose.Schema({
   blockedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   langue: { type: String, default: 'fr' },
   devise: { type: String, default: 'XOF' },
+  prospect: { type: Boolean, default: false },
   dateInscription: { type: Date, default: Date.now },
   dernierAcces: { type: Date },
   /** Horodatage de dernière visite des sections du dashboard admin (badges nav). */

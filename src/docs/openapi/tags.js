@@ -32,6 +32,7 @@ module.exports = [
   { name: 'Tarifs Parrainage', description: 'Grille tarifaire parrainage (admin).' },
   { name: 'Agents Commerciaux', description: 'Dashboard agents Tranoo / Pro, leaderboard, admin.' },
   { name: 'Vues & Statistiques', description: 'Compteurs vues articles.' },
+  { name: 'Prospects paiement échelonné', description: 'Suivi des clics et des utilisateurs intéressés.' },
   { name: 'Admin — Tarifs', description: 'Tarifs pub, abonnement, vérification véhicule.' },
   { name: 'Admin — Documents', description: 'Documents partagés dashboard admin.' },
 ];

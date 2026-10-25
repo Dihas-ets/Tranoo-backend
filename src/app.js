@@ -36,7 +36,8 @@ dotenv.config();
 // IMPORTANT (prod): ne pas dépendre uniquement d'un fichier local qui peut manquer sur le serveur.
 // On supporte 2 modes:
 // - FIREBASE_SERVICE_ACCOUNT_JSON: JSON complet (string) du service account
-// - ./firebaseServiceAccountKey.json: fichier à côté de ce module
+// - GOOGLE_APPLICATION_CREDENTIALS: chemin vers le JSON du service account
+// - ./firebaseServiceAccountKey.json: fichier local à côté de ce module
 function loadServiceAccount() {
   // 1) via variable d'env (recommandé en prod)
   const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
@@ -48,14 +49,17 @@ function loadServiceAccount() {
     }
   }
 
-  // 2) via fichier local (dev)
-  const localPath = path.join(__dirname, 'firebaseServiceAccountKey.json');
+  // 2) via chemin configuré (dev/prod), puis fichier local (dev)
+  const configuredPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  const serviceAccountPath = configuredPath
+    ? path.resolve(configuredPath)
+    : path.join(__dirname, 'firebaseServiceAccountKey.json');
   try {
-    if (!fs.existsSync(localPath)) {
-      throw new Error(`Fichier service account introuvable: ${localPath}`);
+    if (!fs.existsSync(serviceAccountPath)) {
+      throw new Error(`Fichier service account introuvable: ${serviceAccountPath}`);
     }
     // require garde un cache; fs + JSON.parse évite les surprises lors des déploiements
-    const txt = fs.readFileSync(localPath, 'utf8');
+    const txt = fs.readFileSync(serviceAccountPath, 'utf8');
     return JSON.parse(txt);
   } catch (e) {
     console.error('[FCM] Impossible de charger la clé firebase admin:', e?.message || e);
@@ -284,6 +288,9 @@ global.io = io;
 
 global.userSockets = userSockets;
 
+app.get(['/', '/health'], (_req, res) => {
+  res.status(200).type('text/plain').send('API opérationnelle');
+});
 
 
 app.use(cors({
@@ -308,19 +315,32 @@ app.get('/api-docs.json', (_req, res) => {
 
 // Connexion à MongoDB
 
-mongoose.connect(process.env.MONGO_URI).then(() => console.log('MongoDB connecté'))
+let backgroundWorkersStarted = false;
+const startBackgroundWorkers = () => {
+  if (backgroundWorkersStarted) return;
+  backgroundWorkersStarted = true;
 
+  try {
+    const paymentController = require('./controllers/paymentController');
+    paymentController.startPaymentStatusWorker();
+  } catch (e) {
+    console.warn('Worker paiements non démarré:', e.message);
+  }
+
+  try {
+    const { startCronJobs } = require('./utils/cronJobs');
+    startCronJobs();
+  } catch (e) {
+    console.warn('Tâches automatiques publicités non démarrées:', e.message);
+  }
+};
+
+mongoose.connect(process.env.MONGO_URI)
+  .then(() => {
+    console.log('MongoDB connecté');
+    startBackgroundWorkers();
+  })
   .catch((err) => console.error('Erreur MongoDB:', err));
-
-
-
-// Routes publiques
-
-app.get('/', (_req, res) => {
-
-  res.send('API opérationnelle');
-
-});
 
 
 
@@ -337,6 +357,9 @@ app.use('/api/protected', authMiddleware, protectedRoutes);
 const authRoutes = require('./routes/auth');
 
 app.use('/api/auth', authRoutes); 
+
+const prospectRoutes = require('./routes/prospect');
+app.use('/api/prospects', prospectRoutes);
 
 // Auth events (mobile login/logout tracking)
 try {
@@ -655,25 +678,6 @@ server.listen(PORT, () => {
 
   console.log('🚀 WebSocket server (Socket.io) démarré et prêt à recevoir des connexions');
 
-  // Démarrer le worker de statut des paiements
-  try {
-    const paymentController = require('./controllers/paymentController');
-    paymentController.startPaymentStatusWorker();
-  } catch (e) {
-    console.warn('Worker paiements non démarré:', e.message);
-  }
-
-  // Démarrer les tâches automatiques pour les publicités
-  try {
-    const { startCronJobs } = require('./utils/cronJobs');
-    startCronJobs();
-  } catch (e) {
-    console.warn('Tâches automatiques publicités non démarrées:', e.message);
-  }
-
 });
-
-
-
 
 

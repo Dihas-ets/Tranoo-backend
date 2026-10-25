@@ -48,6 +48,7 @@ exports.register = async (req, res) => {
       authApp,
       countryCode,
       nationalNumber,
+      prospect,
     } = req.body;
 
     // Cas spécial : création d'admin ou agent commercial via dashboard (avec mot de passe)
@@ -396,6 +397,10 @@ exports.register = async (req, res) => {
     if (user) {
       console.log('[REGISTER] ✅ Utilisateur déjà enregistré dans MongoDB');
       console.log('[REGISTER] MongoDB _id:', user._id);
+      if (prospect === true && user.prospect !== true) {
+        user.prospect = true;
+        await user.save();
+      }
       return res.status(200).json({ message: 'Utilisateur déjà enregistré', user });
     }
     console.log('[REGISTER] Utilisateur non trouvé, création...');
@@ -448,6 +453,7 @@ exports.register = async (req, res) => {
       typeAgent: role === 'agentCommercial' ? (typeAgent || null) : null,
       dureeContratMois: role === 'agentCommercial' && statutContrat === 'CDD' ? (Number(dureeContratMois) || null) : null,
       statut: 'actif',
+      prospect: prospect === true,
       dateInscription: new Date(),
       // Ajouter les données véhicule si présentes (livreur/chauffeur)
       vehicule: vehicule && typeof vehicule === 'object' ? {

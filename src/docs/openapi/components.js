@@ -59,6 +59,10 @@ module.exports = {
         nationalNumber: { type: 'string' },
         app: { type: 'string', enum: ['tranoo', 'tranoo_pro'] },
         referralCode: { type: 'string' },
+        prospect: {
+          type: 'boolean',
+          description: 'À true si l’inscription suit un clic sur paiement échelonné.',
+        },
         fcmToken: { type: 'string' },
       },
     },
