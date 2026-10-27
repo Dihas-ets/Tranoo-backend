@@ -119,6 +119,18 @@ module.exports = {
         images: { type: 'array', items: { type: 'string' } },
         stock: { type: 'integer' },
         statut: { type: 'string' },
+        fraisSupplementaires: {
+          type: 'array',
+          description: 'Frais définis par un administrateur pour une voiture.',
+          items: {
+            type: 'object',
+            required: ['nom', 'montant'],
+            properties: {
+              nom: { type: 'string', maxLength: 100 },
+              montant: { type: 'integer', minimum: 1, description: 'Montant en FCFA.' },
+            },
+          },
+        },
       },
     },
     OrderInput: {

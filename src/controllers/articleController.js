@@ -101,7 +101,68 @@ function withVideoTransforms(doc) {
   if (!doc) return doc;
   const data = normalizeArticleViews(doc);
   const { videoOptimized, videoThumbnail } = buildCloudinaryVideoVariants(data.video);
-  return { ...data, videoOptimized, videoThumbnail };
+  const installmentEligible = isInstallmentEligible(data);
+  const articleData = { ...data };
+  delete articleData.createdByRole;
+  if (articleData.vendeur && typeof articleData.vendeur === 'object') {
+    const sellerData = { ...articleData.vendeur };
+    delete sellerData.role;
+    articleData.vendeur = sellerData;
+  }
+  return {
+    ...articleData,
+    videoOptimized,
+    videoThumbnail,
+    installmentEligible,
+  };
+}
+
+function isInstallmentEligible(article) {
+  const creatorRole =
+    article.createdByRole ||
+    (article.vendeur && typeof article.vendeur === 'object'
+      ? article.vendeur.role
+      : null);
+  return ['voiture', 'moto'].includes(article.type) && creatorRole === 'admin';
+}
+
+function normalizeAdditionalFees(fees) {
+  if (!Array.isArray(fees)) {
+    return { error: 'Les frais supplémentaires doivent être une liste.' };
+  }
+
+  const normalized = [];
+  for (const fee of fees) {
+    const nom = typeof fee?.nom === 'string' ? fee.nom.trim() : '';
+    const montant = Number(fee?.montant);
+    if (
+      !nom ||
+      nom.length > 100 ||
+      !Number.isSafeInteger(montant) ||
+      montant <= 0
+    ) {
+      return {
+        error: 'Chaque frais doit avoir un nom et un montant entier positif.',
+      };
+    }
+    normalized.push({ nom, montant });
+  }
+  return { fees: normalized };
+}
+
+async function isCreatedByAdmin(article) {
+  if (article.createdByRole) return article.createdByRole === 'admin';
+  const creatorId = article.vendeur?._id || article.vendeur;
+  if (!creatorId) return false;
+  const creatorIdString = String(creatorId);
+  let creator;
+  if (mongoose.Types.ObjectId.isValid(creatorIdString)) {
+    creator = await User.findById(creatorIdString).select('role').lean();
+  }
+  if (!creator) {
+    creator = await User.findOne({ uid: creatorIdString }).select('role').lean();
+  }
+  return creator?.role === 'admin';
 }
 
 async function hasSellerPieceAccess(userId) {
@@ -127,6 +188,25 @@ async function hasSellerPieceAccess(userId) {
 // Créer un article (voiture ou pièce)
 exports.createArticle = async (req, res) => {
   try {
+    let fraisSupplementaires;
+    if (Object.prototype.hasOwnProperty.call(req.body, 'fraisSupplementaires')) {
+      if (req.user?.role !== 'admin') {
+        return res.status(403).json({
+          message: 'Seul un administrateur peut définir des frais supplémentaires.',
+        });
+      }
+      if ((req.body.type || '').toString().toLowerCase() !== 'voiture') {
+        return res.status(400).json({
+          message: 'Les frais supplémentaires ne sont disponibles que pour les voitures.',
+        });
+      }
+      const result = normalizeAdditionalFees(req.body.fraisSupplementaires);
+      if (result.error) {
+        return res.status(400).json({ message: result.error });
+      }
+      fraisSupplementaires = result.fees;
+    }
+
     // On suppose que req.user contient l'utilisateur authentifié (vendeur)
     const vendeurId = req.user && req.user._id ? req.user._id.toString() : req.body.vendeur;
     // Restriction abonnement pour pièces vendeurs (trial configurable ou abonnement actif)
@@ -170,12 +250,14 @@ exports.createArticle = async (req, res) => {
     }
     const article = new Article({
       ...req.body,
+      ...(fraisSupplementaires ? { fraisSupplementaires } : {}),
       ...lieuFields,
       lieu: lieuFields.lieu ?? req.body.lieu ?? normalizedLieu,
       localisation: lieuFields.localisation ?? req.body.localisation ?? normalizedLieu,
       vendeur: vendeurId,
       statut: 'en_ligne',
       source,
+      createdByRole: req.user.role,
       viewsReal: 0,
       viewsAuto: 0,
     });
@@ -305,7 +387,7 @@ exports.getArticles = async (req, res) => {
     console.log('FILTER:', filter);
     const articles = await Article.find(filter)
       .sort({ dateCreation: -1, createdAt: -1 })
-      .populate('vendeur', 'nom prenoms email entreprise telephone');
+      .populate('vendeur', 'nom prenoms email entreprise telephone role');
     res.json(articles.map(withVideoTransforms));
   } catch (error) {
     res.status(500).json({ message: 'Erreur lors de la récupération des articles', error });
@@ -372,7 +454,10 @@ exports.getArticleById = async (req, res) => {
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(404).json({ message: 'Article non trouvé' });
     }
-    const article = await Article.findById(id).populate('vendeur', 'nom prenoms email entreprise telephone uid');
+    const article = await Article.findById(id).populate(
+      'vendeur',
+      'nom prenoms email entreprise telephone uid role'
+    );
     if (!article) return res.status(404).json({ message: 'Article non trouvé' });
     const f = article.fournisseur || {};
     console.log(
@@ -398,6 +483,33 @@ exports.updateArticle = async (req, res) => {
     if (req.user.role !== 'admin' && article.vendeur.toString() !== req.user._id.toString()) {
       return res.status(403).json({ message: 'Non autorisé à modifier cet article' });
     }
+    let fraisSupplementaires;
+    const hasAdditionalFees = Object.prototype.hasOwnProperty.call(
+      req.body,
+      'fraisSupplementaires'
+    );
+    if (hasAdditionalFees) {
+      if (req.user.role !== 'admin') {
+        return res.status(403).json({
+          message: 'Seul un administrateur peut modifier les frais supplémentaires.',
+        });
+      }
+      if (article.type !== 'voiture') {
+        return res.status(400).json({
+          message: 'Les frais supplémentaires ne sont disponibles que pour les voitures.',
+        });
+      }
+      if (!(await isCreatedByAdmin(article))) {
+        return res.status(403).json({
+          message: 'Les frais supplémentaires sont réservés aux voitures enregistrées par un administrateur.',
+        });
+      }
+      const result = normalizeAdditionalFees(req.body.fraisSupplementaires);
+      if (result.error) {
+        return res.status(400).json({ message: result.error });
+      }
+      fraisSupplementaires = result.fees;
+    }
     const { normalizeArticleLocation } = require('../services/locationGeocode');
     const lieuRaw = (req.body.lieu || req.body.localisation || '').toString().trim();
     let lieuFields = {};
@@ -415,8 +527,13 @@ exports.updateArticle = async (req, res) => {
         req.body.fournisseur || null
       );
     }
+    const updateFields = { ...req.body };
+    delete updateFields.createdByRole;
+    delete updateFields.installmentEligible;
+    delete updateFields.fraisSupplementaires;
     Object.assign(article, {
-      ...req.body,
+      ...updateFields,
+      ...(hasAdditionalFees ? { fraisSupplementaires } : {}),
       ...(lieuRaw ? lieuFields : {}),
     });
     // Correction : Forcer le champ source à 'tranoo' si entreprise=TRANOO
@@ -434,7 +551,7 @@ exports.updateArticle = async (req, res) => {
         article.localisation
       );
     }
-    res.json({ message: 'Article mis à jour', article });
+    res.json({ message: 'Article mis à jour', article: withVideoTransforms(article) });
   } catch (error) {
     res.status(500).json({ message: 'Erreur lors de la mise à jour de l\'article', error });
   }

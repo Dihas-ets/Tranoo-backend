@@ -39,6 +39,14 @@ const articleSchema = new mongoose.Schema({
     latitude: Number,
     longitude: Number,
   },
+  fraisSupplementaires: {
+    type: [{
+      nom: { type: String, required: true, trim: true },
+      montant: { type: Number, required: true, min: 1 },
+    }],
+    default: [],
+  },
+  createdByRole: { type: String, immutable: true },
   // Champs spécifiques moto
   typeMoto: String,        // Scooter, Routière, Sportive, Trail, Cross, Tricycle
   puissance: String,
